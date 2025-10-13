@@ -1,0 +1,30 @@
+{
+    "poolName": "rs-node-1",
+    "poolPassword": "",
+    "poolID": "rsnode",
+    "poolVersion": "0.3",
+    "motd": "rust test node",
+    "host": "0.0.0.0",
+    "port": 32811,
+    "use_ngrok": false,
+    "dashboard_port": 6030,
+    "maxWorkers": 50,
+    "autoRestart": 0,
+    "syncTime": 15,
+    "timeout": 30,
+    "preGenJobCount": 1000,
+    "jobGenerationDelay": 30000,
+    "guessPort": false,
+
+    "serverIP": "server.duinocoin.com",
+    "serverPort": 32811,
+    "serverVersion": "3.0",
+    "server_sync_url": "https://server.duinocoin.com/poolsyncdata",
+    
+    "base_sync_folder": "./dashboard/",
+    "initialBlockHash": "05b7406b3909071b2d85b2d2958ad07a0d52bd12",
+    "expectedSharetime": 15,
+    "updateMinersStatsEvery": 1,
+    "blockProbability": 1000000,
+    "blockReward": 28.11
+}

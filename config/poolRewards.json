@@ -1,0 +1,134 @@
+{
+  "EXTREME": {
+    "difficulty": 1000000,
+    "reward": 750000,
+    "max_hashrate": 10000000000,
+    "min_hashrate": 14000000,
+    "kolka_decrease_perc": 80,
+    "expected_sharetime": 10,
+    "block_chance": 28110000
+  },
+  "NET": {
+    "difficulty": 200000,
+    "reward": 70000,
+    "max_hashrate": 15000000,
+    "min_hashrate": 4000000,
+    "kolka_decrease_perc": 80,
+    "expected_sharetime": 15,
+    "block_chance": 28110000
+  },
+  "MEDIUM": {
+    "difficulty": 100000,
+    "reward": 75000,
+    "max_hashrate": 5000000,
+    "min_hashrate": 800000,
+    "kolka_decrease_perc": 80,
+    "expected_sharetime": 15,
+    "block_chance": 28110000
+  },
+  "LOW": {
+    "difficulty": 20000,
+    "reward": 80000,
+    "max_hashrate": 1000000,
+    "min_hashrate": 1,
+    "kolka_decrease_perc": 80,
+    "expected_sharetime": 15,
+    "block_chance": 28110000
+  },
+  "ESP8266NH": {
+    "difficulty": 4000,
+    "info": "unused since 4.0+ (old 'new' high)",
+    "reward": 70100,
+    "max_hashrate": 58800,
+    "min_hashrate": 15799,
+    "kolka_decrease_perc": 94,
+    "expected_sharetime": 10,
+    "block_chance": 28110000
+  },
+  "ESP8266N": {
+    "difficulty": 2000,
+    "info": "unused since 4.0+ (old 'new')",
+    "reward": 70000,
+    "max_hashrate": 25800,
+    "min_hashrate": 10999,
+    "kolka_decrease_perc": 94,
+    "expected_sharetime": 10,
+    "block_chance": 28110000
+  },
+  "ESP32S": {
+    "difficulty": 6400,
+    "info": "goal: 8 DUCO/day (single core) OK",
+    "reward": 65000,
+    "max_hashrate": 150000,
+    "min_hashrate": 50000,
+    "kolka_decrease_perc": 94,
+    "expected_sharetime": 10,
+    "block_chance": 28110000
+  },
+  "ESP32": {
+    "difficulty": 8200,
+    "info": "goal: 10 DUCO/day (dual core) OK",
+    "reward": 85000,
+    "max_hashrate": 100000,
+    "min_hashrate": 25000,
+    "kolka_decrease_perc": 94,
+    "expected_sharetime": 10,
+    "block_chance": 28110000
+  },
+  "ESP8266H": {
+    "difficulty": 5000,
+    "info": "goal: 6 DUCO/day OK",
+    "reward": 80000,
+    "max_hashrate": 75000,
+    "min_hashrate": 50000,
+    "kolka_decrease_perc": 94,
+    "expected_sharetime": 10,
+    "block_chance": 28110000
+  },
+  "ESP8266": {
+    "difficulty": 4000,
+    "info": "unused since 3.0+",
+    "reward": 80000,
+    "max_hashrate": 59999,
+    "min_hashrate": 10999,
+    "kolka_decrease_perc": 94,
+    "expected_sharetime": 10,
+    "block_chance": 28110000
+  },
+  "DUE": {
+    "difficulty": 512,
+    "reward": 72214,
+    "max_hashrate": 26000,
+    "min_hashrate": 3000,
+    "kolka_decrease_perc": 94,
+    "expected_sharetime": 10,
+    "block_chance": 28110000
+  },
+  "ARM": {
+    "difficulty": 128,
+    "reward": 71449,
+    "max_hashrate": 5000,
+    "min_hashrate": 399,
+    "kolka_decrease_perc": 94,
+    "expected_sharetime": 10,
+    "block_chance": 28110000
+  },
+  "MEGA": {
+    "difficulty": 24,
+    "reward": 65807,
+    "max_hashrate": 520,
+    "min_hashrate": 250,
+    "kolka_decrease_perc": 94,
+    "expected_sharetime": 10,
+    "block_chance": 28110000
+  },
+  "AVR": {
+    "difficulty": 10,
+    "reward": 70200,
+    "max_hashrate": 370,
+    "min_hashrate": 80,
+    "kolka_decrease_perc": 94,
+    "expected_sharetime": 10,
+    "block_chance": 28110000
+  }
+}

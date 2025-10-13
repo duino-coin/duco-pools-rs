@@ -1,0 +1,7 @@
+/target
+/config/config-orig.json
+/pool.zip
+/Cargo.lock
+/miner/
+/dashboard
+/duino-coin-pools-js/

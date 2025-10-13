@@ -1,0 +1,184 @@
+use crate::cfg::config::PoolConfig;
+use crate::data::data::{Bans, Connection, ConnectionClosed};
+use arcstr::ArcStr;
+use config::Config;
+use log::{error, warn};
+use rand::RngCore;
+use std::error::Error;
+use std::net::SocketAddr;
+use std::ops::Deref;
+use std::process::Command;
+use std::sync::Arc;
+use std::task::Context;
+use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, Ready};
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
+use crate::kolka::kolka::Kolka;
+use crate::mining;
+
+//const CMD: &str = "csf -td ${ip}"; //csf
+//const CMD: &str = "iptables -A INPUT -s ${ip} -j DROP"; //iptables
+//const CMD: &str = "sudo ufw deny from ${ip} to any"; //ufw
+const CMD: &str = ""; //none
+async fn ban_ip(ip: &str) -> Result<(), Box<dyn Error>>
+{
+    if !CMD.is_empty()
+    {
+        let cmd_split = CMD.split(" ").collect::<Vec<&str>>();
+        let cmd = cmd_split[0].trim();
+        Command::new(cmd).args(&cmd_split[1..]).spawn()?;
+        warn!("Banned {ip}");
+    }
+    Ok(())
+}
+
+pub async fn handle_connection(socket: TcpStream, addr: SocketAddr, bans: Arc<Mutex<Bans>>, config: Arc<PoolConfig>, pool_rewards: Arc<Value>, kolka: Arc<Kolka>) -> Result<(), Box<dyn Error>>
+{
+    println!("Connection from {}", addr);
+    let mut bytes = [0; 8];
+    rand::rng().fill_bytes(&mut bytes);
+    let id = hex::encode(&bytes);
+    println!("{}", id);
+    let mut conn = Connection::new(socket, addr, ArcStr::new(), ArcStr::from(id));
+    conn.write(&format!("{}\n",config.server_version)).await?;
+    // let mut reader = BufReader::new(&mut conn.socket);
+    // let received: Vec<u8> = reader.fill_buf().await?.to_vec();
+    // reader.consume(received.len());
+    //
+    // let data = String::from_utf8(received)
+    //     .map_err(|_| {
+    //         std::io::Error::new(
+    //             std::io::ErrorKind::InvalidData,
+    //             "Couldn't parse received string as utf8",
+    //         )
+    //     })?;
+
+    loop {
+        let data = conn.read_to_string().await?;
+
+        if data.len() == 0
+        {
+            break; // stream reached EOF
+        }
+
+        println!("{}", data);
+        let data_split = data.trim().split(",").collect::<Vec<&str>>();
+
+        if addr.to_string().is_empty() || data_split.len() > 6 // no clue what '!conn.remoteAddr' is supposed to do
+        {
+            conn.write("BAD,Incorrect data\n").await?;
+            // conn.socket.write_all("BAD,Incorrect data\n".as_bytes()).await?;
+            // conn.socket.flush().await?;
+
+            // close the socket
+            // conn.socket.split().1.shutdown().await?;
+            // shutdown(&mut conn).await?;
+            return conn.shutdown().await;
+        }
+
+        // check for bans
+        { // block so we lose the lock on the mutex
+            let mut ban = bans.lock().await;
+            let ip = conn.addr.ip().to_string();
+            if ban.banned_ips.contains(&ip) && ip != "127.0.0.1"
+            {
+                conn.write("BAD,User banned\n").await?;
+                // conn.socket.write_all("BAD,User banned\n".as_bytes()).await?;
+                // conn.socket.flush().await?;
+                // ban.banned_ips.push(ip.clone());
+                // close the socket
+                // conn.socket.split().1.shutdown().await?;
+                // shutdown(&mut conn).await?;
+                return conn.shutdown().await;
+            }
+            if data_split.len() >= 2
+            {
+                let username = data_split[1];
+                if ban.banned_usernames.contains(&username.to_string()) && ip != "127.0.0.1"
+                {
+                    if !ban.banned_ips.contains(&ip)
+                    {
+                        ban_ip(&ip).await?;
+                        ban.banned_ips.push(ip);
+                        ban.save_bans().expect("failed to save config bans.json");
+                    }
+
+                    conn.write("BAD,User banned\n").await?;
+                    // conn.socket.write_all("BAD,User banned\n".as_bytes()).await?;
+                    // conn.socket.flush().await?;
+                    // close the socket
+                    // conn.socket.split().1.shutdown().await?;
+                    // shutdown(&mut conn).await?;
+                    return conn.shutdown().await;
+                }
+            }
+        }
+
+        if data_split[0] == "JOB"
+        {
+            if data_split.len() == 1
+            {
+                conn.write("BAD,No username specified\n").await?;
+                return conn.shutdown().await;
+            }
+            else
+            {
+                if conn.username.is_empty()
+                {
+                    conn.username = ArcStr::from(data_split[1]);
+                }
+                else if conn.username != ArcStr::from(data_split[1])
+                {
+                    return conn.shutdown().await;
+                }
+                match mining::mining::handle(&mut conn, data_split, pool_rewards, config, kolka, false).await {
+                    Ok(_) => {}
+                    Err(err) => {
+                        if !err.is::<ConnectionClosed>()
+                        {
+                            error!("Connection closed: {}", err);
+                        }
+                        mining::mining::MINER_STATS.remove(&conn.id.to_string());
+                        mining::mining::WORKERS.entry(conn.addr.ip().to_string()).and_modify(|w| *w -= 1f32);
+                        let opt = mining::mining::WORKERS.get(&conn.addr.ip().to_string());
+                        if opt.is_some() && *opt.unwrap().value() <= 0f32
+                        {
+                            mining::mining::WORKERS.remove(&conn.addr.ip().to_string());
+                        }
+
+                        mining::mining::USR_WORKERS.entry(conn.username.to_string()).and_modify(|w| *w -= 1f32);
+                        let opt = mining::mining::USR_WORKERS.get(&conn.username.to_string());
+                        if opt.is_some() && *opt.unwrap().value() <= 0f32
+                        {
+                            mining::mining::USR_WORKERS.remove(&conn.username.to_string());
+                        }
+
+                    }
+                };
+                break;
+            }
+        }
+        else if data_split[0] == "MOTD"
+        {
+            conn.write(&config.motd).await?;
+        }
+    }
+
+    //        if (data[0] === "JOB") {
+    //             if (!data[1]) {
+    //                 conn.write("BAD,No username specified\n");
+    //                 return conn.destroy();
+    //             } else {
+    //                 if (!conn.username) conn.username = data[1];
+    //                 else if (conn.username != data[1]) {
+    //                     return conn.destroy();
+    //                 }
+    //                 mining.miningHandler(conn, data, mainListener, false);
+    //             }
+    //         } else if (data[0] === "MOTD") {
+    //             conn.write(motd);
+    //         }
+
+    Ok(())
+}
