@@ -275,7 +275,7 @@ pub async fn handle(conn: &mut Connection, initial_data: Vec<&str>, pool_rewards
         {
             start_hashrate = hashrate as i64;
 
-            diff = (*kolka).clone().v3(avg_from_array(&conn.miner_stat.share_times_list), expected_share_time, diff, hashrate);
+            diff = (*kolka).clone().v3(avg_from_array(&conn.miner_stat.share_times_list), expected_share_time, hashrate);
         }
 
         let reward_div = pool_rewards
@@ -343,7 +343,7 @@ pub async fn handle(conn: &mut Connection, initial_data: Vec<&str>, pool_rewards
                 }
             }
 
-            if (rng().random::<f32>() * config.block_probability as f32) == 1f32
+            if (rng().random::<f32>() * block_probability as f32) == 1f32
             {
                 reward += config.block_reward;
 

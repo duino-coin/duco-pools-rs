@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use arcstr::ArcStr;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpSocket, TcpStream};
+use tokio::net::{TcpStream};
 use crate::mining;
 
 #[derive(Debug, Clone)]

@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::path::Path;
-use config::{Config, ConfigError};
+use config::{Config};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]

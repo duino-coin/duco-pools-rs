@@ -99,7 +99,7 @@ impl Kolka
             _ => {difficulty}
         }.to_string()
     }
-    pub fn v3(self, sharetime: f32, expected_sharetime: u16, difficulty: u32, hashrate: u32) -> u32
+    pub fn v3(self, sharetime: f32, expected_sharetime: u16, hashrate: u32) -> u32
     {
         let mut new_diff = ((hashrate as f32 / 100f32).floor() * expected_sharetime as f32).round() as u32;
 
