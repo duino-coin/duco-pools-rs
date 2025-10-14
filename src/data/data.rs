@@ -128,7 +128,10 @@ impl Bans
         if std::fs::exists(path)?
         {
             let file_content = std::fs::read_to_string(path)?;
-            let bans: Bans = serde_json::from_str(&file_content)?;
+            let bans: Bans = match serde_json::from_str::<Bans>(&file_content) {
+                Ok(bans) => {bans}
+                Err(_) => {Bans::new()}
+            };
             return Ok(bans);
         }
         let bans = Bans::new();

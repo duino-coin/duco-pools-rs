@@ -184,9 +184,7 @@ pub async fn handle(conn: &mut Connection, initial_data: Vec<&str>, pool_rewards
             conn.miner_stat.amount_of_workers = max;
         }
 
-        // TODO: reenable
-        // random = rng().random_range(0..diff*100) + 1;
-        random = 1;
+        random = rng().random_range(0..diff*100) + 1;
         let job;
         { // used to lose the lock on LAST_BLOCK_HASH
             let last_block_hash = LAST_BLOCK_HASH.lock().unwrap().clone();
@@ -233,8 +231,7 @@ pub async fn handle(conn: &mut Connection, initial_data: Vec<&str>, pool_rewards
             hashrate_calc = reported_hashrate.round() as u32;
         }
 
-        // TODO: reenable
-        // conn.miner_stat.last_min_shares += 1;
+        conn.miner_stat.last_min_shares += 1;
 
         let mut nonce;
         if using_avr
@@ -408,9 +405,8 @@ pub async fn handle(conn: &mut Connection, initial_data: Vec<&str>, pool_rewards
             conn.miner_stat.username = conn.username.to_string();
             MINER_STATS.insert(conn.id.to_string(), conn.miner_stat.clone());
 
-            // TODO: reenable
-            // let mut last_block_hash = LAST_BLOCK_HASH.lock().unwrap();
-            // *last_block_hash = new_hash;
+            let mut last_block_hash = LAST_BLOCK_HASH.lock().unwrap();
+            *last_block_hash = new_hash;
             GLOBAL_SHARES_INCREASE.fetch_add(config.update_miners_stats_every as u64, std::sync::atomic::Ordering::Relaxed);
             GLOBAL_SHARES_TOTAL.fetch_add(config.update_miners_stats_every as u64, std::sync::atomic::Ordering::Relaxed);
 

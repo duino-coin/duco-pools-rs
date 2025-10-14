@@ -152,10 +152,10 @@ pub async fn sync(config: &PoolConfig, sys: &mut Arc<Mutex<System>>) -> Result<(
     let balances = mining::BALANCES_TO_UPDATE.clone();
     serde_json::to_writer(&file, &balances)?;
 
-    let request_url = format!("http://{}:8000/pool-sync/?host={}&port={}&version={}&identifier={}&name={}\
+    let request_url = format!("http://{}/pool-sync/?host={}&port={}&version={}&identifier={}&name={}\
     &blockIncrease={}&bigBlocks={}&cpu={}&ram={}&connections={}",
-    "127.0.0.1", ip, config.port, config.pool_version, config.pool_id, config.pool_name,
-                              block_increase, big_blocks, cpu_usage, mem_usage, connections); // TODO: change request ip and port
+    config.server_ip, ip, config.port, config.pool_version, config.pool_id, config.pool_name,
+                              block_increase, big_blocks, cpu_usage, mem_usage, connections);
     let form = reqwest::multipart::Form::new();
 
     // Customize all the details of a Part if needed...
