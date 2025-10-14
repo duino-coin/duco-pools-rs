@@ -6,5 +6,4 @@ duino-coin pools, but in rust
 - implement dashboard
 - implement auto restart
 - implement ngrok
-- add timeout for sockets
 - test
