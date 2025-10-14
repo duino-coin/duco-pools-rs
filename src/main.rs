@@ -36,7 +36,8 @@ async fn main() {
 
 
     sync::sync::update_pool_rewards(&config).await.expect("failed to update pool rewards");
-    sync::sync::sync(&config, &mut sys).await.expect("failed to sync database"); // lots of sync here..
+    sync::sync::login(&config).await.expect("failed to login");
+    
     let config_arc = Arc::new(config);
     let config_arc_clone = config_arc.clone();
 
@@ -67,6 +68,7 @@ async fn main() {
     sync_thread.abort();
     // last sync before shutdown
     sync::sync::sync(&config_arc, &mut sys).await.expect("failed to sync database");
+    sync::sync::logout(&config_arc).await.expect("failed to logout");
 }
 
 async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>)

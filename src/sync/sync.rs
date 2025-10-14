@@ -2,6 +2,7 @@ use std::path::Path;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use log::{error, info, warn};
 use reqwest::{multipart, Error, Response};
 use sysinfo::System;
@@ -16,16 +17,27 @@ use crate::mining::mining;
 
 static SYNC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub async fn get_pool_ip() -> Result<String, Box<dyn std::error::Error>>
+pub async fn get_pool_ip(config: &&PoolConfig) -> Result<String, Box<dyn std::error::Error>>
 {
-    let response = reqwest::get("https://api.ipify.org/").await?;
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(config.timeout as u64)).build()?;
+    let response = client.get("https://api.ipify.org/").send().await?;
 
     Ok(response.text().await?)
 }
 
-pub async fn login(ip: &str, config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>>
+pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>>
 {
-    let infos = LoginInfos::new(ip, config.port, &config.pool_version, &config.pool_id, &config.pool_name);
+    let ip;
+    if config.use_ngrok
+    {
+        ip = "".to_string();
+        return Err(Box::from("Ngrok not implemented"));
+    }
+    else
+    {
+        ip = get_pool_ip(&config).await?;
+    }
+    let infos = LoginInfos::new(&ip, config.port, &config.pool_version, &config.pool_id, &config.pool_name);
 
     let mut socket = TcpStream::connect(format!("{}:{}", config.server_ip, config.server_port)).await.unwrap();
     let mut reader = BufReader::new(&mut socket);
@@ -118,7 +130,7 @@ pub async fn sync(config: &PoolConfig, sys: &mut Arc<Mutex<System>>) -> Result<(
     }
 
     let mut sys = sys.lock().await;
-    let ip = get_pool_ip().await.expect("failed to get pool ip");
+    let ip = get_pool_ip(&config).await.expect("failed to get pool ip");
     let block_increase = mining::GLOBAL_SHARES_INCREASE.load(Ordering::Relaxed);
     let big_blocks;
     { // used to drop lock faster
@@ -176,6 +188,7 @@ pub async fn sync(config: &PoolConfig, sys: &mut Arc<Mutex<System>>) -> Result<(
     match client
         .post(request_url)
         .multipart(form)
+        .timeout(Duration::from_secs(config.timeout as u64))
         .send().await {
         Ok(res) => {
             let status = res.status();
