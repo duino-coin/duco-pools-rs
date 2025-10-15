@@ -75,21 +75,11 @@ pub async fn handle(conn: &mut Connection, initial_data: Vec<&str>, pool_rewards
     let mut hashrate_is_estimated;
     let mut hashrate;
     let mut is_first_share = true;
-    // let mut miner_stat = &mut conn.miner_stat;
 
     let ip = conn.addr.ip().to_string();
     let iot_regex: Regex = Regex::new("/[A-Za-z0-9 .():@-]+/")?;
     let name_regex = Regex::new("/[A-Za-z0-9 .()-]+/g")?;
     let mut buffer = itoa::Buffer::new(); // used to convert nums to str a little faster
-    // miner_stat.accepted_shares = 0;
-    // miner_stat.rejected_shares = 0;
-    //
-    // miner_stat.server_miners = 0;
-    // miner_stat.this_miner_id = 0;
-    // miner_stat.last_min_shares = 0;
-    // miner_stat.last_share_reset = 0;
-    // miner_stat.sharetimes_list = Vec::new();
-    // miner_stat.ping = 0;
 
     while true
     {
@@ -192,7 +182,6 @@ pub async fn handle(conn: &mut Connection, initial_data: Vec<&str>, pool_rewards
             hasher.update(buffer.format(random).as_bytes());
             new_hash = hasher.hexdigest();
             job = (last_block_hash, new_hash.clone(), diff);
-            // job = vec![last_block_hash, new_hash.clone(), diff];
         }
 
         conn.write(&format!("{},{},{}\n", job.0, job.1, job.2)).await?;
@@ -267,7 +256,7 @@ pub async fn handle(conn: &mut Connection, initial_data: Vec<&str>, pool_rewards
             conn.miner_stat.reject_shares = "Modified hashrate".to_string();
         }
 
-        if (conn.miner_stat.accepted_shares == 4 || (conn.miner_stat.accepted_shares > 4 && perc_diff(hashrate as f32, hashrate_calc as f32) > 15f32))
+        if (conn.miner_stat.accepted_shares == 4 || (conn.miner_stat.accepted_shares > 4 && perc_diff(hashrate as f32, start_hashrate as f32) > 15f32))
             &&  PC_DIFF_TIERS.contains(&req_difficulty.clone().as_str())
         {
             start_hashrate = hashrate as i64;
@@ -340,7 +329,7 @@ pub async fn handle(conn: &mut Connection, initial_data: Vec<&str>, pool_rewards
                 }
             }
 
-            if (rng().random::<f32>() * block_probability as f32) == 1f32
+            if (rng().random_range(0f32..1f32) * block_probability as f32).floor() == 1f32
             {
                 reward += config.block_reward;
 
@@ -385,7 +374,7 @@ pub async fn handle(conn: &mut Connection, initial_data: Vec<&str>, pool_rewards
             };
             conn.miner_stat.id = rig_identifier;
             conn.miner_stat.algorithm = "DUCO-S1".to_string();
-            conn.miner_stat.hashrate = hashrate as u64;
+            conn.miner_stat.hashrate = if hashrate_is_estimated { hashrate as u64 } else { reported_hashrate as u64 };
             conn.miner_stat.difficulty = diff;
             if cut_rigid.len() >= 2
             {
