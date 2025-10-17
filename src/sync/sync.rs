@@ -9,7 +9,7 @@ use std::process::exit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use sysinfo::System;
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -165,10 +165,22 @@ pub async fn sync(
 
     //    if (use_ngrok && sync_count > 0 && sync_count % 50 == 0)
     //         await get_ngrok_ip();
+    // only refresh certain parts of the system info
+    let mut refresh_kind = RefreshKind::nothing();
 
-    sys.refresh_all();
+    let mut cpu_refresh = CpuRefreshKind::nothing();
+    cpu_refresh = cpu_refresh.with_cpu_usage();
+
+    let mut memory_refresh = MemoryRefreshKind::nothing();
+    memory_refresh = memory_refresh.with_ram();
+
+    refresh_kind = refresh_kind.with_cpu(cpu_refresh);
+    refresh_kind = refresh_kind.with_memory(memory_refresh);
+
+    sys.refresh_specifics(refresh_kind);
     let cpu_usage = sys.global_cpu_usage();
-    let mem_usage = (sys.used_memory() as f32 / sys.total_memory() as f32 * 1e4).round() / 100.0; // rounding to two decimals
+    //sys.used_memory() may contain buffers; available_memory() also contains buffers, therefore subtracting it from the total doesn't include buffers in the mem usage
+    let mem_usage = ((sys.total_memory() - sys.available_memory()) as f32 / sys.total_memory() as f32 * 1e4).round() / 100.0; // rounding to two decimals
     mining::GLOBAL_SHARES_INCREASE.store(0, Ordering::Relaxed);
 
     let worker_path = format!(
