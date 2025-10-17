@@ -1,27 +1,24 @@
-use std::net::SocketAddr;
-use std::str::FromStr;
-use warp::Filter;
 mod cfg;
-mod sync;
 mod data;
-mod mining;
 mod handler;
 mod kolka;
+mod mining;
+mod sync;
 mod web;
 
+use std::net::SocketAddr;
 use crate::cfg::config::PoolConfig;
-use crate::data::data::{Bans, ConnectionClosed};
+use crate::data::data::{Bans};
 use crate::kolka::kolka::Kolka;
-use log::{error, info, LevelFilter};
+use env_logger::Target;
+use log::{debug, error, info, LevelFilter};
 use rand::Rng;
+use serde::Serialize;
 use serde_json::Value;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
-use env_logger::Target;
-use serde::Serialize;
 use sysinfo::System;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::Mutex;
@@ -29,10 +26,9 @@ use tokio::task::JoinSet;
 pub static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Serialize)]
-struct HttpRes
-{
+struct HttpRes {
     result: String,
-    success: bool
+    success: bool,
 }
 
 // #[cfg(not(debug_assertions))] are used for functions we do not want to be called while testing (as not to disrupt production services)
@@ -40,34 +36,37 @@ struct HttpRes
 #[tokio::main]
 async fn main() {
     // initialize logging
-    env_logger::builder().target(Target::Stdout).filter_level(LevelFilter::Info).init();
+    env_logger::builder()
+        .target(Target::Stdout)
+        .filter_level(LevelFilter::Info)
+        .init();
 
     let mut config = cfg::config::load_config().unwrap();
-    let sys = Arc::new(Mutex::new(System::new()));
+    let mut sys = Arc::new(Mutex::new(System::new()));
 
-    if config.guess_port
-    {
+    if config.guess_port {
         let port = get_rand(1000, 9999) as u32;
         config.port = port;
         cfg::config::save_config(&config);
     }
     // TODO: impl ngrok
 
-
-    sync::sync::update_pool_rewards(&config).await.expect("failed to update pool rewards");
+    sync::sync::update_pool_rewards(&config)
+        .await
+        .expect("failed to update pool rewards");
     #[cfg(not(debug_assertions))]
     sync::sync::login(&config).await.expect("failed to login");
-    
+
     let config_arc = Arc::new(config);
     let config_arc_clone = config_arc.clone();
 
     let mut sys_clone = sys.clone();
-    let sync_thread = tokio::spawn( async move {
+    let sync_thread = tokio::spawn(async move {
+        info!("Starting sync thread..");
         let config = config_arc_clone;
         let sys = &mut sys_clone;
         #[cfg(not(debug_assertions))]
-        loop
-        {
+        loop {
             match sync::sync::sync(&config, sys).await {
                 Ok(_) => {}
                 Err(err) => {
@@ -81,23 +80,30 @@ async fn main() {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     ctrlc::set_handler(move || {
         tx.send("s".to_owned()).unwrap();
-    }).expect("Failed to handle ctrl-c");
+    })
+    .expect("Failed to handle ctrl-c");
 
     let config_arc_clone = config_arc.clone();
     start_tcp(config_arc_clone, rx).await;
     sync_thread.abort();
     // last sync before shutdown
     #[cfg(not(debug_assertions))]
-    sync::sync::sync(&config_arc, &mut sys).await.expect("failed to sync database");
+    sync::sync::sync(&config_arc, &mut sys)
+        .await
+        .expect("failed to sync database");
     #[cfg(not(debug_assertions))]
-    sync::sync::logout(&config_arc).await.expect("failed to logout");
+    sync::sync::logout(&config_arc)
+        .await
+        .expect("failed to logout");
 }
 
-async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>)
-{
+async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
+    info!("Starting tcp server...");
     // read and serialize pool rewards
-    let reward_content = std::fs::read_to_string("./config/poolRewards.json").expect("failed to read config poolRewards.json");
-    let pool_rewards: Value = serde_json::from_str(&reward_content).expect("failed to parse config poolRewards.json");
+    let reward_content = std::fs::read_to_string("./config/poolRewards.json")
+        .expect("failed to read config poolRewards.json");
+    let pool_rewards: Value =
+        serde_json::from_str(&reward_content).expect("failed to parse config poolRewards.json");
 
     // serialize Bans struct
     let bans = Bans::load_bans().expect("failed to load config bans.json");
@@ -107,7 +113,9 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>)
     let kolka = Kolka::new(pool_arc.clone());
     let kolka_arc = Arc::new(kolka);
 
-    let server = TcpListener::bind(format!("{}:{}", config.host, config.port)).await.expect("failed to bind to address");
+    let server = TcpListener::bind(format!("{}:{}", config.host, config.port))
+        .await
+        .expect("failed to bind to address");
     info!("Listening on {}:{}", config.host, config.port);
     let running = Arc::new(AtomicBool::new(true));
 
@@ -117,7 +125,9 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>)
     let run_arc = running.clone();
 
     // start "webserver" and parse addr from config
-    let addr: SocketAddr = (&format!("{}:{}", config.host, config.dashboard_port)).parse().expect("failed to parse host:port");
+    let addr: SocketAddr = (&format!("{}:{}", config.host, config.dashboard_port))
+        .parse()
+        .expect("failed to parse host:port");
     let web_handle = web::web::start_webserver(addr).await;
 
     let handle_clone = handle_arc.clone();
@@ -125,7 +135,7 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>)
         while run_arc.load(Relaxed) {
             let (socket, addr) = server.accept().await.unwrap();
 
-            info!("Connection established");
+            // info!("Connection established");
             let ban_clone = ban_mutex.clone();
             let conf_clone = config.clone();
             let pool_arc_clone = pool_arc.clone();
@@ -135,9 +145,23 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>)
             CONNECTIONS.fetch_add(1, Relaxed);
             handle_clone.lock().await.spawn(async move {
                 // Self::handle_connection(stream, cpu_limit_clone).await;
-                match handler::handler::handle_connection(socket, addr, ban_clone, conf_clone, pool_arc_clone, kolka_clone).await {
+                match handler::handler::handle_connection(
+                    socket,
+                    addr,
+                    ban_clone,
+                    conf_clone,
+                    pool_arc_clone,
+                    kolka_clone,
+                )
+                .await
+                {
                     Ok(_) => {}
-                    Err(err) => {info!("Connection closed: {}", err)}
+                    Err(err) => {
+                        if !err.to_string().contains("Connection reset by peer")
+                        {
+                            info!("Connection closed: {:?}", err);
+                        }
+                    }
                 };
                 // remove connection
                 CONNECTIONS.fetch_sub(1, Relaxed);
@@ -145,7 +169,8 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>)
         }
     });
 
-    while let Some(_) = rx.recv().await { // waits until it receives a message (signals a shutdown)
+    while let Some(_) = rx.recv().await {
+        // waits until it receives a message (signals a shutdown)
         info!("Received abort");
         running.store(false, Relaxed);
         break;
@@ -154,11 +179,9 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>)
     web_handle.abort();
     tcp.abort();
     handle_arc.lock().await.abort_all();
-
 }
 
-fn get_rand(min: usize, max: usize) -> usize
-{
+fn get_rand(min: usize, max: usize) -> usize {
     let mut rng = rand::rng();
 
     rng.random_range(min..max)

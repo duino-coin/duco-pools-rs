@@ -1,18 +1,18 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
+use crate::HttpRes;
 use log::info;
+use std::net::SocketAddr;
 use tokio::task::JoinHandle;
 use warp::Filter;
-use crate::cfg::config::PoolConfig;
-use crate::HttpRes;
 
-pub async fn start_webserver(addr: SocketAddr) -> JoinHandle<()>
-{
+pub async fn start_webserver(addr: SocketAddr) -> JoinHandle<()> {
     let ping = warp::path("ping")
         .and(warp::get())
         .and(warp::path::end())
         .map(|| {
-            let res = HttpRes { result: "Pong!".to_string(), success: true };
+            let res = HttpRes {
+                result: "Pong!".to_string(),
+                success: true,
+            };
             warp::reply::json(&res)
         });
     info!("Binding webserver to to {addr:?}");

@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-
 // #[derive(Serialize, Deserialize, Debug)]
 // pub struct MiningStats
 // {
@@ -13,7 +12,8 @@ use serde::{Deserialize, Serialize};
 // }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct MinerStat // TODo: update types
+pub struct MinerStat
+// TODo: update types
 {
     #[serde(rename = "u")]
     pub username: String, // this is stupid..
@@ -66,41 +66,48 @@ pub struct MinerStat // TODo: update types
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct GlobalShares
-{
+pub struct GlobalShares {
     increase: u64,
-    total: u64
+    total: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct BlockInfos
-{
+pub struct BlockInfos {
     time_since_epoch_millis: u64,
     finder: String,
     amount: f32, // reward
     algorithm: String,
-    hash: String
+    hash: String,
 }
 
-impl BlockInfos
-{
-    pub fn new(time_since_epoch_millis: u64, finder: String, amount: f32, algorithm: String, hash: String) -> Self
-    {
-        BlockInfos {time_since_epoch_millis, finder, amount, algorithm, hash}
+impl BlockInfos {
+    pub fn new(
+        time_since_epoch_millis: u64,
+        finder: String,
+        amount: f32,
+        algorithm: String,
+        hash: String,
+    ) -> Self {
+        BlockInfos {
+            time_since_epoch_millis,
+            finder,
+            amount,
+            algorithm,
+            hash,
+        }
     }
 }
 /*
 
-                const blockInfos = {
-                    timestamp: Date.now(),
-                    finder: conn.username,
-                    amount: reward,
-                    algo: "DUCO-S1",
-                    hash: newHash.toString(),
-                };
+               const blockInfos = {
+                   timestamp: Date.now(),
+                   finder: conn.username,
+                   amount: reward,
+                   algo: "DUCO-S1",
+                   hash: newHash.toString(),
+               };
 
- */
-
+*/
 
 /*
 u: conn.username,

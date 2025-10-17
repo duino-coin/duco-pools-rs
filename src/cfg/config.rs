@@ -1,48 +1,48 @@
+use config::Config;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::path::Path;
-use config::{Config};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PoolConfig {
-    #[serde(rename  = "poolName")]
+    #[serde(rename = "poolName")]
     pub pool_name: String,
-    #[serde(rename  = "poolPassword")]
+    #[serde(rename = "poolPassword")]
     pub pool_password: String,
-    #[serde(rename  = "poolID")]
+    #[serde(rename = "poolID")]
     pub pool_id: String,
-    #[serde(rename  = "poolVersion")]
+    #[serde(rename = "poolVersion")]
     pub pool_version: String,
     pub host: String,
     pub port: u32,
-    #[serde(rename  = "serverIP")]
+    #[serde(rename = "serverIP")]
     pub server_ip: String,
-    #[serde(rename  = "serverPort")]
+    #[serde(rename = "serverPort")]
     pub server_port: u32,
-    #[serde(rename  = "serverVersion")]
+    #[serde(rename = "serverVersion")]
     pub server_version: String,
-    #[serde(rename  = "preGenJobCount")]
+    #[serde(rename = "preGenJobCount")]
     pub pre_gen_job_count: u32,
-    #[serde(rename  = "jobGenerationDelay")]
+    #[serde(rename = "jobGenerationDelay")]
     pub job_generation_delay: u32,
-    #[serde(rename  = "maxWorkers")]
+    #[serde(rename = "maxWorkers")]
     pub max_workers: u64,
     pub motd: String,
-    #[serde(rename  = "initialBlockHash")]
+    #[serde(rename = "initialBlockHash")]
     pub initial_blockhash: String,
-    #[serde(rename  = "expectedSharetime")]
+    #[serde(rename = "expectedSharetime")]
     pub expected_sharetime: u16, // don't think this should exceed 65k
-    #[serde(rename  = "updateMinersStatsEvery")]
+    #[serde(rename = "updateMinersStatsEvery")]
     pub update_miners_stats_every: u16,
-    #[serde(rename  = "blockProbability")]
+    #[serde(rename = "blockProbability")]
     pub block_probability: u64,
-    #[serde(rename  = "blockReward")]
+    #[serde(rename = "blockReward")]
     pub block_reward: f32,
     // #[serde(rename  = "useNgrok")]
     pub use_ngrok: bool,
-    #[serde(rename  = "autoRestart")]
+    #[serde(rename = "autoRestart")]
     pub auto_restart: u32,
-    #[serde(rename  = "guessPort")]
+    #[serde(rename = "guessPort")]
     pub guess_port: bool,
     pub dashboard_port: u32,
     #[serde(rename = "syncTime")]
@@ -50,9 +50,8 @@ pub struct PoolConfig {
     pub timeout: u16, // probably shouldn't exceed 65k either
     pub server_sync_url: String,
     pub base_sync_folder: String,
-    #[serde(rename = "maxSharesPerMinute", default="default_shares")]
+    #[serde(rename = "maxSharesPerMinute", default = "default_shares")]
     pub max_shares_per_minute: u16, // probably shouldn't exceed 65k either
-
 }
 fn default_shares() -> u16 {
     80u16
@@ -78,7 +77,7 @@ impl Default for PoolConfig {
             expected_sharetime: 15, // why is this a config var?
             update_miners_stats_every: 1,
             block_probability: 1000000, // why is this a config var???
-            block_reward: 28.11, // why is this a config var???
+            block_reward: 28.11,        // why is this a config var???
             use_ngrok: false,
             auto_restart: 0,
             guess_port: false,
@@ -92,28 +91,25 @@ impl Default for PoolConfig {
     }
 }
 
-pub fn load_config() -> Result<PoolConfig, Box<dyn Error>>
-{
+pub fn load_config() -> Result<PoolConfig, Box<dyn Error>> {
     let path = Path::new("./config/config.json");
 
-    if path.exists()
-    {
-        std::fs::create_dir_all(path.parent().unwrap())?;
-        let settings = Config::builder().add_source(config::File::with_name(path.to_str().unwrap())).build()?;
+    if path.exists() {
+        let settings = Config::builder()
+            .add_source(config::File::with_name(path.to_str().unwrap()))
+            .build()?;
 
         let config = settings.try_deserialize::<PoolConfig>()?;
         Ok(config)
-    }
-    else {
+    } else {
+        std::fs::create_dir_all(path.parent().unwrap())?;
         let config = PoolConfig::default();
         save_config(&config);
         Ok(config)
     }
-
 }
 
-pub fn save_config(config: &PoolConfig)
-{
+pub fn save_config(config: &PoolConfig) {
     let string = serde_json::to_string_pretty(config).expect("Failed to convert config to str");
-    let _ = std::fs::write("./config.json", string);
+    let _ = std::fs::write("./config/config.json", string);
 }
