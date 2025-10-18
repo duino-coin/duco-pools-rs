@@ -185,6 +185,9 @@ pub async fn handle(
         }
 
         random = rng().random_range(0..diff * 100) + 1;
+        #[cfg(run_env = "bench")] {
+            random = 1;
+        }
         let job;
         {
             // used to lose the lock on LAST_BLOCK_HASH
@@ -249,17 +252,21 @@ pub async fn handle(
         } else {
             nonce = match u32::from_str(data[0]) {
                 Ok(ok) => {ok}
-                Err(_) => {
+                Err(err) => {
+                    debug!("Shutting down due to nonce: {err:?}");
                     conn.shutdown().await?; // close connection, seems like a faulty miner
                     // (some request a job and after receiving the job they immediately request another one)
                     break;
                 }
             };
         }
-
-        if conn.miner_stat.last_min_shares > config.max_shares_per_minute {
-            conn.miner_stat.reject_shares = "Too low difficulty".to_string();
+        #[cfg(not(run_env = "bench"))] // if the pool was built with "run_env" set as bench, we discard this codeblock
+        {
+            if conn.miner_stat.last_min_shares > config.max_shares_per_minute {
+                conn.miner_stat.reject_shares = "Too low difficulty".to_string();
+            }
         }
+
 
         hashrate_is_estimated = false;
         hashrate = hashrate_calc;
@@ -416,7 +423,6 @@ pub async fn handle(
             *BALANCES_TO_UPDATE
                 .entry(conn.username.to_string())
                 .or_insert(0f32) += reward;
-            debug!("{} {}", BALANCES_TO_UPDATE.get(&conn.username.to_string()).unwrap().value(), reward);
 
             miner_name = if data.len() >= 3 { match name_regex.find(data[2]) {
                 None => "Unknown miner".to_string(),

@@ -179,8 +179,8 @@ pub async fn sync(
 
     sys.refresh_specifics(refresh_kind);
     let cpu_usage = sys.global_cpu_usage();
-    //sys.used_memory() may contain buffers; available_memory() also contains buffers, therefore subtracting it from the total doesn't include buffers in the mem usage
-    let mem_usage = ((sys.total_memory() - sys.available_memory()) as f32 / sys.total_memory() as f32 * 1e4).round() / 100.0; // rounding to two decimals
+    
+    let mem_usage = (sys.used_memory() as f32 / sys.total_memory() as f32 * 1e4).round() / 100.0; // rounding to two decimals
     mining::GLOBAL_SHARES_INCREASE.store(0, Ordering::Relaxed);
 
     let worker_path = format!(

@@ -68,7 +68,7 @@ impl Connection {
         let data = String::from_utf8(received.clone()).map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Invalid UTF-8 data: {:?}", received),
+                "Invalid UTF-8 data".to_string(),
             )
         })?;
 

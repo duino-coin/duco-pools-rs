@@ -55,6 +55,7 @@ async fn main() {
         .await
         .expect("failed to update pool rewards");
     #[cfg(not(debug_assertions))]
+    #[cfg(not(compile_env="test"))]
     sync::sync::login(&config).await.expect("failed to login");
 
     let config_arc = Arc::new(config);
@@ -66,6 +67,7 @@ async fn main() {
         let config = config_arc_clone;
         let sys = &mut sys_clone;
         #[cfg(not(debug_assertions))]
+        #[cfg(not(compile_env="test"))]
         loop {
             match sync::sync::sync(&config, sys).await {
                 Ok(_) => {}
@@ -88,10 +90,12 @@ async fn main() {
     sync_thread.abort();
     // last sync before shutdown
     #[cfg(not(debug_assertions))]
+    #[cfg(not(compile_env="test"))]
     sync::sync::sync(&config_arc, &mut sys)
         .await
         .expect("failed to sync database");
     #[cfg(not(debug_assertions))]
+    #[cfg(not(compile_env="test"))]
     sync::sync::logout(&config_arc)
         .await
         .expect("failed to logout");
@@ -157,7 +161,7 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
                 {
                     Ok(_) => {}
                     Err(err) => {
-                        if !err.to_string().contains("Connection reset by peer")
+                        if !err.to_string().contains("Connection reset by peer") && !err.to_string().contains("Connection timed out")
                         {
                             info!("Connection closed: {:?}", err);
                         }

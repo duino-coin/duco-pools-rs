@@ -3,7 +3,7 @@ use crate::data::data::{Bans, Connection, ConnectionClosed};
 use crate::kolka::kolka::Kolka;
 use crate::mining;
 use arcstr::ArcStr;
-use log::{error, warn};
+use log::{debug, error, info, warn};
 use rand::RngCore;
 use serde_json::Value;
 use std::error::Error;
@@ -57,13 +57,8 @@ pub async fn handle_connection(
         if addr.to_string().is_empty() || data_split.len() > 6
         // no clue what '!conn.remoteAddr' is supposed to do
         {
+            info!("addr: {} len: {}, data: {data}", addr.to_string(), data_split.len());
             conn.write("BAD,Incorrect data\n").await?;
-            // conn.socket.write_all("BAD,Incorrect data\n".as_bytes()).await?;
-            // conn.socket.flush().await?;
-
-            // close the socket
-            // conn.socket.split().1.shutdown().await?;
-            // shutdown(&mut conn).await?;
             return conn.shutdown().await;
         }
 
@@ -74,12 +69,6 @@ pub async fn handle_connection(
             let ip = conn.addr.ip().to_string();
             if ban.banned_ips.contains(&ip) && ip != "127.0.0.1" {
                 conn.write("BAD,User banned\n").await?;
-                // conn.socket.write_all("BAD,User banned\n".as_bytes()).await?;
-                // conn.socket.flush().await?;
-                // ban.banned_ips.push(ip.clone());
-                // close the socket
-                // conn.socket.split().1.shutdown().await?;
-                // shutdown(&mut conn).await?;
                 return conn.shutdown().await;
             }
             if data_split.len() >= 2 {
@@ -92,11 +81,6 @@ pub async fn handle_connection(
                     }
 
                     conn.write("BAD,User banned\n").await?;
-                    // conn.socket.write_all("BAD,User banned\n".as_bytes()).await?;
-                    // conn.socket.flush().await?;
-                    // close the socket
-                    // conn.socket.split().1.shutdown().await?;
-                    // shutdown(&mut conn).await?;
                     return conn.shutdown().await;
                 }
             }
@@ -130,6 +114,7 @@ pub async fn handle_connection(
                                 error!("Connection closed: {:?}", err);
                             }
                         }
+                        
                         mining::mining::MINER_STATS.remove(&conn.id.to_string());
                         mining::mining::WORKERS
                             .entry(conn.addr.ip().to_string())
