@@ -164,7 +164,7 @@ pub async fn handle(
             let cleaned_iot = clean_iot(&data[4]);
             // originally: IOT_REGEX.find(data[4]).is_none()
             if cleaned_iot.is_empty() {
-                conn.miner_stat.iot_reading = "Error:incorrect data".to_string();
+                conn.miner_stat.iot_reading = "".to_string();
             } else if data[4].len() > 48 {
                 conn.miner_stat.iot_reading = "Error:data too long".to_string();
             } else {
