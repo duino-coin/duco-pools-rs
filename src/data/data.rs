@@ -21,6 +21,7 @@ impl std::error::Error for ConnectionClosed {}
 pub struct Connection {
     pub socket: TcpStream,
     pub addr: SocketAddr,
+    pub ip: String,
     pub username: ArcStr, // has less overhead than a conventional String (8 bytes vs 24 bytes)
     pub id: ArcStr,
     pub miner_stat: mining::stats::MinerStat,
@@ -31,6 +32,7 @@ impl Connection {
         Connection {
             socket,
             addr,
+            ip: addr.ip().to_string(),
             username,
             id,
             miner_stat: Default::default(),

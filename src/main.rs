@@ -135,6 +135,7 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
     let web_handle = web::web::start_webserver(addr).await;
 
     let handle_clone = handle_arc.clone();
+    // let guard = pprof::ProfilerGuardBuilder::default().frequency(1000).blocklist(&["libc", "libgcc", "pthread", "vdso"]).build().unwrap();
     let tcp = tokio::spawn(async move {
         while run_arc.load(Relaxed) {
             let (socket, addr) = server.accept().await.unwrap();
@@ -149,6 +150,7 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
             CONNECTIONS.fetch_add(1, Relaxed);
             handle_clone.lock().await.spawn(async move {
                 // Self::handle_connection(stream, cpu_limit_clone).await;
+
                 match handler::handler::handle_connection(
                     socket,
                     addr,
@@ -170,6 +172,7 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
                 // remove connection
                 CONNECTIONS.fetch_sub(1, Relaxed);
             });
+
         }
     });
 
@@ -179,6 +182,11 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
         running.store(false, Relaxed);
         break;
     }
+    //
+    // if let Ok(report) = guard.report().build() {
+    //     let file = std::fs::File::create("flamegraph.svg").unwrap();
+    //     report.flamegraph(file).unwrap();
+    // };
 
     web_handle.abort();
     tcp.abort();

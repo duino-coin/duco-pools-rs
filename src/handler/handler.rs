@@ -66,17 +66,17 @@ pub async fn handle_connection(
         {
             // block so we lose the lock on the mutex
             let mut ban = bans.lock().await;
-            let ip = conn.addr.ip().to_string();
-            if ban.banned_ips.contains(&ip) && ip != "127.0.0.1" {
+            // let ip = conn.addr.ip().to_string();
+            if ban.banned_ips.contains(&conn.ip) && conn.ip != "127.0.0.1" {
                 conn.write("BAD,User banned\n").await?;
                 return conn.shutdown().await;
             }
             if data_split.len() >= 2 {
                 let username = data_split[1];
-                if ban.banned_usernames.contains(&username.to_string()) && ip != "127.0.0.1" {
-                    if !ban.banned_ips.contains(&ip) {
-                        ban_ip(&ip).await?;
-                        ban.banned_ips.push(ip);
+                if ban.banned_usernames.contains(&username.to_string()) && conn.ip != "127.0.0.1" {
+                    if !ban.banned_ips.contains(&conn.ip) {
+                        ban_ip(&conn.ip).await?;
+                        ban.banned_ips.push(conn.ip.clone());
                         ban.save_bans().expect("failed to save config bans.json");
                     }
 
@@ -106,7 +106,9 @@ pub async fn handle_connection(
                 )
                 .await
                 {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        handle_close(&conn);
+                    }
                     Err(err) => {
                         if !err.is::<ConnectionClosed>() {
                             if !err.to_string().contains("Connection reset by peer")
@@ -114,23 +116,23 @@ pub async fn handle_connection(
                                 error!("Connection closed: {:?}", err);
                             }
                         }
-                        
-                        mining::mining::MINER_STATS.remove(&conn.id.to_string());
-                        mining::mining::WORKERS
-                            .entry(conn.addr.ip().to_string())
-                            .and_modify(|w| *w -= 1f32);
-                        let opt = mining::mining::WORKERS.get(&conn.addr.ip().to_string());
-                        if opt.is_some() && *opt.unwrap().value() <= 0f32 {
-                            mining::mining::WORKERS.remove(&conn.addr.ip().to_string());
-                        }
-
-                        mining::mining::USR_WORKERS
-                            .entry(conn.username.to_string())
-                            .and_modify(|w| *w -= 1f32);
-                        let opt = mining::mining::USR_WORKERS.get(&conn.username.to_string());
-                        if opt.is_some() && *opt.unwrap().value() <= 0f32 {
-                            mining::mining::USR_WORKERS.remove(&conn.username.to_string());
-                        }
+                        handle_close(&conn);
+                        // mining::mining::MINER_STATS.remove(&conn.id.to_string());
+                        // mining::mining::WORKERS
+                        //     .entry(conn.ip.clone())
+                        //     .and_modify(|w| *w -= 1f32);
+                        // let opt = mining::mining::WORKERS.get(&conn.ip);
+                        // if opt.is_some() && *opt.unwrap().value() <= 0f32 {
+                        //     mining::mining::WORKERS.remove(&conn.ip);
+                        // }
+                        //
+                        // mining::mining::USR_WORKERS
+                        //     .entry(conn.username.to_string())
+                        //     .and_modify(|w| *w -= 1f32);
+                        // let opt = mining::mining::USR_WORKERS.get(&conn.username.to_string());
+                        // if opt.is_some() && *opt.unwrap().value() <= 0f32 {
+                        //     mining::mining::USR_WORKERS.remove(&conn.username.to_string());
+                        // }
                     }
                 };
                 break;
@@ -156,4 +158,24 @@ pub async fn handle_connection(
     //         }
 
     Ok(())
+}
+
+fn handle_close(conn: &Connection) {
+    mining::mining::MINER_STATS.remove(&conn.id.to_string());
+    
+    mining::mining::WORKERS
+        .entry(conn.ip.clone())
+        .and_modify(|w| *w -= 1f32);
+    let opt = mining::mining::WORKERS.get(&conn.ip);
+    if opt.is_some() && *opt.unwrap().value() <= 0f32 {
+        mining::mining::WORKERS.remove(&conn.ip);
+    }
+
+    mining::mining::USR_WORKERS
+        .entry(conn.username.to_string())
+        .and_modify(|w| *w -= 1f32);
+    let opt = mining::mining::USR_WORKERS.get(&conn.username.to_string());
+    if opt.is_some() && *opt.unwrap().value() <= 0f32 {
+        mining::mining::USR_WORKERS.remove(&conn.username.to_string());
+    }
 }

@@ -187,21 +187,25 @@ pub async fn sync(
         "{}/workers_{}.json",
         config.base_sync_folder, config.pool_name
     );
-    let file = std::fs::File::create(&worker_path).expect("failed workers");
+    // let file = std::fs::File::create(&worker_path).expect("failed workers");
     let stats = mining::MINER_STATS.clone();
     stats.iter_mut().for_each(|mut s| {
         s.value_mut().pool_name = config.pool_name.clone();
     }); // inject the pool name here, so we don't stupidly waste 24 + pool_name.len() bytes
-    serde_json::to_writer(&file, &stats)?;
+    let worker_content = serde_json::to_string(&stats)?;
+    // serde_json::to_writer(&file, &stats)?;
+    std::fs::write(&worker_path, &worker_content)?;
     drop(stats);
 
     let reward_path = format!(
         "{}/rewards_{}.json",
         config.base_sync_folder, config.pool_name
     );
-    let file = std::fs::File::create(&reward_path).expect("failed rewards");
+    // let file = std::fs::File::create(&reward_path).expect("failed rewards");
     let balances = mining::BALANCES_TO_UPDATE.clone();
-    serde_json::to_writer(&file, &balances)?;
+    let rewards_content = serde_json::to_string(&balances)?;
+    // serde_json::to_writer(&file, &balances)?;
+    std::fs::write(&reward_path, &rewards_content)?;
 
     let request_url = format!(
         "https://{}/pool_sync/?host={}&port={}&version={}&identifier={}&name={}\
@@ -221,12 +225,12 @@ pub async fn sync(
     let form = reqwest::multipart::Form::new();
 
     // Customize all the details of a Part if needed...
-    let rewards_content = std::fs::read_to_string(reward_path)?;
+    // let rewards_content = std::fs::read_to_string(reward_path)?;
     debug!("Rewards: {rewards_content}");
     let rewards = multipart::Part::text(rewards_content)
         .file_name(format!("rewards_{}.json", config.pool_name));
 
-    let worker_content = std::fs::read_to_string(worker_path)?;
+    // let worker_content = std::fs::read_to_string(worker_path)?;
     debug!("Workers: {worker_content}");
     let workers = multipart::Part::text(worker_content)
         .file_name(format!("workers_{}.json", config.pool_name));
@@ -253,6 +257,8 @@ pub async fn sync(
                     .await
                     .clear();
                 info!("Successfully synced {}", SYNC_COUNT.load(Ordering::Relaxed));
+                std::fs::remove_file(&reward_path)?; // so we don't accidentally sync the same thing twice
+                std::fs::remove_file(&worker_path)?;
             } else {
                 warn!(
                     "Failed to sync {}: {}",

@@ -15,7 +15,6 @@ tokio = { version = "1.47.1", features = ["full"] }
 hex = "0.4.3"
 dashmap = {version = "6.1.0", features = ["serde"]}
 base64 = "0.22.1"
-regex = "1.12.1"
 sha1_smol = { version = "1.0.1", features = ["alloc", "std"] }
 itoa = "1.0.15"
 sysinfo = "0.37.2"
@@ -23,6 +22,7 @@ ctrlc = { version = "3.5.0", features = ["termination"] }
 warp = { version = "0.4.2", features = ["server"] }
 env_logger = "0.11.8"
 anyhow = "1.0.100"
+#pprof = { version = "0.15.0", features = ["flamegraph"]}
 
 [profile.profiling]
 inherits = "release"
