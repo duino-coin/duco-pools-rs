@@ -4,11 +4,11 @@ use crate::mining::mining;
 use crate::{data, CONNECTIONS};
 use data::data::LoginInfos;
 use log::{debug, error, info, warn};
-use reqwest::{multipart};
+use reqwest::multipart;
 use std::process::exit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -181,7 +181,7 @@ pub async fn sync(
 
     sys.refresh_specifics(refresh_kind);
     let cpu_usage = sys.global_cpu_usage();
-    
+
     let mem_usage = (sys.used_memory() as f32 / sys.total_memory() as f32 * 1e4).round() / 100.0; // rounding to two decimals
     mining::GLOBAL_SHARES_INCREASE.store(0, Ordering::Relaxed);
 
@@ -254,10 +254,7 @@ pub async fn sync(
             let status = res.status();
             if status.is_success() {
                 mining::BALANCES_TO_UPDATE.clear();
-                mining::GLOBAL_BLOCKS
-                    .lock()
-                    .await
-                    .clear();
+                mining::GLOBAL_BLOCKS.lock().await.clear();
                 info!("Successfully synced {}", SYNC_COUNT.load(Ordering::Relaxed));
                 std::fs::remove_file(&reward_path)?; // so we don't accidentally sync the same thing twice
                 std::fs::remove_file(&worker_path)?;
@@ -279,21 +276,21 @@ pub async fn sync(
 
 fn clean_miner_stats() {
     let now = UNIX_EPOCH.elapsed().unwrap().as_secs();
-    mining::MINER_STATS.retain(|_,val| {
+    mining::MINER_STATS.retain(|_, val| {
         now - val.last_share_reset <= 120 // only keep miners who've had their last_min_shares reset in the last two minutes
     });
 
     CONNECTIONS.store(mining::MINER_STATS.len(), Ordering::Relaxed); // update the amount of connected miners based on mining::MINER_STATS (saved per connection (conn.id = key))
 }
 
-struct SyncData {
-    blocks: Blocks,
-    cpu: f32,
-    ram: f32,
-    connections: u64,
-}
-
-struct Blocks {
-    block_increase: u64,
-    big_blocks: usize,
-}
+// struct SyncData {
+//     blocks: Blocks,
+//     cpu: f32,
+//     ram: f32,
+//     connections: u64,
+// }
+//
+// struct Blocks {
+//     block_increase: u64,
+//     big_blocks: usize,
+// }

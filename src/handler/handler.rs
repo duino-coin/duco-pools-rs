@@ -10,6 +10,7 @@ use std::error::Error;
 use std::net::SocketAddr;
 use std::process::Command;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
@@ -28,19 +29,18 @@ async fn ban_ip(ip: &str) -> Result<(), anyhow::Error> {
 }
 
 pub async fn handle_connection(
-    socket: TcpStream,
-    addr: SocketAddr,
+    mut conn: &mut Connection,
     bans: Arc<Mutex<Bans>>,
     config: Arc<PoolConfig>,
     pool_rewards: Arc<Value>,
     kolka: Arc<Kolka>,
 ) -> Result<(), anyhow::Error> {
     // println!("Connection from {}", addr);
-    let mut bytes = [0; 8];
-    rand::rng().fill_bytes(&mut bytes);
-    let id = hex::encode(&bytes);
-    // println!("{}", id);
-    let mut conn = Connection::new(socket, addr, ArcStr::new(), ArcStr::from(id));
+    // let mut bytes = [0; 8];
+    // rand::rng().fill_bytes(&mut bytes);
+    // let id = hex::encode(&bytes);
+    // // println!("{}", id);
+    // let mut conn = Connection::new(socket, addr, ArcStr::new(), ArcStr::from(id));
     conn.write(&format!("{}\n", config.server_version)).await?;
 
 
@@ -54,12 +54,13 @@ pub async fn handle_connection(
         // println!("{}", data);
         let data_split = data.trim().split(",").collect::<Vec<&str>>();
 
-        if addr.to_string().is_empty() || data_split.len() > 6
+        if conn.ip.is_empty() || data_split.len() > 6
         // no clue what '!conn.remoteAddr' is supposed to do
         {
-            info!("addr: {} len: {}, data: {data}", addr.to_string(), data_split.len());
+            // info!("addr: {} len: {}, data: {data}", conn.ip, data_split.len());
             conn.write("BAD,Incorrect data\n").await?;
-            return conn.shutdown().await;
+            // return conn.shutdown().await;
+            return Ok(())
         }
 
         // check for bans
@@ -69,7 +70,8 @@ pub async fn handle_connection(
             // let ip = conn.addr.ip().to_string();
             if ban.banned_ips.contains(&conn.ip) && conn.ip != "127.0.0.1" {
                 conn.write("BAD,User banned\n").await?;
-                return conn.shutdown().await;
+                // return conn.shutdown().await;
+                return Ok(())
             }
             if data_split.len() >= 2 {
                 let username = data_split[1];
@@ -81,7 +83,8 @@ pub async fn handle_connection(
                     }
 
                     conn.write("BAD,User banned\n").await?;
-                    return conn.shutdown().await;
+                    // return conn.shutdown().await;
+                    return Ok(())
                 }
             }
         }
@@ -89,13 +92,15 @@ pub async fn handle_connection(
         if data_split[0] == "JOB" {
             if data_split.len() == 1 {
                 conn.write("BAD,No username specified\n").await?;
-                return conn.shutdown().await;
+                // return conn.shutdown().await;
+                return Ok(())
             } else {
                 if conn.username.is_empty() {
                     conn.username = ArcStr::from(data_split[1]);
                 } else if conn.username != ArcStr::from(data_split[1]) {
-                    handle_close(&conn);
-                    return conn.shutdown().await;
+                    handle_close(conn);
+                    // return conn.shutdown().await;
+                    return Ok(())
                 }
                 match mining::mining::handle(
                     &mut conn,
@@ -110,7 +115,12 @@ pub async fn handle_connection(
                     Ok(_) => {}
                     Err(err) => {
                         if !err.is::<ConnectionClosed>() {
-                            if !err.to_string().contains("Connection reset by peer")
+                            // if !err.to_string().contains("Connection reset by peer")
+                            // {
+                            //     error!("Connection closed: {:?}", err);
+                            // }
+                            let err_str = err.to_string();
+                            if !err_str.contains("Connection reset by peer") && !err_str.contains("Connection timed out") && !err_str.contains("Shutting down")
                             {
                                 error!("Connection closed: {:?}", err);
                             }
@@ -134,7 +144,7 @@ pub async fn handle_connection(
                         // }
                     }
                 };
-                handle_close(&conn);
+                handle_close(conn);
                 break;
             }
         } else if data_split[0] == "MOTD" {
@@ -160,7 +170,7 @@ pub async fn handle_connection(
     Ok(())
 }
 
-fn handle_close(conn: &Connection) {
+pub fn handle_close(conn: &mut Connection) {
     mining::mining::MINER_STATS.remove(&conn.id.to_string());
     
     mining::mining::WORKERS

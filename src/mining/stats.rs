@@ -18,7 +18,7 @@ pub struct MinerStat
     #[serde(rename = "u")]
     pub username: String, // this is stupid..
     #[serde(rename = "h")]
-    pub hashrate: u64,
+    pub hashrate: f32,
     #[serde(rename = "s")]
     pub share_time: f32,
     #[serde(rename = "a")]
@@ -65,11 +65,11 @@ pub struct MinerStat
     pub override_diff: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct GlobalShares {
-    increase: u64,
-    total: u64,
-}
+// #[derive(Serialize, Deserialize, Debug)]
+// pub struct GlobalShares {
+//     increase: u64,
+//     total: u64,
+// }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct BlockInfos {

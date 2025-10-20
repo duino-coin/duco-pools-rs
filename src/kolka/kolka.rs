@@ -10,7 +10,6 @@ use std::sync::Arc;
 // const avrMiningPercentage = poolRewards["AVR"]["kolka_decrease_perc"] * 0.01;
 #[derive(Clone)]
 pub struct Kolka {
-    pool_rewards: Arc<Value>,
     highest_pc_diff: u32,
     highest_esp_diff: u32,
     highest_avr_diff: u32,
@@ -23,7 +22,6 @@ pub struct Kolka {
 impl Kolka {
     pub fn new(pool_rewards: Arc<Value>) -> Self {
         Kolka {
-            pool_rewards: pool_rewards.clone(),
             highest_pc_diff: (Self::get_diff(&pool_rewards, "NET") as f32 * 5.19202).round() as u32,
             highest_esp_diff: Self::get_diff(&pool_rewards, "ESP32"),
             highest_avr_diff: Self::get_diff(&pool_rewards, "DUE"),
@@ -107,9 +105,9 @@ impl Kolka {
         }
         .to_string()
     }
-    pub fn v3(self, sharetime: f32, expected_sharetime: u16, hashrate: u32) -> u32 {
+    pub fn v3(self, sharetime: f32, expected_sharetime: u16, hashrate: f32) -> u32 {
         let mut new_diff =
-            ((hashrate as f32 / 100f32).floor() * expected_sharetime as f32).round() as u32;
+            ((hashrate / 100f32).floor() * expected_sharetime as f32).round() as u32;
 
         let deviation = sharetime / expected_sharetime as f32;
         const HASHRATE_SCALING_FACTOR: f32 = 0.28;

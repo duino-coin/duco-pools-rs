@@ -47,7 +47,8 @@ impl Connection {
     }
 
     pub async fn shutdown(&mut self) -> Result<(), anyhow::Error> {
-        self.socket.split().1.shutdown().await?;
+        // self.socket.split().1.shutdown().await?;
+        self.socket.shutdown().await?;
         Ok(())
     }
 
@@ -70,7 +71,7 @@ impl Connection {
         let data = String::from_utf8(received.clone()).map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "Invalid UTF-8 data".to_string(),
+                "Invalid UTF-8 data ".to_string() + self.username.as_str(),
             )
         })?;
 

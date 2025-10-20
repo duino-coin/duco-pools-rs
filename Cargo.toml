@@ -22,6 +22,7 @@ ctrlc = { version = "3.5.0", features = ["termination"] }
 warp = { version = "0.4.2", features = ["server"] }
 env_logger = "0.11.8"
 anyhow = "1.0.100"
+rlimit = "0.10.2"
 #pprof = { version = "0.15.0", features = ["flamegraph"]}
 
 [profile.profiling]

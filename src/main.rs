@@ -8,16 +8,17 @@ mod web;
 
 use std::net::SocketAddr;
 use crate::cfg::config::PoolConfig;
-use crate::data::data::{Bans};
+use crate::data::data::{Bans, Connection};
 use crate::kolka::kolka::Kolka;
 use env_logger::Target;
 use log::{debug, error, info, LevelFilter};
-use rand::Rng;
+use rand::{Rng, RngCore};
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
+use arcstr::ArcStr;
 use sysinfo::System;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -102,6 +103,8 @@ async fn main() {
 }
 
 async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
+    // set max open file descriptors to the maximum the platform allows, so we can handle *a lot* of sockets
+    rlimit::increase_nofile_limit(u64::MAX).expect("failed to increase nofile limit");
     info!("Starting tcp server...");
     // read and serialize pool rewards
     let reward_content = std::fs::read_to_string("./config/poolRewards.json")
@@ -121,12 +124,10 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
         .await
         .expect("failed to bind to address");
     info!("Listening on {}:{}", config.host, config.port);
-    let running = Arc::new(AtomicBool::new(true));
 
     let handles = JoinSet::new();
     let handle_arc = Arc::new(Mutex::new(handles));
     // let mut arc_clone = handle_arc.clone();
-    let run_arc = running.clone();
 
     // start "webserver" and parse addr from config
     let addr: SocketAddr = (&format!("{}:{}", config.host, config.dashboard_port))
@@ -137,49 +138,61 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
     let handle_clone = handle_arc.clone();
     // let guard = pprof::ProfilerGuardBuilder::default().frequency(1000).blocklist(&["libc", "libgcc", "pthread", "vdso"]).build().unwrap();
     let tcp = tokio::spawn(async move {
-        while run_arc.load(Relaxed) {
-            let (socket, addr) = server.accept().await.unwrap();
+        loop {
+            match server.accept().await {
+                Ok((socket, addr)) => {
+                    // info!("Connection established");
+                    let ban_clone = ban_mutex.clone();
+                    let conf_clone = config.clone();
+                    let pool_arc_clone = pool_arc.clone();
+                    let kolka_clone = kolka_arc.clone();
 
-            // info!("Connection established");
-            let ban_clone = ban_mutex.clone();
-            let conf_clone = config.clone();
-            let pool_arc_clone = pool_arc.clone();
-            let kolka_clone = kolka_arc.clone();
-
-            // add connection
-            CONNECTIONS.fetch_add(1, Relaxed);
-            handle_clone.lock().await.spawn(async move {
-                // Self::handle_connection(stream, cpu_limit_clone).await;
-
-                match handler::handler::handle_connection(
-                    socket,
-                    addr,
-                    ban_clone,
-                    conf_clone,
-                    pool_arc_clone,
-                    kolka_clone,
-                )
-                .await
-                {
-                    Ok(_) => {}
-                    Err(err) => {
-                        if !err.to_string().contains("Connection reset by peer") && !err.to_string().contains("Connection timed out")
+                    // add connection
+                    CONNECTIONS.fetch_add(1, Relaxed);
+                    handle_clone.lock().await.spawn(async move {
+                        // Self::handle_connection(stream, cpu_limit_clone).await;
+                        let mut bytes = [0; 8];
+                        rand::rng().fill_bytes(&mut bytes);
+                        let id = hex::encode(&bytes);
+                        // println!("{}", id);
+                        let mut conn = Connection::new(socket, addr, ArcStr::new(), ArcStr::from(id));
+                        match handler::handler::handle_connection(
+                            &mut conn,
+                            ban_clone,
+                            conf_clone,
+                            pool_arc_clone,
+                            kolka_clone,
+                        )
+                            .await
                         {
-                            info!("Connection closed: {:?}", err);
-                        }
-                    }
-                };
-                // remove connection
-                CONNECTIONS.fetch_sub(1, Relaxed);
-            });
-
+                            Ok(_) => {}
+                            Err(err) => {
+                                let err_str = err.to_string();
+                                if !err_str.contains("Connection reset by peer") && !err_str.contains("Connection timed out") && !err_str.contains("Shutting down")
+                                {
+                                    info!("Connection closed: {:?}", err);
+                                }
+                            }
+                        };
+                        handler::handler::handle_close(&mut conn);
+                        // to drop the socket and (hopefully) close it
+                        drop(conn);
+                        // remove connection
+                        CONNECTIONS.fetch_sub(1, Relaxed);
+                    });
+                },
+                Err(err) => {
+                    error!("Accepting connection failed: {}", err);
+                }
+            }
+            // let (socket, addr) = server.accept().await.unwrap();
         }
+        println!("closed");
     });
-
+    println!("oi");
     while let Some(_) = rx.recv().await {
         // waits until it receives a message (signals a shutdown)
         info!("Received abort");
-        running.store(false, Relaxed);
         break;
     }
     //
@@ -187,7 +200,7 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
     //     let file = std::fs::File::create("flamegraph.svg").unwrap();
     //     report.flamegraph(file).unwrap();
     // };
-
+    println!("aborting");
     web_handle.abort();
     tcp.abort();
     handle_arc.lock().await.abort_all();

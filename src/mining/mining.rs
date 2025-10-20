@@ -74,10 +74,10 @@ pub async fn handle(
     let mut start_hashrate = -1i64; // i32 limits it to a max of ~ 4 GH/s
     let mut diff = 1u32;
     let mut reported_hashrate;
-    let mut hashrate_calc;
+    let mut hashrate_calc: f32;
     let mut reward: f32;
     let mut hashrate_is_estimated;
-    let mut hashrate;
+    let mut hashrate: f32;
     let mut is_first_share = true;
 
     // let ip = conn.addr.ip().to_string();
@@ -256,13 +256,13 @@ pub async fn handle(
         }
 
         if conn.miner_stat.share_time >= 0.5 || wrong_reported_hashrate {
-            hashrate_calc = (random as f32 / conn.miner_stat.share_time).round() as u32;
+            hashrate_calc = random as f32 / conn.miner_stat.share_time;
 
             if wrong_reported_hashrate {
-                reported_hashrate = hashrate_calc as f32;
+                reported_hashrate = hashrate_calc;
             }
         } else {
-            hashrate_calc = reported_hashrate.round() as u32;
+            hashrate_calc = reported_hashrate;
         }
 
         conn.miner_stat.last_min_shares += 1;
@@ -274,8 +274,11 @@ pub async fn handle(
             nonce = match u32::from_str(&data[0]) {
                 Ok(ok) => { ok }
                 Err(err) => {
-                    debug!("Shutting down due to nonce: {err:?}");
-                    return Err(anyhow::Error::from_boxed(Box::from("Shutting down."))); // used so we can handle closes centrally
+                    info!("Nonce error: {err:?} ({:?})", data);
+                    // conn.miner_stat.reject_shares = "No response to job".to_string();
+                    conn.write("BAD,No response to job\n").await?;
+                    continue;
+                    // return Err(anyhow::Error::from_boxed(Box::from("Shutting down."))); // used so we can handle closes centrally
                     // conn.shutdown().await?; // close connection, seems like a faulty miner
                     // (some request a job and after receiving the job they immediately request another one)
                 }
@@ -292,9 +295,12 @@ pub async fn handle(
 
 
         hashrate_is_estimated = false;
-        hashrate = hashrate_calc;
         if reported_hashrate <= 0f32 {
-            hashrate_is_estimated = false;
+            hashrate_is_estimated = true;
+            hashrate = hashrate_calc;
+        }
+        else {
+            hashrate = reported_hashrate;
         }
 
         if is_first_share {
@@ -378,14 +384,14 @@ pub async fn handle(
             conn.write(&res)
                 .await?;
             feedback_sent = SystemTime::now();
-        } else if hashrate < min_hashrate {
+        } else if hashrate < min_hashrate as f32 {
             conn.miner_stat.override_diff = (*kolka).clone().v2_reverse(&req_difficulty);
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too high starting difficulty\n").await?;
             start_hashrate = -1i64;
             diff = get_diff(&pool_rewards, &conn.miner_stat.override_diff);
             feedback_sent = SystemTime::now();
-        } else if hashrate as u64 >= max_hashrate {
+        } else if hashrate >= max_hashrate as f32 {
             conn.miner_stat.override_diff = (*kolka).clone().v2(&req_difficulty);
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too low starting difficulty\n").await?;
@@ -394,7 +400,7 @@ pub async fn handle(
             feedback_sent = SystemTime::now();
         } else if nonce == random {
             conn.miner_stat.accepted_shares += 1;
-            if conn.miner_stat.accepted_shares > 10 {
+            if conn.miner_stat.accepted_shares > 10 { // why is this a thing?
                 if diff <= get_diff(&pool_rewards, "ESP8266NH") {
                     if this_miner_chipid.is_empty() {
                         conn.miner_stat.rejected_shares += 1;
@@ -484,9 +490,9 @@ pub async fn handle(
             conn.miner_stat.id = rig_identifier;
             conn.miner_stat.algorithm = "DUCO-S1".to_string();
             conn.miner_stat.hashrate = if hashrate_is_estimated {
-                hashrate as u64
+                hashrate
             } else {
-                reported_hashrate as u64
+                reported_hashrate
             };
             conn.miner_stat.difficulty = diff;
             if cut_rigid.len() >= 2 {
