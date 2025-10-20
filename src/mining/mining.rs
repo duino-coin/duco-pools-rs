@@ -108,7 +108,6 @@ pub async fn handle(
             {
                 worker_add = 0.5;
             }
-
             *WORKERS.entry(conn.ip.clone()).or_insert(0f32) += worker_add;
             *USR_WORKERS.entry(conn.username.to_string()).or_insert(0f32) += worker_add;
             // println!("{}", WORKERS.get(&ip).unwrap().value());
@@ -276,9 +275,9 @@ pub async fn handle(
                 Ok(ok) => { ok }
                 Err(err) => {
                     debug!("Shutting down due to nonce: {err:?}");
-                    conn.shutdown().await?; // close connection, seems like a faulty miner
+                    return Err(anyhow::Error::from_boxed(Box::from("Shutting down."))); // used so we can handle closes centrally
+                    // conn.shutdown().await?; // close connection, seems like a faulty miner
                     // (some request a job and after receiving the job they immediately request another one)
-                    break;
                 }
             };
         }

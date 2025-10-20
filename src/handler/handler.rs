@@ -94,6 +94,7 @@ pub async fn handle_connection(
                 if conn.username.is_empty() {
                     conn.username = ArcStr::from(data_split[1]);
                 } else if conn.username != ArcStr::from(data_split[1]) {
+                    handle_close(&conn);
                     return conn.shutdown().await;
                 }
                 match mining::mining::handle(
@@ -106,9 +107,7 @@ pub async fn handle_connection(
                 )
                 .await
                 {
-                    Ok(_) => {
-                        handle_close(&conn);
-                    }
+                    Ok(_) => {}
                     Err(err) => {
                         if !err.is::<ConnectionClosed>() {
                             if !err.to_string().contains("Connection reset by peer")
@@ -116,7 +115,7 @@ pub async fn handle_connection(
                                 error!("Connection closed: {:?}", err);
                             }
                         }
-                        handle_close(&conn);
+
                         // mining::mining::MINER_STATS.remove(&conn.id.to_string());
                         // mining::mining::WORKERS
                         //     .entry(conn.ip.clone())
@@ -135,6 +134,7 @@ pub async fn handle_connection(
                         // }
                     }
                 };
+                handle_close(&conn);
                 break;
             }
         } else if data_split[0] == "MOTD" {

@@ -8,7 +8,7 @@ use reqwest::{multipart};
 use std::process::exit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -159,6 +159,8 @@ pub async fn sync(
         let lock = mining::GLOBAL_BLOCKS.lock().await;
         big_blocks = lock.len();
     }
+    clean_miner_stats(); // get rid of stale miners
+
     let connections = CONNECTIONS.load(Ordering::Relaxed);
 
     // TODO: impl ngrok
@@ -273,6 +275,15 @@ pub async fn sync(
         }
     };
     Ok(())
+}
+
+fn clean_miner_stats() {
+    let now = UNIX_EPOCH.elapsed().unwrap().as_secs();
+    mining::MINER_STATS.retain(|_,val| {
+        now - val.last_share_reset <= 120 // only keep miners who've had their last_min_shares reset in the last two minutes
+    });
+
+    CONNECTIONS.store(mining::MINER_STATS.len(), Ordering::Relaxed); // update the amount of connected miners based on mining::MINER_STATS (saved per connection (conn.id = key))
 }
 
 struct SyncData {
