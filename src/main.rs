@@ -187,9 +187,7 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
             }
             // let (socket, addr) = server.accept().await.unwrap();
         }
-        println!("closed");
     });
-    println!("oi");
     while let Some(_) = rx.recv().await {
         // waits until it receives a message (signals a shutdown)
         info!("Received abort");
@@ -200,7 +198,7 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
     //     let file = std::fs::File::create("flamegraph.svg").unwrap();
     //     report.flamegraph(file).unwrap();
     // };
-    println!("aborting");
+    info!("Stopping tcp server...");
     web_handle.abort();
     tcp.abort();
     handle_arc.lock().await.abort_all();

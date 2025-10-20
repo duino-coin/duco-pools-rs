@@ -274,11 +274,11 @@ pub async fn handle(
             nonce = match u32::from_str(&data[0]) {
                 Ok(ok) => { ok }
                 Err(err) => {
-                    info!("Nonce error: {err:?} ({:?})", data);
+                    debug!("Nonce error: {err:?} ({:?})", data);
                     // conn.miner_stat.reject_shares = "No response to job".to_string();
                     conn.write("BAD,No response to job\n").await?;
-                    continue;
-                    // return Err(anyhow::Error::from_boxed(Box::from("Shutting down."))); // used so we can handle closes centrally
+                    // continue;
+                    return Err(anyhow::Error::from_boxed(Box::from("Shutting down."))); // used so we can handle closes centrally
                     // conn.shutdown().await?; // close connection, seems like a faulty miner
                     // (some request a job and after receiving the job they immediately request another one)
                 }

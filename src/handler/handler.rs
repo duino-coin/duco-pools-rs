@@ -102,48 +102,14 @@ pub async fn handle_connection(
                     // return conn.shutdown().await;
                     return Ok(())
                 }
-                match mining::mining::handle(
+                mining::mining::handle(
                     &mut conn,
                     data_split,
                     pool_rewards,
                     config,
                     kolka,
                     false,
-                )
-                .await
-                {
-                    Ok(_) => {}
-                    Err(err) => {
-                        if !err.is::<ConnectionClosed>() {
-                            // if !err.to_string().contains("Connection reset by peer")
-                            // {
-                            //     error!("Connection closed: {:?}", err);
-                            // }
-                            let err_str = err.to_string();
-                            if !err_str.contains("Connection reset by peer") && !err_str.contains("Connection timed out") && !err_str.contains("Shutting down")
-                            {
-                                error!("Connection closed: {:?}", err);
-                            }
-                        }
-
-                        // mining::mining::MINER_STATS.remove(&conn.id.to_string());
-                        // mining::mining::WORKERS
-                        //     .entry(conn.ip.clone())
-                        //     .and_modify(|w| *w -= 1f32);
-                        // let opt = mining::mining::WORKERS.get(&conn.ip);
-                        // if opt.is_some() && *opt.unwrap().value() <= 0f32 {
-                        //     mining::mining::WORKERS.remove(&conn.ip);
-                        // }
-                        //
-                        // mining::mining::USR_WORKERS
-                        //     .entry(conn.username.to_string())
-                        //     .and_modify(|w| *w -= 1f32);
-                        // let opt = mining::mining::USR_WORKERS.get(&conn.username.to_string());
-                        // if opt.is_some() && *opt.unwrap().value() <= 0f32 {
-                        //     mining::mining::USR_WORKERS.remove(&conn.username.to_string());
-                        // }
-                    }
-                };
+                ).await?;
                 handle_close(conn);
                 break;
             }
@@ -172,7 +138,7 @@ pub async fn handle_connection(
 
 pub fn handle_close(conn: &mut Connection) {
     mining::mining::MINER_STATS.remove(&conn.id.to_string());
-    
+
     mining::mining::WORKERS
         .entry(conn.ip.clone())
         .and_modify(|w| *w -= 1f32);

@@ -2,9 +2,12 @@ use crate::mining;
 use arcstr::ArcStr;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-use std::net::SocketAddr;
+use std::net::{SocketAddr};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
+
+static TIMEOUT_IN_SECS: u64 = 300;
 
 #[derive(Debug, Clone)]
 pub struct ConnectionClosed;
@@ -27,6 +30,7 @@ pub struct Connection {
     pub miner_stat: mining::stats::MinerStat,
 }
 
+
 impl Connection {
     pub fn new(socket: TcpStream, addr: SocketAddr, username: ArcStr, id: ArcStr) -> Self {
         Connection {
@@ -39,6 +43,7 @@ impl Connection {
         }
     }
 
+
     pub async fn write(&mut self, content: &str) -> Result<(), anyhow::Error> {
         self.socket.write_all(content.as_bytes()).await?;
         self.socket.flush().await?;
@@ -46,6 +51,7 @@ impl Connection {
         Ok(())
     }
 
+    #[deprecated]
     pub async fn shutdown(&mut self) -> Result<(), anyhow::Error> {
         // self.socket.split().1.shutdown().await?;
         self.socket.shutdown().await?;
@@ -54,7 +60,8 @@ impl Connection {
 
     pub async fn read(&mut self) -> Result<Vec<u8>, anyhow::Error> {
         let mut reader = BufReader::new(&mut self.socket);
-        let received: Vec<u8> = reader.fill_buf().await?.to_vec();
+        let received: Vec<u8> = tokio::time::timeout(Duration::from_secs(TIMEOUT_IN_SECS), reader.fill_buf()).await??.to_vec();
+        // let received: Vec<u8> = reader.fill_buf().await?.to_vec();
         if received.is_empty() {
             return Err(ConnectionClosed.into());
         }
