@@ -1,16 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-// #[derive(Serialize, Deserialize, Debug)]
-// pub struct MiningStats
-// {
-//     workers: HashMap<String, f32>, // key = remote_addr
-//     usr_workers: HashMap<String, f32>, // key = username
-//     miners_stats: HashMap<String, MinerStat>,
-//     balances_to_update: HashMap<String, f64>, // key = username
-//     global_shares: GlobalShares,
-//     global_blocks: Vec<BlockInfos>
-// }
-
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct MinerStat
 // TODo: update types
@@ -65,12 +54,6 @@ pub struct MinerStat
     pub override_diff: String,
 }
 
-// #[derive(Serialize, Deserialize, Debug)]
-// pub struct GlobalShares {
-//     increase: u64,
-//     total: u64,
-// }
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct BlockInfos {
     time_since_epoch_millis: u64,
@@ -97,38 +80,3 @@ impl BlockInfos {
         }
     }
 }
-/*
-
-               const blockInfos = {
-                   timestamp: Date.now(),
-                   finder: conn.username,
-                   amount: reward,
-                   algo: "DUCO-S1",
-                   hash: newHash.toString(),
-               };
-
-*/
-
-/*
-u: conn.username,
-h: hashrateIsEstimated ? hashrate : reportedHashrate,
-s: sharetime,
-a: conn.acceptedShares,
-r: conn.rejectedShares,
-c: kolka_drop,
-al: algo,
-d: diff,
-p: poolName,
-sft: minerName,
-id: rigIdentifier,
-t: Math.floor(new Date() / 1000),
-wd: wallet_id,
-k: this_miner_chipid,
-pw: miningKey,
-ls: conn.lastminshares,
-it: conn.iot_reading,
-ip: conn.remoteAddress,
-pg: conn.ping,
-rw: reward,
-
-*/

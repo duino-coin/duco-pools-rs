@@ -65,13 +65,13 @@ impl Default for PoolConfig {
             pool_id: "".to_string(),
             pool_version: "0.3".to_string(), // why is this a config var?
             host: "0.0.0.0".to_string(),
-            port: 32811,
+            port: 6000,
             server_ip: "server.duinocoin.com".to_string(),
             server_port: 32811,
             server_version: "3.0".to_string(),
             pre_gen_job_count: 1000,
             job_generation_delay: 30000,
-            max_workers: 50,
+            max_workers: 125,
             motd: "".to_string(),
             initial_blockhash: "05b7406b3909071b2d85b2d2958ad07a0d52bd12".to_string(),
             expected_sharetime: 15, // why is this a config var?

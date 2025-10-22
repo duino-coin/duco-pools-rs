@@ -78,12 +78,7 @@ pub async fn handle(
     let mut hashrate: f32;
     let mut is_first_share = true;
 
-    // let ip = conn.addr.ip().to_string();
-    // let iot_regex: Regex = Regex::new("[A-Za-z0-9 .():@-]+").expect("Failed to compile IoT regex");
-    // let name_regex = Regex::new("[A-Za-z0-9 .()-]+").expect("Failed to compile name regex");
-    // let mut rng = Pcg64Mcg::from_rng(&mut rand::rng()); // not cryptographically secure, but I don't think we need it for this?
-    // let mut rng = Biski64Rng::from_rng(&mut rand::rng());
-    // let mut rng = rand::rng();
+
     let mut buffer = itoa::Buffer::new(); // used to convert nums to str a little faster
     let mut read; // needed for first share..
     let mut data= initial_data.iter().map(|x| x.to_string()).collect::<Vec<String>>();
@@ -109,7 +104,7 @@ pub async fn handle(
             }
             *WORKERS.entry(conn.ip.clone()).or_insert(0f32) += worker_add;
             *USR_WORKERS.entry(conn.username.clone()).or_insert(0f32) += worker_add;
-            // println!("{}", WORKERS.get(&ip).unwrap().value());
+
             if conn.ip != "127.0.0.1" {
                 conn.miner_stat.amount_of_workers = f32::max(
                     f32::max(get_user_workers(&conn.username), get_ip_workers(&conn.ip)),
@@ -121,12 +116,10 @@ pub async fn handle(
                     conn.miner_stat.server_miners as f32,
                 );
             }
-            // data = initial_data.iter().map(|x| x.to_string()).collect::<Vec<String>>();
         } else {
             read = conn.read_to_string().await?;
             data = read.split(",").map(|x| x.replace("\n", "")).collect::<Vec<String>>(); // receive new data and split by "args"
 
-            // let test = read.split(",");
             // TODO: check if this works
             req_difficulty = if data.len() < 3 || data[2].is_empty() {
                 "NET".to_string()
@@ -161,7 +154,6 @@ pub async fn handle(
         // IoT reading stuff
         {
             let cleaned_iot = clean_iot(&data[4]);
-            // originally: IOT_REGEX.find(data[4]).is_none()
             if cleaned_iot.is_empty() {
                 conn.miner_stat.iot_reading = "".to_string();
             } else if data[4].len() > 48 {
@@ -190,9 +182,7 @@ pub async fn handle(
             conn.miner_stat.amount_of_workers = max;
         }
 
-        // println!("{diff}");
         random = rng().random_range(0u64..diff as u64 * 100u64) + 1;
-        // random = rng.random_range(0..diff * 100) + 1;
         #[cfg(run_env = "bench")] {
             random = 1;
         }
@@ -216,14 +206,13 @@ pub async fn handle(
             job_str.push_str("\n");
 
             conn.write(&job_str).await?;
-            // conn.write(&format!("{},{},{}\n", job.0, job.1, job.2))
-            //     .await?;
+
         }
 
 
         let job_sent = SystemTime::now();
-        let read = conn.read_to_string().await?;
-        // data = read.split(",").collect::<Vec<&str>>();
+        read = conn.read_to_string().await?;
+
         data = read.split(",").map(|x| x.to_string()).collect::<Vec<String>>();
         let answer_received = SystemTime::now();
 
@@ -275,11 +264,8 @@ pub async fn handle(
                 Ok(ok) => { ok }
                 Err(err) => {
                     debug!("Nonce error: {err:?} ({:?})", data);
-                    // conn.miner_stat.reject_shares = "No response to job".to_string();
                     conn.write("BAD,No response to job\n").await?;
-                    // continue;
                     return Err(anyhow::Error::from_boxed(Box::from("Shutting down."))); // used so we can handle closes centrally
-                    // conn.shutdown().await?; // close connection, seems like a faulty miner
                     // (some request a job and after receiving the job they immediately request another one)
                 }
             };
@@ -404,7 +390,7 @@ pub async fn handle(
                     );
                 }
             }
-            // was previously: rng().random_range(0f32..1f32)
+
             if (rng().random_range(0f32..1f32) * block_probability as f32).floor() == 1f32 {
                 reward += config.block_reward;
 
@@ -445,10 +431,6 @@ pub async fn handle(
                     "" => {"Unknown miner".to_string()}
                     _ => { cleaned_name }
                 }
-                // match NAME_REGEX.find(data[2]) {
-                //     None => "Unknown miner".to_string(),
-                //     Some(some) => some.as_str().to_string(),
-                // }
             } else { "Unknown miner".to_string() };
             conn.miner_stat.software = miner_name.to_string();
 
@@ -463,10 +445,6 @@ pub async fn handle(
                     "" => {"None".to_string()}
                     _ => {cleaned}
                 }
-                // match NAME_REGEX.find(cut_rigid[0]) {
-                //     None => "None".to_string(),
-                //     Some(some) => some.as_str().to_string(),
-                // }
             } else { "None".to_string() };
             conn.miner_stat.id = rig_identifier;
             conn.miner_stat.algorithm = "DUCO-S1".to_string();
@@ -565,46 +543,19 @@ fn check_workers(max: f32, config: &PoolConfig) -> bool {
     false
 }
 
-//static IOT_REGEX: LazyLock<Regex> = LazyLock::new(|| {Regex::new("[A-Za-z0-9 .():@-]+").expect("Failed to compile IoT regex")});
-// static NAME_REGEX: LazyLock<Regex> = LazyLock::new(|| { Regex::new("[A-Za-z0-9 .()-]+").expect("Failed to compile name regex")});
 
-// const ALLOWED_SPECIAL_IOT: [&str; 7] = [".", "(", ")", ":", "@", "-", " "];
 const ALLOWED_SPECIAL_IOT: [char; 7] = ['.', '(', ')', ':', '@', '-', ' '];
 fn clean_iot(input: &str) -> String
 {
     input.replace(|x: char| !x.is_ascii_alphanumeric() && !ALLOWED_SPECIAL_IOT.contains(&x), "")
 }
-// const ALLOWED_SPECIAL: [&str; 5] = [".", "(", ")", "-", " "];
+
 const ALLOWED_SPECIAL: [char; 5] = ['.', '(', ')', '-', ' '];
 fn clean_name(input: &str) -> String
 {
     input.replace(|x: char| !x.is_ascii_alphanumeric() && !ALLOWED_SPECIAL.contains(&x), "")
-    // input.chars().into_iter().filter(|x| ALLOWED_SPECIAL.contains(&x.to_string().as_str()) || x.is_alphanumeric()).collect::<String>()
 }
-// fn check_workers(ip_workers: f32, user_workers: f32, server_miners: u64, config: &PoolConfig) -> bool
-// {
-//     if config.max_workers <= 0
-//     {
-//         return false;
-//     }
-//
-//     if max_f32(ip_workers, user_workers, server_miners as f32) > config.max_workers as f32
-//     {
-//         return true;
-//     }
-//     false
-// }
 
 fn max_f32(x1: f32, x2: f32, x3: f32) -> f32 {
     f32::max(f32::max(x1, x2), x3)
 }
-
-//const checkWorkers = (ipWorkers, usrWorkers, serverMiners, username) => {
-//     if (maxWorkers <= 0) return false;
-//
-//     if (Math.max(ipWorkers, usrWorkers, serverMiners) > maxWorkers) {
-//         return true;
-//
-//     }
-//     return false;
-// };

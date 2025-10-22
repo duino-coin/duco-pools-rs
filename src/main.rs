@@ -26,9 +26,6 @@ use tokio::task::JoinSet;
 
 pub static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
-// #[global_allocator]
-// static ALLOC: dhat::Alloc = dhat::Alloc;
-
 #[derive(Serialize)]
 struct HttpRes {
     result: String,
@@ -131,8 +128,7 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
 
     let handles = JoinSet::new();
     let mut handle_arc = Arc::new(Mutex::new(handles));
-    // let h = futures_util::future::Shared::from(BoxFuture::from(handles));
-    // let mut arc_clone = handle_arc.clone();
+
 
     // start "webserver" and parse addr from config
     let addr: SocketAddr = (&format!("{}:{}", config.host, config.dashboard_port))
@@ -146,7 +142,6 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
         loop {
             match server.accept().await {
                 Ok((socket, addr)) => {
-                    // info!("Connection established");
                     let ban_clone = ban_mutex.clone();
                     let conf_clone = config.clone();
                     let pool_arc_clone = pool_arc.clone();
@@ -156,11 +151,9 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
                     // add connection
                     CONNECTIONS.fetch_add(1, Relaxed);
                     handle_clone.lock().await.spawn(async move {
-                        // Self::handle_connection(stream, cpu_limit_clone).await;
                         let mut bytes = [0; 8];
                         rand::rng().fill_bytes(&mut bytes);
                         let id = hex::encode(&bytes);
-                        // println!("{}", id);
                         let mut conn = Connection::new(socket, addr, String::new(), id);
                         match handler::handler::handle_connection(
                             &mut conn,
@@ -193,7 +186,6 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
                     error!("Accepting connection failed: {}", err);
                 }
             }
-            // let (socket, addr) = server.accept().await.unwrap();
         }
     });
     while let Some(_) = rx.recv().await {
@@ -201,17 +193,7 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
         info!("Received abort");
         break;
     }
-    // let receiver = tokio::spawn(async move {
-    //
-    // });
-    // while let Some(_) = handle_arc.borrow_mut().into_inner().join_next() {
-    //
-    // }
-    //
-    // if let Ok(report) = guard.report().build() {
-    //     let file = std::fs::File::create("flamegraph.svg").unwrap();
-    //     report.flamegraph(file).unwrap();
-    // };
+
     info!("Stopping tcp server...");
     web_handle.abort();
     tcp.abort();

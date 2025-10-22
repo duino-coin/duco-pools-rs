@@ -35,38 +35,28 @@ pub async fn handle_connection(
     pool_rewards: Arc<Value>,
     kolka: Arc<Kolka>,
 ) -> Result<(), anyhow::Error> {
-    // println!("Connection from {}", addr);
-    // let mut bytes = [0; 8];
-    // rand::rng().fill_bytes(&mut bytes);
-    // let id = hex::encode(&bytes);
-    // // println!("{}", id);
-    // let mut conn = Connection::new(socket, addr, ArcStr::new(), ArcStr::from(id));
+
     conn.write(&format!("{}\n", config.server_version)).await?;
 
 
     loop {
         let data = conn.read_to_string().await?;
 
-        // println!("{}", data);
         let data_split = data.trim().split(",").collect::<Vec<&str>>();
 
         if conn.ip.is_empty() || data_split.len() > 6
         // no clue what '!conn.remoteAddr' is supposed to do
         {
-            // info!("addr: {} len: {}, data: {data}", conn.ip, data_split.len());
             conn.write("BAD,Incorrect data\n").await?;
-            // return conn.shutdown().await;
             return Ok(())
         }
 
         // check for bans
+        // block so we lose the lock on the mutex
         {
-            // block so we lose the lock on the mutex
             let mut ban = bans.lock().await;
-            // let ip = conn.addr.ip().to_string();
             if ban.banned_ips.contains(&conn.ip) && conn.ip != "127.0.0.1" {
                 conn.write("BAD,User banned\n").await?;
-                // return conn.shutdown().await;
                 return Ok(())
             }
             if data_split.len() >= 2 {
@@ -79,7 +69,6 @@ pub async fn handle_connection(
                     }
 
                     conn.write("BAD,User banned\n").await?;
-                    // return conn.shutdown().await;
                     return Ok(())
                 }
             }
@@ -88,14 +77,12 @@ pub async fn handle_connection(
         if data_split[0] == "JOB" {
             if data_split.len() == 1 {
                 conn.write("BAD,No username specified\n").await?;
-                // return conn.shutdown().await;
                 return Ok(())
             } else {
                 if conn.username.is_empty() {
                     conn.username = data_split[1].to_string();
                 } else if conn.username != data_split[1] {
                     handle_close(conn);
-                    // return conn.shutdown().await;
                     return Ok(())
                 }
                 mining::mining::handle(
@@ -114,20 +101,6 @@ pub async fn handle_connection(
         }
     }
 
-    //        if (data[0] === "JOB") {
-    //             if (!data[1]) {
-    //                 conn.write("BAD,No username specified\n");
-    //                 return conn.destroy();
-    //             } else {
-    //                 if (!conn.username) conn.username = data[1];
-    //                 else if (conn.username != data[1]) {
-    //                     return conn.destroy();
-    //                 }
-    //                 mining.miningHandler(conn, data, mainListener, false);
-    //             }
-    //         } else if (data[0] === "MOTD") {
-    //             conn.write(motd);
-    //         }
 
     Ok(())
 }

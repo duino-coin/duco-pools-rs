@@ -124,9 +124,7 @@ pub async fn update_pool_rewards(config: &PoolConfig) -> Result<(), Box<dyn std:
         .await?;
     std::fs::write("./config/poolRewards.json", response_data)?;
     info!("Successfully updated pool rewards");
-
-    // let file_content = std::fs::read_to_string("./config/bans.json")?;
-    // let mut bans: Bans = serde_json::from_str(&file_content)?;
+    
     let mut bans = Bans::load_bans().expect("failed to load config bans.json");
 
     let response_data = reqwest::get(format!("{}/bans.json", config.server_sync_url))
@@ -137,7 +135,6 @@ pub async fn update_pool_rewards(config: &PoolConfig) -> Result<(), Box<dyn std:
 
     bans.save_bans().expect("failed to save config bans.json");
     info!("Synced bans.");
-    // std::fs::write("./config/bans.json", serde_json::to_string(&bans)?)?;
 
     Ok(())
 }
@@ -159,7 +156,6 @@ pub async fn sync(
         let lock = mining::GLOBAL_BLOCKS.lock().await;
         big_blocks = lock.len();
     }
-    // clean_miner_stats(); // get rid of stale miners
 
     let connections = CONNECTIONS.load(Ordering::Relaxed);
 
@@ -189,14 +185,14 @@ pub async fn sync(
         "{}/workers_{}.json",
         config.base_sync_folder, config.pool_name
     );
-    // let file = std::fs::File::create(&worker_path).expect("failed workers");
+
     let stats = mining::MINER_STATS.clone();
     mining::MINER_STATS.clear();
     stats.iter_mut().for_each(|mut s| {
         s.value_mut().pool_name = config.pool_name.clone();
     }); // inject the pool name here, so we don't stupidly waste 24 + pool_name.len() bytes
     let worker_content = serde_json::to_string(&stats)?;
-    // serde_json::to_writer(&file, &stats)?;
+
     std::fs::write(&worker_path, &worker_content)?;
     drop(stats);
 
@@ -204,10 +200,10 @@ pub async fn sync(
         "{}/rewards_{}.json",
         config.base_sync_folder, config.pool_name
     );
-    // let file = std::fs::File::create(&reward_path).expect("failed rewards");
+
     let balances = mining::BALANCES_TO_UPDATE.clone();
     let rewards_content = serde_json::to_string(&balances)?;
-    // serde_json::to_writer(&file, &balances)?;
+
     std::fs::write(&reward_path, &rewards_content)?;
 
     let request_url = format!(
@@ -228,12 +224,11 @@ pub async fn sync(
     let form = reqwest::multipart::Form::new();
 
     // Customize all the details of a Part if needed...
-    // let rewards_content = std::fs::read_to_string(reward_path)?;
+
     debug!("Rewards: {rewards_content}");
     let rewards = multipart::Part::text(rewards_content)
         .file_name(format!("rewards_{}.json", config.pool_name));
 
-    // let worker_content = std::fs::read_to_string(worker_path)?;
     debug!("Workers: {worker_content}");
     let workers = multipart::Part::text(worker_content)
         .file_name(format!("workers_{}.json", config.pool_name));
@@ -283,15 +278,3 @@ fn clean_miner_stats() {
 
     CONNECTIONS.store(mining::MINER_STATS.len(), Ordering::Relaxed); // update the amount of connected miners based on mining::MINER_STATS (saved per connection (conn.id = key))
 }
-
-// struct SyncData {
-//     blocks: Blocks,
-//     cpu: f32,
-//     ram: f32,
-//     connections: u64,
-// }
-//
-// struct Blocks {
-//     block_increase: u64,
-//     big_blocks: usize,
-// }
