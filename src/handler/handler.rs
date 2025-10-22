@@ -47,10 +47,6 @@ pub async fn handle_connection(
     loop {
         let data = conn.read_to_string().await?;
 
-        if data.len() == 0 {
-            continue; // stream reached EOF
-        }
-
         // println!("{}", data);
         let data_split = data.trim().split(",").collect::<Vec<&str>>();
 
@@ -96,8 +92,8 @@ pub async fn handle_connection(
                 return Ok(())
             } else {
                 if conn.username.is_empty() {
-                    conn.username = ArcStr::from(data_split[1]);
-                } else if conn.username != ArcStr::from(data_split[1]) {
+                    conn.username = data_split[1].to_string();
+                } else if conn.username != data_split[1] {
                     handle_close(conn);
                     // return conn.shutdown().await;
                     return Ok(())

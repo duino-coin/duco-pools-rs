@@ -25,14 +25,20 @@ pub struct Connection {
     pub socket: TcpStream,
     pub addr: SocketAddr,
     pub ip: String,
-    pub username: ArcStr, // has less overhead than a conventional String (8 bytes vs 24 bytes)
-    pub id: ArcStr,
+    pub username: String,
+    pub id: String,
     pub miner_stat: mining::stats::MinerStat,
 }
 
+// impl Drop for Connection {
+//     fn drop(&mut self) {
+//         println!("Dropping connection");
+//     }
+// }
+
 
 impl Connection {
-    pub fn new(socket: TcpStream, addr: SocketAddr, username: ArcStr, id: ArcStr) -> Self {
+    pub fn new(socket: TcpStream, addr: SocketAddr, username: String, id: String) -> Self {
         Connection {
             socket,
             addr,
@@ -46,7 +52,7 @@ impl Connection {
 
     pub async fn write(&mut self, content: &str) -> Result<(), anyhow::Error> {
         self.socket.write_all(content.as_bytes()).await?;
-        self.socket.flush().await?;
+        tokio::time::timeout(Duration::from_secs(TIMEOUT_IN_SECS), self.socket.flush()).await??;
 
         Ok(())
     }
@@ -75,7 +81,7 @@ impl Connection {
         if received.is_empty() {
             return Err(ConnectionClosed.into());
         }
-        let data = String::from_utf8(received.clone()).map_err(|_| {
+        let data = String::from_utf8(received).map_err(|_| { // TODO: check for mor mem efficient type
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Invalid UTF-8 data ".to_string() + self.username.as_str(),

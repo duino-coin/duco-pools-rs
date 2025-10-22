@@ -159,7 +159,7 @@ pub async fn sync(
         let lock = mining::GLOBAL_BLOCKS.lock().await;
         big_blocks = lock.len();
     }
-    clean_miner_stats(); // get rid of stale miners
+    // clean_miner_stats(); // get rid of stale miners
 
     let connections = CONNECTIONS.load(Ordering::Relaxed);
 
@@ -191,6 +191,7 @@ pub async fn sync(
     );
     // let file = std::fs::File::create(&worker_path).expect("failed workers");
     let stats = mining::MINER_STATS.clone();
+    mining::MINER_STATS.clear();
     stats.iter_mut().for_each(|mut s| {
         s.value_mut().pool_name = config.pool_name.clone();
     }); // inject the pool name here, so we don't stupidly waste 24 + pool_name.len() bytes

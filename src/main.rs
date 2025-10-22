@@ -16,15 +16,18 @@ use rand::{Rng, RngCore};
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::Arc;
-use arcstr::ArcStr;
+use std::sync::atomic::{AtomicUsize};
+use std::sync::{Arc};
 use sysinfo::System;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
+
 pub static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
+
+// #[global_allocator]
+// static ALLOC: dhat::Alloc = dhat::Alloc;
 
 #[derive(Serialize)]
 struct HttpRes {
@@ -36,6 +39,7 @@ struct HttpRes {
 
 #[tokio::main]
 async fn main() {
+    // let _profiler = dhat::Profiler::new_heap();
     // initialize logging
     env_logger::builder()
         .target(Target::Stdout)
@@ -117,7 +121,7 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
     let ban_mutex = Arc::new(Mutex::new(bans));
 
     let pool_arc = Arc::new(pool_rewards);
-    let kolka = Kolka::new(pool_arc.clone());
+    let kolka = Kolka::new(&pool_arc);
     let kolka_arc = Arc::new(kolka);
 
     let server = TcpListener::bind(format!("{}:{}", config.host, config.port))
@@ -126,7 +130,8 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
     info!("Listening on {}:{}", config.host, config.port);
 
     let handles = JoinSet::new();
-    let handle_arc = Arc::new(Mutex::new(handles));
+    let mut handle_arc = Arc::new(Mutex::new(handles));
+    // let h = futures_util::future::Shared::from(BoxFuture::from(handles));
     // let mut arc_clone = handle_arc.clone();
 
     // start "webserver" and parse addr from config
@@ -147,6 +152,7 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
                     let pool_arc_clone = pool_arc.clone();
                     let kolka_clone = kolka_arc.clone();
 
+
                     // add connection
                     CONNECTIONS.fetch_add(1, Relaxed);
                     handle_clone.lock().await.spawn(async move {
@@ -155,7 +161,7 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
                         rand::rng().fill_bytes(&mut bytes);
                         let id = hex::encode(&bytes);
                         // println!("{}", id);
-                        let mut conn = Connection::new(socket, addr, ArcStr::new(), ArcStr::from(id));
+                        let mut conn = Connection::new(socket, addr, String::new(), id);
                         match handler::handler::handle_connection(
                             &mut conn,
                             ban_clone,
@@ -168,7 +174,9 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
                             Ok(_) => {}
                             Err(err) => {
                                 let err_str = err.to_string();
-                                if !err_str.contains("Connection reset by peer") && !err_str.contains("Connection timed out") && !err_str.contains("Shutting down")
+                                // this is impl is seriously bad
+                                if !err_str.contains("Connection reset by peer") && !err_str.contains("Connection timed out")
+                                    && !err_str.contains("Shutting down") && !err_str.contains("os error 10054") && !err_str.contains("Connection closed: Connection closed")
                                 {
                                     info!("Connection closed: {:?}", err);
                                 }
@@ -193,6 +201,12 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
         info!("Received abort");
         break;
     }
+    // let receiver = tokio::spawn(async move {
+    //
+    // });
+    // while let Some(_) = handle_arc.borrow_mut().into_inner().join_next() {
+    //
+    // }
     //
     // if let Ok(report) = guard.report().build() {
     //     let file = std::fs::File::create("flamegraph.svg").unwrap();
