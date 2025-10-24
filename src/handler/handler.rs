@@ -41,8 +41,7 @@ pub async fn handle_connection(
 
     loop {
         let data = conn.read_to_string().await?;
-
-        let data_split = data.trim().split(",").collect::<Vec<&str>>();
+        let data_split = data.trim().split(",").collect::<Box<[&str]>>();
 
         if conn.ip.is_empty() || data_split.len() > 6
         // no clue what '!conn.remoteAddr' is supposed to do

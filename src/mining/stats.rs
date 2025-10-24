@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct MinerStat
-// TODo: update types
 {
     #[serde(rename = "u")]
     pub username: String, // this is stupid..

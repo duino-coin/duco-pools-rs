@@ -16,6 +16,7 @@ use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::io::split;
 use tokio::sync::Mutex;
 
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
@@ -55,7 +56,7 @@ const PC_DIFF_TIERS: [&str; 4] = ["EXTREME", "NET", "MEDIUM", "LOW"];
 
 pub async fn handle(
     conn: &mut Connection,
-    initial_data: Vec<&str>,
+    initial_data: Box<[&str]>,
     pool_rewards: Arc<Value>,
     config: Arc<PoolConfig>,
     kolka: Arc<Kolka>,
@@ -78,10 +79,10 @@ pub async fn handle(
     let mut hashrate: f32;
     let mut is_first_share = true;
 
-
     let mut buffer = itoa::Buffer::new(); // used to convert nums to str a little faster
     let mut read; // needed for first share..
-    let mut data= initial_data.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+    // let mut data= initial_data.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+    let mut data = initial_data.iter().map(|&x| x).collect::<Box<[&str]>>();
     drop(initial_data);
     loop {
 
@@ -118,8 +119,8 @@ pub async fn handle(
             }
         } else {
             read = conn.read_to_string().await?;
-            data = read.split(",").map(|x| x.replace("\n", "")).collect::<Vec<String>>(); // receive new data and split by "args"
-
+            // data = read.split(",").map(|x| x.replace("\n", "")).collect::<Vec<String>>(); // receive new data and split by "args"
+            data = read.split(",").collect::<Box<[&str]>>(); // receive new data and split by "args"
             // TODO: check if this works
             req_difficulty = if data.len() < 3 || data[2].is_empty() {
                 "NET".to_string()
@@ -213,7 +214,7 @@ pub async fn handle(
         let job_sent = SystemTime::now();
         read = conn.read_to_string().await?;
 
-        data = read.split(",").map(|x| x.to_string()).collect::<Vec<String>>();
+        data = read.split(",").collect::<Box<[&str]>>();
         let answer_received = SystemTime::now();
 
         conn.miner_stat.share_time = answer_received

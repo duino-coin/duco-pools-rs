@@ -188,6 +188,7 @@ pub async fn sync(
 
     let stats = mining::MINER_STATS.clone();
     mining::MINER_STATS.clear();
+    mining::MINER_STATS.shrink_to_fit();
     stats.iter_mut().for_each(|mut s| {
         s.value_mut().pool_name = config.pool_name.clone();
     }); // inject the pool name here, so we don't stupidly waste 24 + pool_name.len() bytes
@@ -251,6 +252,8 @@ pub async fn sync(
             if status.is_success() {
                 mining::BALANCES_TO_UPDATE.clear();
                 mining::GLOBAL_BLOCKS.lock().await.clear();
+                mining::BALANCES_TO_UPDATE.shrink_to_fit();
+                mining::GLOBAL_BLOCKS.lock().await.shrink_to_fit();
                 info!("Successfully synced {}", SYNC_COUNT.load(Ordering::Relaxed));
                 std::fs::remove_file(&reward_path)?; // so we don't accidentally sync the same thing twice
                 std::fs::remove_file(&worker_path)?;
@@ -267,6 +270,9 @@ pub async fn sync(
             return Err(Box::new(err));
         }
     };
+
+    mining::USR_WORKERS.shrink_to_fit();
+    mining::WORKERS.shrink_to_fit();
     Ok(())
 }
 

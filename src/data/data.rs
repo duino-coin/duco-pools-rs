@@ -69,7 +69,7 @@ impl Connection {
         Ok(received)
     }
 
-    pub async fn read_to_string(&mut self) -> Result<String, anyhow::Error> {
+    pub async fn read_to_string(&mut self) -> Result<Box<str>, anyhow::Error> {
         let received = self.read().await?;
         if received.is_empty() {
             return Err(ConnectionClosed.into());
@@ -80,10 +80,13 @@ impl Connection {
                 std::io::ErrorKind::InvalidData,
                 "Invalid UTF-8 data ".to_string() + self.username.as_str(),
             )
-        })?;
+        }).map(|x| x.replace("\n", ""))?;
 
-        Ok(data)
+        // std::str::
+        // data.into_boxed_str()
+        Ok(data.into_boxed_str())
     }
+
 }
 
 #[derive(Deserialize, Serialize, Debug)]
