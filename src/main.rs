@@ -18,6 +18,7 @@ use serde_json::Value;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicUsize};
 use std::sync::{Arc};
+use mimalloc::MiMalloc;
 use sysinfo::System;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -26,11 +27,8 @@ use tokio::task::JoinSet;
 
 pub static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Serialize)]
-struct HttpRes {
-    result: String,
-    success: bool,
-}
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 // #[cfg(not(debug_assertions))] are used for functions we do not want to be called while testing (as not to disrupt production services)
 
@@ -167,9 +165,10 @@ async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
                             Ok(_) => {}
                             Err(err) => {
                                 let err_str = err.to_string();
-                                // this is impl is seriously bad
+                                // this is impl seriously is horrendous
                                 if !err_str.contains("Connection reset by peer") && !err_str.contains("Connection timed out")
                                     && !err_str.contains("Shutting down") && !err_str.contains("os error 10054") && !err_str.contains("Connection closed: Connection closed")
+                                    && !err_str.contains("deadline")
                                 {
                                     info!("Connection closed: {:?}", err);
                                 }

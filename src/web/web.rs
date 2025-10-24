@@ -1,8 +1,14 @@
-use crate::HttpRes;
 use log::info;
+use serde::Serialize;
 use std::net::SocketAddr;
 use tokio::task::JoinHandle;
 use warp::Filter;
+
+#[derive(Serialize)]
+struct HttpRes {
+    result: String,
+    success: bool,
+}
 
 pub async fn start_webserver(addr: SocketAddr) -> JoinHandle<()> {
     let ping = warp::path("ping")
