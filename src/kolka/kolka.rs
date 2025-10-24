@@ -125,7 +125,7 @@ pub fn v4(kolka: &Arc<Kolka>, sharetime: f32, expected_test_sharetime: u16) -> (
         (false, 0f32)
     }
 }
-fn get_diff(pool_rewards: &Arc<Value>, req_diff: &str) -> u32 {
+pub fn get_diff(pool_rewards: &Arc<Value>, req_diff: &str) -> u32 {
     let diff = pool_rewards
         .get(req_diff)
         .unwrap()

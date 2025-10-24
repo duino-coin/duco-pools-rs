@@ -69,7 +69,7 @@ pub async fn handle(
     let mut miner_name;
     let mut expected_share_time = 0;
     let mut feedback_sent = SystemTime::now();
-    let mut start_hashrate = -1i64; // i32 limits it to a max of ~ 4 GH/s
+    let mut start_hashrate = -1f32;
     let mut diff = 1u32;
     let mut reported_hashrate;
     let mut hashrate_calc: f32;
@@ -94,7 +94,7 @@ pub async fn handle(
             if !pool_rewards.get(&req_difficulty).is_some() {
                 req_difficulty = "NET".to_string();
             }
-            diff = get_diff(&pool_rewards, &req_difficulty);
+            diff = kolka::kolka::get_diff(&pool_rewards, &req_difficulty);
 
             let mut worker_add = 1f32;
             if req_difficulty == "ESP32"
@@ -293,9 +293,9 @@ pub async fn handle(
             this_miner_chipid = if data.len() >= 5 { data[4].to_string() } else { "".to_string() };
         }
 
-        if diff > get_diff(&pool_rewards, "DUE")
-            && diff <= get_diff(&pool_rewards, "ESP8266NH")
-            && perc_diff(hashrate as f32, hashrate_calc as f32) > 15f32
+        if diff > kolka::kolka::get_diff(&pool_rewards, "DUE")
+            && diff <= kolka::kolka::get_diff(&pool_rewards, "ESP8266NH")
+            && perc_diff(hashrate, hashrate_calc) > 15f32
             && conn.miner_stat.share_time >= 1.5
         {
             conn.miner_stat.reject_shares = "Modified hashrate".to_string();
@@ -303,10 +303,10 @@ pub async fn handle(
 
         if (conn.miner_stat.accepted_shares == 4
             || (conn.miner_stat.accepted_shares > 4
-            && perc_diff(hashrate as f32, start_hashrate as f32) > 15f32))
+            && perc_diff(hashrate, start_hashrate) > 15f32))
             && PC_DIFF_TIERS.contains(&req_difficulty.as_str())
         {
-            start_hashrate = hashrate as i64;
+            start_hashrate = hashrate;
 
             diff = kolka::kolka::v3(
                 avg_from_array(&conn.miner_stat.share_times_list),
@@ -355,27 +355,27 @@ pub async fn handle(
             conn.miner_stat.override_diff = kolka::kolka::v2_reverse(&req_difficulty);
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too high starting difficulty\n").await?;
-            start_hashrate = -1i64;
-            diff = get_diff(&pool_rewards, &conn.miner_stat.override_diff);
+            start_hashrate = -1f32;
+            diff = kolka::kolka::get_diff(&pool_rewards, &conn.miner_stat.override_diff);
             feedback_sent = SystemTime::now();
         } else if hashrate >= max_hashrate as f32 {
             conn.miner_stat.override_diff = kolka::kolka::v2(&req_difficulty);
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too low starting difficulty\n").await?;
-            start_hashrate = -1;
-            diff = get_diff(&pool_rewards, &conn.miner_stat.override_diff);
+            start_hashrate = -1f32;
+            diff = kolka::kolka::get_diff(&pool_rewards, &conn.miner_stat.override_diff);
             feedback_sent = SystemTime::now();
         } else if nonce == random {
             conn.miner_stat.accepted_shares += 1;
             if conn.miner_stat.accepted_shares > 10 { // why is this a thing?
-                if diff <= get_diff(&pool_rewards, "ESP8266NH") {
+                if diff <= kolka::kolka::get_diff(&pool_rewards, "ESP8266NH") {
                     if this_miner_chipid.is_empty() {
                         conn.miner_stat.rejected_shares += 1;
                     } else if data.len() >= 5 && data[4] != this_miner_chipid {
                         conn.miner_stat.rejected_shares += 1;
                     } else {
                         reward = kolka::kolka::v1(&kolka,
-                            hashrate_calc as f32,
+                            hashrate_calc,
                             diff,
                             conn.miner_stat.amount_of_workers,
                             reward_div,
@@ -383,7 +383,7 @@ pub async fn handle(
                     }
                 } else {
                     reward = kolka::kolka::v1(&kolka,
-                        hashrate_calc as f32,
+                        hashrate_calc,
                         diff,
                         conn.miner_stat.amount_of_workers,
                         reward_div,
@@ -519,17 +519,6 @@ fn get_ip_workers(ip: &String) -> f32 {
             .clone()}
     }
 
-}
-
-fn get_diff(pool_rewards: &Arc<Value>, req_diff: &str) -> u32 {
-    let diff = pool_rewards
-        .get(req_diff)
-        .unwrap()
-        .get("difficulty")
-        .unwrap()
-        .as_u64()
-        .unwrap();
-    diff as u32
 }
 
 fn check_workers(max: f32, config: &PoolConfig) -> bool {
