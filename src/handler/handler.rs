@@ -81,7 +81,7 @@ pub async fn handle_connection(
                 if conn.username.is_empty() {
                     conn.username = data_split[1].to_string();
                 } else if conn.username != data_split[1] {
-                    handle_close(conn);
+                    // handle_close(conn);
                     return Ok(())
                 }
                 mining::mining::handle(
@@ -92,7 +92,7 @@ pub async fn handle_connection(
                     kolka,
                     false,
                 ).await?;
-                handle_close(conn);
+                // handle_close(conn);
                 break;
             }
         } else if data_split[0] == "MOTD" {
@@ -105,7 +105,7 @@ pub async fn handle_connection(
 }
 
 pub fn handle_close(conn: &mut Connection) {
-    mining::mining::MINER_STATS.remove(&conn.id.to_string());
+    mining::mining::MINER_STATS.remove(&conn.id);
 
     mining::mining::WORKERS
         .entry(conn.ip.clone())
@@ -116,10 +116,10 @@ pub fn handle_close(conn: &mut Connection) {
     }
 
     mining::mining::USR_WORKERS
-        .entry(conn.username.to_string())
+        .entry(conn.username.clone())
         .and_modify(|w| *w -= 1f32);
-    let opt = mining::mining::USR_WORKERS.get(&conn.username.to_string());
+    let opt = mining::mining::USR_WORKERS.get(&conn.username);
     if opt.is_some() && *opt.unwrap().value() <= 0f32 {
-        mining::mining::USR_WORKERS.remove(&conn.username.to_string());
+        mining::mining::USR_WORKERS.remove(&conn.username);
     }
 }

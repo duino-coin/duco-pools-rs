@@ -23,16 +23,13 @@ use tokio::sync::Mutex;
 pub static WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 
 pub static USR_WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| {
-    // TODO: maybe move from String to ArcStr?
     DashMap::new()
 });
 pub static BALANCES_TO_UPDATE: LazyLock<DashMap<String, f32>> = LazyLock::new(|| {
-    // TODO: maybe move from String to ArcStr?
     DashMap::new()
 });
 
 pub static MINER_STATS: LazyLock<DashMap<String, MinerStat>> = LazyLock::new(|| {
-    // TODO: maybe move from String to ArcStr?
     DashMap::new()
 });
 
@@ -151,8 +148,8 @@ pub async fn handle(
         }
         conn.miner_stat.password = mining_key;
 
-        if data.len() >= 5
         // IoT reading stuff
+        if data.len() >= 5
         {
             let cleaned_iot = clean_iot(&data[4]);
             if cleaned_iot.is_empty() {
@@ -455,8 +452,10 @@ pub async fn handle(
                 reported_hashrate
             };
             conn.miner_stat.difficulty = diff;
+
             if cut_rigid.len() >= 2 {
-                conn.miner_stat.password = BASE64_STANDARD.encode(cut_rigid[1].as_bytes());
+                // mining key backwards compatibility for old miners
+                conn.miner_stat.password = BASE64_STANDARD.encode(cut_rigid[1]);
             }
 
             if UNIX_EPOCH.elapsed()?.as_secs() - conn.miner_stat.last_share_reset >= 60 {

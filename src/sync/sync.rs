@@ -251,9 +251,12 @@ pub async fn sync(
             let status = res.status();
             if status.is_success() {
                 mining::BALANCES_TO_UPDATE.clear();
-                mining::GLOBAL_BLOCKS.lock().await.clear();
+                {
+                    let mut block_lock = mining::GLOBAL_BLOCKS.lock().await;
+                    block_lock.clear();
+                    block_lock.shrink_to_fit();
+                }
                 mining::BALANCES_TO_UPDATE.shrink_to_fit();
-                mining::GLOBAL_BLOCKS.lock().await.shrink_to_fit();
                 info!("Successfully synced {}", SYNC_COUNT.load(Ordering::Relaxed));
                 std::fs::remove_file(&reward_path)?; // so we don't accidentally sync the same thing twice
                 std::fs::remove_file(&worker_path)?;
@@ -274,13 +277,4 @@ pub async fn sync(
     mining::USR_WORKERS.shrink_to_fit();
     mining::WORKERS.shrink_to_fit();
     Ok(())
-}
-
-fn clean_miner_stats() {
-    let now = UNIX_EPOCH.elapsed().unwrap().as_secs();
-    mining::MINER_STATS.retain(|_, val| {
-        now - val.last_share_reset <= 120 // only keep miners who've had their last_min_shares reset in the last two minutes
-    });
-
-    CONNECTIONS.store(mining::MINER_STATS.len(), Ordering::Relaxed); // update the amount of connected miners based on mining::MINER_STATS (saved per connection (conn.id = key))
 }
