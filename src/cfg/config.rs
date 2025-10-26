@@ -7,6 +7,7 @@ use std::path::Path;
 pub struct PoolConfig {
     #[serde(rename = "poolName")]
     pub pool_name: String,
+    // pub pool_test: &'static str,
     #[serde(rename = "poolPassword")]
     pub pool_password: String,
     #[serde(rename = "poolID")]

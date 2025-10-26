@@ -24,6 +24,7 @@ env_logger = "0.11.8"
 anyhow = "1.0.100"
 rlimit = "0.10.2"
 mimalloc = "0.1.48"
+tokio-util = { version = "0.7.16", features = ["rt"] }
 #pprof = { version = "0.15.0", features = ["flamegraph"]}
 
 [profile.profiling]

@@ -1,6 +1,4 @@
-use serde_json::Value;
-use std::sync::Arc;
-
+use crate::POOL_REWARDS;
 
 #[derive(Clone)]
 pub struct Kolka {
@@ -14,22 +12,39 @@ pub struct Kolka {
 }
 
 impl Kolka {
-    pub fn new(pool_rewards: &Arc<Value>) -> Self {
+    // pub fn new(pool_rewards: &Arc<Value>) -> Self {
+    //     Kolka {
+    //         highest_pc_diff: (get_diff(pool_rewards, "NET") as f32 * 5.19202).round() as u32,
+    //         highest_esp_diff: get_diff(pool_rewards, "ESP32"),
+    //         highest_avr_diff: get_diff(pool_rewards, "DUE"),
+    //         gpu_mining_percentage: get_decrease_perc(pool_rewards, "EXTREME") * 0.01,
+    //         pc_mining_percentage: get_decrease_perc(pool_rewards, "NET") * 0.01,
+    //         esp_mining_percentage: get_decrease_perc(pool_rewards, "ESP32") * 0.01,
+    //         avr_mining_percentage: get_decrease_perc(pool_rewards, "AVR") * 0.01,
+    //     }
+    // }
+    pub fn new() -> Self {
         Kolka {
-            highest_pc_diff: (get_diff(pool_rewards, "NET") as f32 * 5.19202).round() as u32,
-            highest_esp_diff: get_diff(pool_rewards, "ESP32"),
-            highest_avr_diff: get_diff(pool_rewards, "DUE"),
-            gpu_mining_percentage: get_decrease_perc(pool_rewards, "EXTREME") * 0.01,
-            pc_mining_percentage: get_decrease_perc(pool_rewards, "NET") * 0.01,
-            esp_mining_percentage: get_decrease_perc(pool_rewards, "ESP32") * 0.01,
-            avr_mining_percentage: get_decrease_perc(pool_rewards, "AVR") * 0.01,
+            highest_pc_diff: (get_diff("NET") as f32 * 5.19202).round() as u32,
+            highest_esp_diff: get_diff("ESP32"),
+            highest_avr_diff: get_diff("DUE"),
+            gpu_mining_percentage: get_decrease_perc("EXTREME") * 0.01,
+            pc_mining_percentage: get_decrease_perc("NET") * 0.01,
+            esp_mining_percentage: get_decrease_perc("ESP32") * 0.01,
+            avr_mining_percentage: get_decrease_perc("AVR") * 0.01,
         }
     }
 }
 
 
+// pub fn v1(
+//     kolka: &Arc<Kolka>,
+//     hashrate: f32,
+//     difficulty: u32,
+//     amount_of_workers: f32,
+//     reward_div: u32,
 pub fn v1(
-    kolka: &Arc<Kolka>,
+    kolka: &Kolka,
     hashrate: f32,
     difficulty: u32,
     amount_of_workers: f32,
@@ -117,7 +132,8 @@ pub fn v3(sharetime: f32, expected_sharetime: u16, hashrate: f32) -> u32 {
 
     new_diff
 }
-pub fn v4(kolka: &Arc<Kolka>, sharetime: f32, expected_test_sharetime: u16) -> (bool, f32) {
+// pub fn v4(kolka: &Arc<Kolka>, sharetime: f32, expected_test_sharetime: u16) -> (bool, f32) {
+pub fn v4(kolka: &Kolka, sharetime: f32, expected_test_sharetime: u16) -> (bool, f32) {
     let p = sharetime / expected_test_sharetime as f32;
     if p > 1.5 {
         (true, v1(kolka,0f32, sharetime as u32, 0f32, 0)) // this doesn't make any sense
@@ -125,8 +141,19 @@ pub fn v4(kolka: &Arc<Kolka>, sharetime: f32, expected_test_sharetime: u16) -> (
         (false, 0f32)
     }
 }
-pub fn get_diff(pool_rewards: &Arc<Value>, req_diff: &str) -> u32 {
-    let diff = pool_rewards
+// pub fn get_diff(pool_rewards: &Arc<Value>, req_diff: &str) -> u32 {
+//     let diff = pool_rewards
+//         .get(req_diff)
+//         .unwrap()
+//         .get("difficulty")
+//         .unwrap()
+//         .as_u64()
+//         .unwrap();
+//     diff as u32
+// }
+
+pub fn get_diff(req_diff: &str) -> u32 {
+    let diff = POOL_REWARDS.get().unwrap()
         .get(req_diff)
         .unwrap()
         .get("difficulty")
@@ -136,8 +163,8 @@ pub fn get_diff(pool_rewards: &Arc<Value>, req_diff: &str) -> u32 {
     diff as u32
 }
 
-fn get_decrease_perc(pool_rewards: &Arc<Value>, req_diff: &str) -> f32 {
-    let diff = pool_rewards
+fn get_decrease_perc(req_diff: &str) -> f32 {
+    let diff = POOL_REWARDS.get().unwrap()
         .get(req_diff)
         .unwrap()
         .get("kolka_decrease_perc")
@@ -146,3 +173,15 @@ fn get_decrease_perc(pool_rewards: &Arc<Value>, req_diff: &str) -> f32 {
         .unwrap();
     diff as f32
 }
+
+
+// fn get_decrease_perc(pool_rewards: &Arc<Value>, req_diff: &str) -> f32 {
+//     let diff = pool_rewards
+//         .get(req_diff)
+//         .unwrap()
+//         .get("kolka_decrease_perc")
+//         .unwrap()
+//         .as_f64()
+//         .unwrap();
+//     diff as f32
+// }

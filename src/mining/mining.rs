@@ -1,8 +1,7 @@
 use crate::cfg::config::PoolConfig;
 use crate::data::data::Connection;
-use crate::kolka::kolka::Kolka;
 use crate::mining::stats::{BlockInfos, MinerStat};
-use crate::{cfg, kolka};
+use crate::{cfg, kolka, KOLKA, POOL_REWARDS};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use dashmap::DashMap;
@@ -10,13 +9,11 @@ use log::{debug, info};
 use rand::{rng, Rng};
 // use rand::{rng, Rng};
 // use regex::{Regex};
-use serde_json::Value;
 use sha1_smol::Sha1;
 use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, LazyLock};
+use std::sync::{LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::io::split;
 use tokio::sync::Mutex;
 
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
@@ -51,12 +48,17 @@ pub static GLOBAL_SHARES_TOTAL: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64
 
 const PC_DIFF_TIERS: [&str; 4] = ["EXTREME", "NET", "MEDIUM", "LOW"];
 
+// pub async fn handle(
+//     conn: &mut Connection,
+//     initial_data: Box<[&str]>,
+//     pool_rewards: Arc<Value>,
+//     config: Arc<PoolConfig>,
+//     kolka: Arc<Kolka>,
+//     using_avr: bool,
 pub async fn handle(
     conn: &mut Connection,
     initial_data: Box<[&str]>,
-    pool_rewards: Arc<Value>,
-    config: Arc<PoolConfig>,
-    kolka: Arc<Kolka>,
+    config: &PoolConfig,
     using_avr: bool,
 ) -> Result<(), anyhow::Error> {
     let mut random;
@@ -76,6 +78,10 @@ pub async fn handle(
     let mut hashrate: f32;
     let mut is_first_share = true;
 
+    let kolka = KOLKA.get().unwrap();
+    let pool_rewards = POOL_REWARDS.get().unwrap();
+
+
     let mut buffer = itoa::Buffer::new(); // used to convert nums to str a little faster
     let mut read; // needed for first share..
     // let mut data= initial_data.iter().map(|x| x.to_string()).collect::<Vec<String>>();
@@ -92,7 +98,8 @@ pub async fn handle(
             if !pool_rewards.get(&req_difficulty).is_some() {
                 req_difficulty = "NET".to_string();
             }
-            diff = kolka::kolka::get_diff(&pool_rewards, &req_difficulty);
+            // diff = kolka::kolka::get_diff(&pool_rewards, &req_difficulty);
+            diff = kolka::kolka::get_diff(&req_difficulty);
 
             let mut worker_add = 1f32;
             if req_difficulty == "ESP32"
@@ -291,8 +298,12 @@ pub async fn handle(
             this_miner_chipid = if data.len() >= 5 { data[4].to_string() } else { "".to_string() };
         }
 
-        if diff > kolka::kolka::get_diff(&pool_rewards, "DUE")
-            && diff <= kolka::kolka::get_diff(&pool_rewards, "ESP8266NH")
+        // if diff > kolka::kolka::get_diff(&pool_rewards, "DUE")
+        //     && diff <= kolka::kolka::get_diff(&pool_rewards, "ESP8266NH")
+        //     && perc_diff(hashrate, hashrate_calc) > 15f32
+        //     && conn.miner_stat.share_time >= 1.5
+        if diff > kolka::kolka::get_diff("DUE")
+            && diff <= kolka::kolka::get_diff("ESP8266NH")
             && perc_diff(hashrate, hashrate_calc) > 15f32
             && conn.miner_stat.share_time >= 1.5
         {
@@ -354,19 +365,22 @@ pub async fn handle(
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too high starting difficulty\n").await?;
             start_hashrate = -1f32;
-            diff = kolka::kolka::get_diff(&pool_rewards, &conn.miner_stat.override_diff);
+            // diff = kolka::kolka::get_diff(&pool_rewards, &conn.miner_stat.override_diff);
+            diff = kolka::kolka::get_diff(&conn.miner_stat.override_diff);
             feedback_sent = SystemTime::now();
         } else if hashrate >= max_hashrate as f32 {
             conn.miner_stat.override_diff = kolka::kolka::v2(&req_difficulty);
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too low starting difficulty\n").await?;
             start_hashrate = -1f32;
-            diff = kolka::kolka::get_diff(&pool_rewards, &conn.miner_stat.override_diff);
+            // diff = kolka::kolka::get_diff(&pool_rewards, &conn.miner_stat.override_diff);
+            diff = kolka::kolka::get_diff(&conn.miner_stat.override_diff);
             feedback_sent = SystemTime::now();
         } else if nonce == random {
             conn.miner_stat.accepted_shares += 1;
             if conn.miner_stat.accepted_shares > 10 { // why is this a thing?
-                if diff <= kolka::kolka::get_diff(&pool_rewards, "ESP8266NH") {
+                // if diff <= kolka::kolka::get_diff(&pool_rewards, "ESP8266NH") {
+                if diff <= kolka::kolka::get_diff("ESP8266NH") {
                     if this_miner_chipid.is_empty() {
                         conn.miner_stat.rejected_shares += 1;
                     } else if data.len() >= 5 && data[4] != this_miner_chipid {

@@ -1,7 +1,7 @@
 use crate::cfg::config::PoolConfig;
 use crate::data::data::Bans;
 use crate::mining::mining;
-use crate::{data, CONNECTIONS};
+use crate::{data, CONFIG, CONNECTIONS};
 use data::data::LoginInfos;
 use log::{debug, error, info, warn};
 use reqwest::multipart;
@@ -139,10 +139,15 @@ pub async fn update_pool_rewards(config: &PoolConfig) -> Result<(), Box<dyn std:
     Ok(())
 }
 
+//pub async fn sync(
+//     config: &PoolConfig,
+//     sys: &mut Arc<Mutex<System>>,
+
 pub async fn sync(
-    config: &PoolConfig,
     sys: &mut Arc<Mutex<System>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    info!("Starting sync..");
+    let config = CONFIG.get().unwrap();
     if !std::fs::exists(&config.base_sync_folder)? {
         std::fs::create_dir_all(&config.base_sync_folder)?;
     }

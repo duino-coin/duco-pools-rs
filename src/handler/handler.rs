@@ -1,7 +1,7 @@
 use crate::cfg::config::PoolConfig;
 use crate::data::data::{Bans, Connection, ConnectionClosed};
 use crate::kolka::kolka::Kolka;
-use crate::mining;
+use crate::{mining, BANS, CONFIG};
 use arcstr::ArcStr;
 use log::{debug, error, info, warn};
 use rand::RngCore;
@@ -28,14 +28,16 @@ async fn ban_ip(ip: &str) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+// pub async fn handle_connection(
+//     mut conn: &mut Connection,
+//     bans: Arc<Mutex<Bans>>,
+//     config: Arc<PoolConfig>,
+//     pool_rewards: Arc<Value>,
+//     kolka: Arc<Kolka>,
 pub async fn handle_connection(
     mut conn: &mut Connection,
-    bans: Arc<Mutex<Bans>>,
-    config: Arc<PoolConfig>,
-    pool_rewards: Arc<Value>,
-    kolka: Arc<Kolka>,
 ) -> Result<(), anyhow::Error> {
-
+    let config = CONFIG.get().unwrap();
     conn.write(&format!("{}\n", config.server_version)).await?;
 
 
@@ -53,7 +55,7 @@ pub async fn handle_connection(
         // check for bans
         // block so we lose the lock on the mutex
         {
-            let mut ban = bans.lock().await;
+            let mut ban = BANS.lock().await;
             if ban.banned_ips.contains(&conn.ip) && conn.ip != "127.0.0.1" {
                 conn.write("BAD,User banned\n").await?;
                 return Ok(())
@@ -87,9 +89,7 @@ pub async fn handle_connection(
                 mining::mining::handle(
                     &mut conn,
                     data_split,
-                    pool_rewards,
                     config,
-                    kolka,
                     false,
                 ).await?;
                 // handle_close(conn);
