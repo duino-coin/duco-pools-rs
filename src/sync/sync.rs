@@ -1,3 +1,5 @@
+use std::cmp::min;
+use std::ops::Deref;
 use crate::cfg::config::PoolConfig;
 use crate::data::data::Bans;
 use crate::mining::mining;
@@ -7,8 +9,11 @@ use log::{debug, error, info, warn};
 use reqwest::multipart;
 use std::process::exit;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, UNIX_EPOCH};
+use dashmap::DashMap;
+use serde::{Serialize, Serializer};
+use serde::ser::SerializeMap;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -192,25 +197,19 @@ pub async fn sync(
     );
 
     let stats = mining::MINER_STATS.clone();
+    let worker_content = serde_json::to_string(&stats)?;
     mining::MINER_STATS.clear();
     mining::MINER_STATS.shrink_to_fit();
-    stats.iter_mut().for_each(|mut s| {
-        s.value_mut().pool_name = config.pool_name.clone();
-    }); // inject the pool name here, so we don't stupidly waste 24 + pool_name.len() bytes
-    let worker_content = serde_json::to_string(&stats)?;
+    drop(stats);
 
     std::fs::write(&worker_path, &worker_content)?;
-    drop(stats);
+
 
     let reward_path = format!(
         "{}/rewards_{}.json",
         config.base_sync_folder, config.pool_name
     );
 
-    let balances = mining::BALANCES_TO_UPDATE.clone();
-    let rewards_content = serde_json::to_string(&balances)?;
-
-    std::fs::write(&reward_path, &rewards_content)?;
 
     let request_url = format!(
         "https://{}/pool_sync/?host={}&port={}&version={}&identifier={}&name={}\
@@ -229,15 +228,18 @@ pub async fn sync(
     );
     let form = reqwest::multipart::Form::new();
 
-    // Customize all the details of a Part if needed...
+    debug!("Workers: {worker_content}");
+    let workers = multipart::Part::text(worker_content)
+        .file_name(format!("workers_{}.json", config.pool_name));
+
+    let balances = mining::BALANCES_TO_UPDATE.clone();
+    let rewards_content = serde_json::to_string(&balances)?;
+
+    std::fs::write(&reward_path, &rewards_content)?;
 
     debug!("Rewards: {rewards_content}");
     let rewards = multipart::Part::text(rewards_content)
         .file_name(format!("rewards_{}.json", config.pool_name));
-
-    debug!("Workers: {worker_content}");
-    let workers = multipart::Part::text(worker_content)
-        .file_name(format!("workers_{}.json", config.pool_name));
 
     // Add the custom part to our form...
     let form = form.part("rewards", rewards).part("workers", workers);
@@ -255,12 +257,17 @@ pub async fn sync(
         Ok(res) => {
             let status = res.status();
             if status.is_success() {
-                mining::BALANCES_TO_UPDATE.clear();
+                // remove all balances we've already synced
+                mining::BALANCES_TO_UPDATE.retain(|key, _|
+                    {
+                        !balances.contains_key(key)
+                    });
                 {
                     let mut block_lock = mining::GLOBAL_BLOCKS.lock().await;
                     block_lock.clear();
                     block_lock.shrink_to_fit();
                 }
+                drop(balances);
                 mining::BALANCES_TO_UPDATE.shrink_to_fit();
                 info!("Successfully synced {}", SYNC_COUNT.load(Ordering::Relaxed));
                 std::fs::remove_file(&reward_path)?; // so we don't accidentally sync the same thing twice

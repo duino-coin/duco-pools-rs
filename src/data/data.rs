@@ -17,12 +17,12 @@ impl std::fmt::Display for ConnectionClosed {
     }
 }
 
-impl std::error::Error for ConnectionClosed {}
+impl Error for ConnectionClosed {}
 
 #[derive(Debug)]
 pub struct Connection {
     pub socket: TcpStream,
-    pub addr: SocketAddr,
+    // pub addr: SocketAddr,
     pub ip: String,
     pub username: String,
     pub id: String,
@@ -33,7 +33,7 @@ impl Connection {
     pub fn new(socket: TcpStream, addr: SocketAddr, username: String, id: String) -> Self {
         Connection {
             socket,
-            addr,
+            // addr,
             ip: addr.ip().to_string(),
             username,
             id,
@@ -45,12 +45,6 @@ impl Connection {
         self.socket.write_all(content.as_bytes()).await?;
         tokio::time::timeout(Duration::from_secs(TIMEOUT_IN_SECS), self.socket.flush()).await??;
 
-        Ok(())
-    }
-
-    #[deprecated]
-    pub async fn shutdown(&mut self) -> Result<(), anyhow::Error> {
-        self.socket.shutdown().await?;
         Ok(())
     }
 
@@ -75,7 +69,6 @@ impl Connection {
             return Err(ConnectionClosed.into());
         }
         let data = String::from_utf8(received).map_err(|_| {
-            // TODO: check for mor mem efficient type
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Invalid UTF-8 data ".to_string() + self.username.as_str(),
@@ -90,6 +83,7 @@ impl Connection {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
+#[allow(dead_code)] // only unused in debug/bench/local
 pub struct LoginInfos {
     host: String,
     port: u32,
@@ -99,6 +93,7 @@ pub struct LoginInfos {
 }
 
 impl LoginInfos {
+    #[allow(dead_code)] // only unused in debug/bench/local
     pub fn new(host: &str, port: u32, version: &str, identifier: &str, name: &str) -> Self {
         LoginInfos {
             host: host.to_string(),
@@ -130,10 +125,7 @@ impl Bans {
         let path = "./config/bans.json";
         if std::fs::exists(path)? {
             let file_content = std::fs::read_to_string(path)?;
-            let bans: Bans = match serde_json::from_str::<Bans>(&file_content) {
-                Ok(bans) => bans,
-                Err(_) => Bans::new(),
-            };
+            let bans: Bans = serde_json::from_str::<Bans>(&file_content).unwrap_or_else(|_| Bans::new());
             return Ok(bans);
         }
         let bans = Bans::new();

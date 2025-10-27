@@ -7,6 +7,7 @@ mod sync;
 mod web;
 
 use std::net::SocketAddr;
+use std::process::{exit, Command};
 use crate::cfg::config::PoolConfig;
 use crate::data::data::{Bans, Connection};
 use crate::kolka::kolka::Kolka;
@@ -17,11 +18,14 @@ use serde_json::Value;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicUsize};
 use std::sync::{Arc, LazyLock, OnceLock};
+use std::time::Duration;
+use anyhow::__private::not;
 use mimalloc::MiMalloc;
 use sysinfo::System;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 // use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
@@ -61,37 +65,63 @@ async fn main() {
         config.port = port;
         cfg::config::save_config(&config);
     }
+    let mut restarter: Option<JoinHandle<()>> = None;
+    if config.auto_restart > 0 && !config.restart_script.is_empty() {
+        info!("Auto restart is enabled. Restarting every {} minutes.", config.auto_restart);
+        let restart_delay = (config.auto_restart.clone() * 60) as u64;
+        let script_path = config.restart_script.clone();
+
+        restarter = Some(tokio::spawn(async move {
+            loop {
+                let mut is_error = false;
+                tokio::time::sleep(Duration::from_secs(restart_delay)).await;
+     
+                match Command::new(&script_path).spawn() {
+                    Ok(_) => {}
+                    Err(err) => {
+                        is_error = true;
+                        error!("Failed to run restart script: {}", err);
+                    }
+                };
+                // don't exit if the replacement server couldn't be spawned
+                if !is_error {
+                    exit(0);
+                }
+            }
+        }));
+    }
     // TODO: impl ngrok
 
     sync::sync::update_pool_rewards(&config)
         .await
         .expect("failed to update pool rewards");
+    // #[cfg(not(debug_assertions))]
+    // #[cfg(not(compile_env="test"))]
     #[cfg(not(debug_assertions))]
-    #[cfg(not(compile_env="test"))]
     sync::sync::login(&config).await.expect("failed to login");
 
     CONFIG.get_or_init(|| config);
-
-    // let config_arc = Arc::new(config);
-    // let config_arc_clone = config_arc.clone();
 
     let mut sys_clone = sys.clone();
     let sync_thread = tokio::spawn(async move {
         info!("Starting sync thread..");
         // let config = config_arc_clone;
-        let config = CONFIG.get().unwrap();
-        let sys = &mut sys_clone;
+        // #[cfg(not(debug_assertions))]
+        // #[cfg(not(compile_env="test"))]
         #[cfg(not(debug_assertions))]
-        #[cfg(not(compile_env="test"))]
-        loop {
-            // match sync::sync::sync(&config, sys).await {
-            match sync::sync::sync(sys).await {
-                Ok(_) => {}
-                Err(err) => {
-                    error!("Sync failed: {}", err);
-                }
-            };
-            tokio::time::sleep(tokio::time::Duration::from_secs(config.sync_time as u64)).await;
+        {
+            let config = crate::CONFIG.get().unwrap();
+            let sys = &mut sys_clone;
+            loop {
+                // match sync::sync::sync(&config, sys).await {
+                match sync::sync::sync(sys).await {
+                    Ok(_) => {}
+                    Err(err) => {
+                        error!("Sync failed: {}", err);
+                    }
+                };
+                tokio::time::sleep(tokio::time::Duration::from_secs(config.sync_time as u64)).await;
+            }
         }
     });
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -100,12 +130,17 @@ async fn main() {
     })
     .expect("Failed to handle ctrl-c");
 
-    // let config_arc_clone = config_arc.clone();
+
     start_tcp(rx).await;
+    // when start_tcp yields, the server was ctrl-c'd
+    if restarter.is_some() {
+        restarter.take().unwrap().abort();
+    }
     sync_thread.abort();
     // last sync before shutdown
+    // #[cfg(not(debug_assertions))]
+    // #[cfg(not(compile_env="test"))]
     #[cfg(not(debug_assertions))]
-    #[cfg(not(compile_env="test"))]
     {
         sync::sync::sync(&mut sys)
             .await
@@ -128,26 +163,14 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
     let pool_rewards: Value =
         serde_json::from_str(&reward_content).expect("failed to parse config poolRewards.json");
 
-    // TODO: replace arcs with static OnceLocks (because they live until the program terminates anyway)
-
-    // serialize Bans struct
-    // let bans = Bans::load_bans().expect("failed to load config bans.json");
-    // let ban_mutex = Arc::new(Mutex::new(bans));
     POOL_REWARDS.get_or_init(|| pool_rewards);
     KOLKA.get_or_init(|| Kolka::new());
 
-    // let pool_arc = Arc::new(pool_rewards);
-    // let kolka = Kolka::new(&pool_arc);
-    // let kolka_arc = Arc::new(kolka);
     let config = CONFIG.get().unwrap();
     let server = TcpListener::bind(format!("{}:{}", config.host, config.port))
         .await
         .expect("failed to bind to address");
     info!("Listening on {}:{}", config.host, config.port);
-
-    // let handles = JoinSet::new();
-    // let mut handle_arc = Arc::new(Mutex::new(handles));
-
 
     // start "webserver" and parse addr from config
     let addr: SocketAddr = (&format!("{}:{}", config.host, config.dashboard_port))
@@ -155,7 +178,6 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
         .expect("failed to parse host:port");
     let web_handle = web::web::start_webserver(addr).await;
 
-    // let handle_clone = handle_arc.clone();
     let tracker = tokio_util::task::TaskTracker::new();
     let token = CancellationToken::new();
     // let guard = pprof::ProfilerGuardBuilder::default().frequency(1000).blocklist(&["libc", "libgcc", "pthread", "vdso"]).build().unwrap();
@@ -164,10 +186,6 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
         loop {
             match server.accept().await {
                 Ok((socket, addr)) => {
-                    // let ban_clone = ban_mutex.clone();
-                    // let conf_clone = config.clone();
-                    // let pool_arc_clone = pool_arc.clone();
-                    // let kolka_clone = kolka_arc.clone();
 
                     let local_token = token_clone.clone();
                     // add connection
@@ -181,13 +199,6 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                                 rand::rng().fill_bytes(&mut bytes);
                                 let id = hex::encode(&bytes);
                                 let mut conn = Connection::new(socket, addr, String::new(), id);
-                                // match handler::handler::handle_connection(
-                                //     &mut conn,
-                                //     ban_clone,
-                                //     conf_clone,
-                                //     pool_arc_clone,
-                                //     kolka_clone,
-                                // )
                                 match handler::handler::handle_connection(
                                     &mut conn,
                                 )
@@ -237,7 +248,6 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
     web_handle.abort();
     tcp.abort();
     token.cancel();
-    // handle_arc.lock().await.abort_all();
 }
 
 fn get_rand(min: usize, max: usize) -> usize {

@@ -7,8 +7,6 @@ use base64::Engine;
 use dashmap::DashMap;
 use log::{debug, info};
 use rand::{rng, Rng};
-// use rand::{rng, Rng};
-// use regex::{Regex};
 use sha1_smol::Sha1;
 use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
@@ -61,6 +59,7 @@ pub async fn handle(
     config: &PoolConfig,
     using_avr: bool,
 ) -> Result<(), anyhow::Error> {
+
     let mut random;
     let mut new_hash;
     let mut req_difficulty;
@@ -125,7 +124,7 @@ pub async fn handle(
             read = conn.read_to_string().await?;
             // data = read.split(",").map(|x| x.replace("\n", "")).collect::<Vec<String>>(); // receive new data and split by "args"
             data = read.split(",").collect::<Box<[&str]>>(); // receive new data and split by "args"
-            // TODO: check if this works
+
             req_difficulty = if data.len() < 3 || data[2].is_empty() {
                 "NET".to_string()
             } else {
@@ -188,7 +187,8 @@ pub async fn handle(
         }
 
         random = rng().random_range(0u64..diff as u64 * 100u64) + 1;
-        #[cfg(run_env = "bench")] {
+        // #[cfg(run_env = "bench")]
+        #[cfg(feature = "bench")] {
             random = 1;
         }
 
@@ -482,6 +482,7 @@ pub async fn handle(
             conn.miner_stat.reward = reward;
             conn.miner_stat.ip = conn.ip.clone();
             conn.miner_stat.username = conn.username.clone();
+            conn.miner_stat.pool_name = config.pool_name.clone();
             MINER_STATS.insert(conn.id.clone(), conn.miner_stat.clone());
 
             let mut last_block_hash = LAST_BLOCK_HASH.lock().await;
@@ -499,7 +500,6 @@ pub async fn handle(
         is_first_share = false;
     }
 
-    Ok(())
 }
 
 fn avg_from_array(share_times_list: &Vec<f32>) -> f32 {

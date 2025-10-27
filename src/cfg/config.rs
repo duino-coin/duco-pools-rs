@@ -53,6 +53,8 @@ pub struct PoolConfig {
     pub base_sync_folder: String,
     #[serde(rename = "maxSharesPerMinute", default = "default_shares")]
     pub max_shares_per_minute: u16, // probably shouldn't exceed 65k either
+    pub restart_script: String,
+    pub firewall_cmd: String,
 }
 fn default_shares() -> u16 {
     80u16
@@ -88,6 +90,8 @@ impl Default for PoolConfig {
             server_sync_url: "https://server.duinocoin.com/poolsyncdata".to_string(),
             base_sync_folder: "".to_string(),
             max_shares_per_minute: 80,
+            restart_script: "".to_string(),
+            firewall_cmd: "".to_string(),
         }
     }
 }

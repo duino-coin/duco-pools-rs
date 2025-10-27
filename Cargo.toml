@@ -31,7 +31,19 @@ tokio-util = { version = "0.7.16", features = ["rt"] }
 inherits = "release"
 debug = true
 
+[profile.local]
+inherits = "release"
+debug-assertions = true
+
 [profile.release]
 lto = true
 codegen-units = 1
 panic = "unwind"
+
+[features]
+bench = []
+
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(compile_env, values("test"))', 'cfg(run_env, values("bench"))'] }
+#//unexpected_cfgs = { level = "warn", check-cfg = ['cfg(run_env, values("bench"))']

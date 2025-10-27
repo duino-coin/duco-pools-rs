@@ -17,10 +17,11 @@ use tokio::sync::Mutex;
 //const CMD: &str = "csf -td ${ip}"; //csf
 //const CMD: &str = "iptables -A INPUT -s ${ip} -j DROP"; //iptables
 //const CMD: &str = "sudo ufw deny from ${ip} to any"; //ufw
-const CMD: &str = ""; //none
+// const CMD: &str = ""; //none
 async fn ban_ip(ip: &str) -> Result<(), anyhow::Error> {
-    if !CMD.is_empty() {
-        let cmd_split = CMD.split(" ").collect::<Vec<&str>>();
+    let command = &CONFIG.get().unwrap().firewall_cmd;
+    if !command.is_empty() {
+        let cmd_split = command.split(" ").collect::<Vec<&str>>();
         let cmd = cmd_split[0].trim();
         Command::new(cmd).args(&cmd_split[1..]).spawn()?;
         warn!("Banned {ip}");
