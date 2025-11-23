@@ -68,18 +68,17 @@ impl Connection {
         if received.is_empty() {
             return Err(ConnectionClosed.into());
         }
-        let data = String::from_utf8(received).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Invalid UTF-8 data ".to_string() + self.username.as_str(),
-            )
-        }).map(|x| x.replace("\n", ""))?;
+        let data = String::from_utf8(received)
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid UTF-8 data ".to_string() + self.username.as_str(),
+                )
+            })
+            .map(|x| x.replace("\n", ""))?;
 
-        // std::str::
-        // data.into_boxed_str()
         Ok(data.into_boxed_str())
     }
-
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -125,7 +124,8 @@ impl Bans {
         let path = "./config/bans.json";
         if std::fs::exists(path)? {
             let file_content = std::fs::read_to_string(path)?;
-            let bans: Bans = serde_json::from_str::<Bans>(&file_content).unwrap_or_else(|_| Bans::new());
+            let bans: Bans =
+                serde_json::from_str::<Bans>(&file_content).unwrap_or_else(|_| Bans::new());
             return Ok(bans);
         }
         let bans = Bans::new();

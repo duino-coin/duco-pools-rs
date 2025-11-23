@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-arcstr = "1.2.0"
 config = { version = "0.15.18", features = ["json"]}
 log = "0.4.28"
 rand = "0.9.2"
@@ -17,7 +16,7 @@ dashmap = {version = "6.1.0", features = ["serde"]}
 base64 = "0.22.1"
 sha1_smol = { version = "1.0.1", features = ["alloc", "std"] }
 itoa = "1.0.15"
-sysinfo = "0.37.2"
+sysinfo = { git = "https://github.com/profpandaa/sysinfo-modified", rev = "3bbe1ca" }
 ctrlc = { version = "3.5.0", features = ["termination"] }
 warp = { version = "0.4.2", features = ["server"] }
 env_logger = "0.11.8"
@@ -25,7 +24,6 @@ anyhow = "1.0.100"
 rlimit = "0.10.2"
 mimalloc = "0.1.48"
 tokio-util = { version = "0.7.16", features = ["rt"] }
-#pprof = { version = "0.15.0", features = ["flamegraph"]}
 
 [profile.profiling]
 inherits = "release"
@@ -46,4 +44,3 @@ bench = []
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(compile_env, values("test"))', 'cfg(run_env, values("bench"))'] }
-#//unexpected_cfgs = { level = "warn", check-cfg = ['cfg(run_env, values("bench"))']

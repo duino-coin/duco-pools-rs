@@ -10,25 +10,18 @@ use rand::{rng, Rng};
 use sha1_smol::Sha1;
 use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
-use std::sync::{LazyLock};
+use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
 pub static WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 
-pub static USR_WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| {
-    DashMap::new()
-});
-pub static BALANCES_TO_UPDATE: LazyLock<DashMap<String, f32>> = LazyLock::new(|| {
-    DashMap::new()
-});
+pub static USR_WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
+pub static BALANCES_TO_UPDATE: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 
-pub static MINER_STATS: LazyLock<DashMap<String, MinerStat>> = LazyLock::new(|| {
-    DashMap::new()
-});
+pub static MINER_STATS: LazyLock<DashMap<String, MinerStat>> = LazyLock::new(|| DashMap::new());
 
-// I hate this, but passing this as param kinda seems annoying..
 static LAST_BLOCK_HASH: LazyLock<Mutex<String>> = LazyLock::new(|| {
     let config = cfg::config::load_config().expect("failed to load config (static)");
     Mutex::new(config.initial_blockhash)
@@ -41,25 +34,14 @@ pub static GLOBAL_SHARES_INCREASE: LazyLock<AtomicU64> = LazyLock::new(|| Atomic
 
 pub static GLOBAL_SHARES_TOTAL: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
 
-// static IOT_REGEX: LazyLock<Regex> = LazyLock::new(|| {Regex::new("[A-Za-z0-9 .():@-]+").expect("Failed to compile IoT regex")});
-// static NAME_REGEX: LazyLock<Regex> = LazyLock::new(|| { Regex::new("[A-Za-z0-9 .()-]+").expect("Failed to compile name regex")});
-
 const PC_DIFF_TIERS: [&str; 4] = ["EXTREME", "NET", "MEDIUM", "LOW"];
 
-// pub async fn handle(
-//     conn: &mut Connection,
-//     initial_data: Box<[&str]>,
-//     pool_rewards: Arc<Value>,
-//     config: Arc<PoolConfig>,
-//     kolka: Arc<Kolka>,
-//     using_avr: bool,
 pub async fn handle(
     conn: &mut Connection,
     initial_data: Box<[&str]>,
     config: &PoolConfig,
     using_avr: bool,
 ) -> Result<(), anyhow::Error> {
-
     let mut random;
     let mut new_hash;
     let mut req_difficulty;
@@ -80,14 +62,12 @@ pub async fn handle(
     let kolka = KOLKA.get().unwrap();
     let pool_rewards = POOL_REWARDS.get().unwrap();
 
-
     let mut buffer = itoa::Buffer::new(); // used to convert nums to str a little faster
     let mut read; // needed for first share..
-    // let mut data= initial_data.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+
     let mut data = initial_data.iter().map(|&x| x).collect::<Box<[&str]>>();
     drop(initial_data);
     loop {
-
         if is_first_share {
             req_difficulty = if data.len() < 3 || data[2].is_empty() {
                 "NET".to_string()
@@ -97,13 +77,11 @@ pub async fn handle(
             if !pool_rewards.get(&req_difficulty).is_some() {
                 req_difficulty = "NET".to_string();
             }
-            // diff = kolka::kolka::get_diff(&pool_rewards, &req_difficulty);
             diff = kolka::kolka::get_diff(&req_difficulty);
 
             let mut worker_add = 1f32;
-            if req_difficulty == "ESP32"
             // why??
-            {
+            if req_difficulty == "ESP32" {
                 worker_add = 0.5;
             }
             *WORKERS.entry(conn.ip.clone()).or_insert(0f32) += worker_add;
@@ -122,7 +100,6 @@ pub async fn handle(
             }
         } else {
             read = conn.read_to_string().await?;
-            // data = read.split(",").map(|x| x.replace("\n", "")).collect::<Vec<String>>(); // receive new data and split by "args"
             data = read.split(",").collect::<Box<[&str]>>(); // receive new data and split by "args"
 
             req_difficulty = if data.len() < 3 || data[2].is_empty() {
@@ -155,8 +132,7 @@ pub async fn handle(
         conn.miner_stat.password = mining_key;
 
         // IoT reading stuff
-        if data.len() >= 5
-        {
+        if data.len() >= 5 {
             let cleaned_iot = clean_iot(&data[4]);
             if cleaned_iot.is_empty() {
                 conn.miner_stat.iot_reading = "".to_string();
@@ -187,14 +163,14 @@ pub async fn handle(
         }
 
         random = rng().random_range(0u64..diff as u64 * 100u64) + 1;
-        // #[cfg(run_env = "bench")]
-        #[cfg(feature = "bench")] {
+
+        #[cfg(feature = "bench")]
+        {
             random = 1;
         }
 
         // used to lose the lock on LAST_BLOCK_HASH
         {
-
             let last_block_hash = LAST_BLOCK_HASH.lock().await.clone();
             let mut hasher = Sha1::from(&last_block_hash);
             hasher.update(buffer.format(random).as_bytes());
@@ -202,7 +178,8 @@ pub async fn handle(
             let job = (last_block_hash, new_hash.clone());
 
             let diff_str = buffer.format(diff);
-            let mut job_str = String::with_capacity(",,,\n".len() + job.0.len() + job.1.len() + diff_str.len()); // faster than format macro
+            let mut job_str =
+                String::with_capacity(",,,\n".len() + job.0.len() + job.1.len() + diff_str.len()); // faster than format macro
             job_str.push_str(job.0.as_str());
             job_str.push_str(",");
             job_str.push_str(job.1.as_str());
@@ -211,9 +188,7 @@ pub async fn handle(
             job_str.push_str("\n");
 
             conn.write(&job_str).await?;
-
         }
-
 
         let job_sent = SystemTime::now();
         read = conn.read_to_string().await?;
@@ -221,9 +196,7 @@ pub async fn handle(
         data = read.split(",").collect::<Box<[&str]>>();
         let answer_received = SystemTime::now();
 
-        conn.miner_stat.share_time = answer_received
-            .duration_since(job_sent)?
-            .as_secs_f32();
+        conn.miner_stat.share_time = answer_received.duration_since(job_sent)?.as_secs_f32();
         if conn.miner_stat.share_time > conn.miner_stat.ping {
             conn.miner_stat.share_time -= conn.miner_stat.ping;
         }
@@ -238,7 +211,7 @@ pub async fn handle(
 
         let mut wrong_reported_hashrate = false;
         reported_hashrate = match data[1].parse::<f32>() {
-            Ok(rep) => { rep }
+            Ok(rep) => rep,
             Err(_) => {
                 wrong_reported_hashrate = true;
                 0f32
@@ -266,42 +239,40 @@ pub async fn handle(
             nonce = u64::from_str_radix(&data[0], 2)?;
         } else {
             nonce = match u64::from_str(&data[0]) {
-                Ok(ok) => { ok }
+                Ok(ok) => ok,
                 Err(err) => {
                     debug!("Nonce error: {err:?} ({:?})", data);
                     conn.write("BAD,No response to job\n").await?;
-                    return Err(anyhow::Error::from_boxed(Box::from("Shutting down."))); // used so we can handle closes centrally
+                    return Err(anyhow::Error::from_boxed(Box::from("Shutting down.")));
+                    // used so we can handle closes centrally
                     // (some request a job and after receiving the job they immediately request another one)
                 }
             };
         }
-        #[cfg(
-            not(run_env = "bench")
-        )] // if the pool was built with "run_env" set as bench, we discard this codeblock
+        #[cfg(not(feature = "bench"))]
+        // if the pool was built with the bench feature enabled, we discard this codeblock
         {
             if conn.miner_stat.last_min_shares > config.max_shares_per_minute {
                 conn.miner_stat.reject_shares = "Too low difficulty".to_string();
             }
         }
 
-
         hashrate_is_estimated = false;
         if reported_hashrate <= 0f32 {
             hashrate_is_estimated = true;
             hashrate = hashrate_calc;
-        }
-        else {
+        } else {
             hashrate = reported_hashrate;
         }
 
         if is_first_share {
-            this_miner_chipid = if data.len() >= 5 { data[4].to_string() } else { "".to_string() };
+            this_miner_chipid = if data.len() >= 5 {
+                data[4].to_string()
+            } else {
+                "".to_string()
+            };
         }
 
-        // if diff > kolka::kolka::get_diff(&pool_rewards, "DUE")
-        //     && diff <= kolka::kolka::get_diff(&pool_rewards, "ESP8266NH")
-        //     && perc_diff(hashrate, hashrate_calc) > 15f32
-        //     && conn.miner_stat.share_time >= 1.5
         if diff > kolka::kolka::get_diff("DUE")
             && diff <= kolka::kolka::get_diff("ESP8266NH")
             && perc_diff(hashrate, hashrate_calc) > 15f32
@@ -311,8 +282,7 @@ pub async fn handle(
         }
 
         if (conn.miner_stat.accepted_shares == 4
-            || (conn.miner_stat.accepted_shares > 4
-            && perc_diff(hashrate, start_hashrate) > 15f32))
+            || (conn.miner_stat.accepted_shares > 4 && perc_diff(hashrate, start_hashrate) > 15f32))
             && PC_DIFF_TIERS.contains(&req_difficulty.as_str())
         {
             start_hashrate = hashrate;
@@ -323,49 +293,31 @@ pub async fn handle(
                 hashrate,
             );
         }
-        let diff_obj = pool_rewards.get(&req_difficulty).unwrap().as_object().expect("failed to get diff as obj");
+        let diff_obj = pool_rewards
+            .get(&req_difficulty)
+            .expect("Missing pool reward");
 
-        let reward_div = diff_obj
-            .get("reward")
-            .expect("failed to get reward")
-            .as_u64()
-            .expect("failed to get reward as u64") as u32;
-        let max_hashrate = diff_obj
-            .get("max_hashrate")
-            .expect("failed to get reward")
-            .as_u64()
-            .expect("failed to get reward as u64");
-        let min_hashrate = diff_obj
-            .get("min_hashrate")
-            .expect("failed to get reward")
-            .as_u64()
-            .expect("failed to get reward as u64") as u32;
-        expected_share_time = diff_obj
-            .get("expected_sharetime")
-            .expect("failed to get reward")
-            .as_u64()
-            .expect("failed to get reward as u64") as u16;
-        let block_probability = diff_obj
-            .get("block_chance")
-            .expect("failed to get reward")
-            .as_u64()
-            .expect("failed to get reward as u64") as u32;
+        let reward_div = diff_obj.reward;
+        let max_hashrate = diff_obj.max_hashrate;
+        let min_hashrate = diff_obj.min_hashrate;
+        expected_share_time = diff_obj.expected_share_time;
+        let block_probability = diff_obj.block_chance;
+
         reward = 0f32;
         if !conn.miner_stat.reject_shares.is_empty() {
-            let mut res = String::with_capacity("BAD,\n".len() + conn.miner_stat.reject_shares.len()); // this is faster than the format macro (ufmt is possibly a faster alternative?)
+            let mut res =
+                String::with_capacity("BAD,\n".len() + conn.miner_stat.reject_shares.len()); // this is faster than the format macro (ufmt is possibly a faster alternative?)
             res.push_str("BAD,");
             res.push_str(conn.miner_stat.reject_shares.as_str());
             res.push_str("\n");
 
-            conn.write(&res)
-                .await?;
+            conn.write(&res).await?;
             feedback_sent = SystemTime::now();
         } else if hashrate < min_hashrate as f32 {
             conn.miner_stat.override_diff = kolka::kolka::v2_reverse(&req_difficulty);
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too high starting difficulty\n").await?;
             start_hashrate = -1f32;
-            // diff = kolka::kolka::get_diff(&pool_rewards, &conn.miner_stat.override_diff);
             diff = kolka::kolka::get_diff(&conn.miner_stat.override_diff);
             feedback_sent = SystemTime::now();
         } else if hashrate >= max_hashrate as f32 {
@@ -373,20 +325,20 @@ pub async fn handle(
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too low starting difficulty\n").await?;
             start_hashrate = -1f32;
-            // diff = kolka::kolka::get_diff(&pool_rewards, &conn.miner_stat.override_diff);
             diff = kolka::kolka::get_diff(&conn.miner_stat.override_diff);
             feedback_sent = SystemTime::now();
         } else if nonce == random {
             conn.miner_stat.accepted_shares += 1;
-            if conn.miner_stat.accepted_shares > 10 { // why is this a thing?
-                // if diff <= kolka::kolka::get_diff(&pool_rewards, "ESP8266NH") {
+            if conn.miner_stat.accepted_shares > 10 {
+                // why is this a thing?
                 if diff <= kolka::kolka::get_diff("ESP8266NH") {
                     if this_miner_chipid.is_empty() {
                         conn.miner_stat.rejected_shares += 1;
                     } else if data.len() >= 5 && data[4] != this_miner_chipid {
                         conn.miner_stat.rejected_shares += 1;
                     } else {
-                        reward = kolka::kolka::v1(&kolka,
+                        reward = kolka::kolka::v1(
+                            &kolka,
                             hashrate_calc,
                             diff,
                             conn.miner_stat.amount_of_workers,
@@ -394,7 +346,8 @@ pub async fn handle(
                         );
                     }
                 } else {
-                    reward = kolka::kolka::v1(&kolka,
+                    reward = kolka::kolka::v1(
+                        &kolka,
                         hashrate_calc,
                         diff,
                         conn.miner_stat.amount_of_workers,
@@ -407,9 +360,7 @@ pub async fn handle(
                 reward += config.block_reward;
 
                 let block_infos = BlockInfos::new(
-                    UNIX_EPOCH
-                        .duration_since(SystemTime::now())?
-                        .as_secs(),
+                    UNIX_EPOCH.duration_since(SystemTime::now())?.as_secs(),
                     conn.username.clone(),
                     reward,
                     "DUCO-S1".to_string(),
@@ -440,24 +391,32 @@ pub async fn handle(
 
             miner_name = if data.len() >= 3 {
                 match cleaned_name.as_str() {
-                    "" => {"Unknown miner".to_string()}
-                    _ => { cleaned_name }
+                    "" => "Unknown miner".to_string(),
+                    _ => cleaned_name,
                 }
-            } else { "Unknown miner".to_string() };
+            } else {
+                "Unknown miner".to_string()
+            };
             conn.miner_stat.software = miner_name.to_string();
 
             let wallet_id = if data.len() >= 6 { &data[5] } else { "None" };
             conn.miner_stat.wallet_id = wallet_id.replace("\n", "");
 
-            let cut_rigid = if data.len() >= 4 { data[3].split(":").collect::<Vec<&str>>() } else { Vec::new() };
+            let cut_rigid = if data.len() >= 4 {
+                data[3].split(":").collect::<Vec<&str>>()
+            } else {
+                Vec::new()
+            };
             let rig_identifier = if cut_rigid.len() > 0 {
                 let cleaned = clean_name(cut_rigid[0]);
 
                 match cleaned.as_str() {
-                    "" => {"None".to_string()}
-                    _ => {cleaned}
+                    "" => "None".to_string(),
+                    _ => cleaned,
                 }
-            } else { "None".to_string() };
+            } else {
+                "None".to_string()
+            };
             conn.miner_stat.id = rig_identifier;
             conn.miner_stat.algorithm = "DUCO-S1".to_string();
             conn.miner_stat.hashrate = if hashrate_is_estimated {
@@ -499,7 +458,6 @@ pub async fn handle(
 
         is_first_share = false;
     }
-
 }
 
 fn avg_from_array(share_times_list: &Vec<f32>) -> f32 {
@@ -509,30 +467,23 @@ fn perc_diff(hashrate: f32, hashrate_calc: f32) -> f32 {
     (100f32 * ((hashrate - hashrate_calc) / ((hashrate + hashrate_calc) / 2f32)).abs()).floor()
 }
 fn get_user_workers(username: &String) -> f32 {
-    // let usr = username.to_string();
-    match USR_WORKERS
-        .get(username) {
+    match USR_WORKERS.get(username) {
         None => {
             USR_WORKERS.insert(username.to_owned(), 1f32);
             1f32
-        },
-        Some(some) => {some
-            .value()
-            .clone()}
+        }
+        Some(some) => some.value().clone(),
     }
 }
 
 fn get_ip_workers(ip: &String) -> f32 {
-    match WORKERS
-        .get(ip) {
+    match WORKERS.get(ip) {
         None => {
             WORKERS.insert(ip.to_string(), 1.0);
             1f32
         }
-        Some(some) => {some.value()
-            .clone()}
+        Some(some) => some.value().clone(),
     }
-
 }
 
 fn check_workers(max: f32, config: &PoolConfig) -> bool {
@@ -546,17 +497,20 @@ fn check_workers(max: f32, config: &PoolConfig) -> bool {
     false
 }
 
-
 const ALLOWED_SPECIAL_IOT: [char; 7] = ['.', '(', ')', ':', '@', '-', ' '];
-fn clean_iot(input: &str) -> String
-{
-    input.replace(|x: char| !x.is_ascii_alphanumeric() && !ALLOWED_SPECIAL_IOT.contains(&x), "")
+fn clean_iot(input: &str) -> String {
+    input.replace(
+        |x: char| !x.is_ascii_alphanumeric() && !ALLOWED_SPECIAL_IOT.contains(&x),
+        "",
+    )
 }
 
 const ALLOWED_SPECIAL: [char; 5] = ['.', '(', ')', '-', ' '];
-fn clean_name(input: &str) -> String
-{
-    input.replace(|x: char| !x.is_ascii_alphanumeric() && !ALLOWED_SPECIAL.contains(&x), "")
+fn clean_name(input: &str) -> String {
+    input.replace(
+        |x: char| !x.is_ascii_alphanumeric() && !ALLOWED_SPECIAL.contains(&x),
+        "",
+    )
 }
 
 fn max_f32(x1: f32, x2: f32, x3: f32) -> f32 {

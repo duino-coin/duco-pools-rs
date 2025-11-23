@@ -1,5 +1,3 @@
-use std::cmp::min;
-use std::ops::Deref;
 use crate::cfg::config::PoolConfig;
 use crate::data::data::Bans;
 use crate::mining::mining;
@@ -7,19 +5,29 @@ use crate::{data, CONFIG, CONNECTIONS};
 use data::data::LoginInfos;
 use log::{debug, error, info, warn};
 use reqwest::multipart;
+use serde::{Deserialize, Serialize};
 use std::process::exit;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock};
-use std::time::{Duration, UNIX_EPOCH};
-use dashmap::DashMap;
-use serde::{Serialize, Serializer};
-use serde::ser::SerializeMap;
+use std::sync::Arc;
+use std::time::Duration;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 static SYNC_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Difficulty {
+    pub difficulty: u64,
+    pub reward: u32,
+    pub max_hashrate: u64,
+    pub min_hashrate: u64,
+    pub kolka_decrease_perc: u8,
+    #[serde(rename = "expected_sharetime")]
+    pub expected_share_time: u16,
+    pub block_chance: u32,
+}
 
 pub async fn get_pool_ip(config: &&PoolConfig) -> Result<String, Box<dyn std::error::Error>> {
     debug!("Getting ip..");
@@ -35,7 +43,7 @@ pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>
     debug!("Gathering login data..");
     let ip;
     if config.use_ngrok {
-        ip = "".to_string();
+        // ip = "".to_string();
         return Err(Box::from("Ngrok not implemented"));
     } else {
         ip = get_pool_ip(&config).await?;
@@ -66,7 +74,6 @@ pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>
     debug!("Received: {}", data);
     if data.starts_with(&config.server_version) {
         let info_str = serde_json::to_string(&infos)?;
-        // socket.write(`PoolLogin,${JSON.stringify(loginInfos)}`);
         debug!("Sending {info_str}");
         socket
             .write_all(format!("PoolLogin,{info_str}").as_bytes())
@@ -129,7 +136,7 @@ pub async fn update_pool_rewards(config: &PoolConfig) -> Result<(), Box<dyn std:
         .await?;
     std::fs::write("./config/poolRewards.json", response_data)?;
     info!("Successfully updated pool rewards");
-    
+
     let mut bans = Bans::load_bans().expect("failed to load config bans.json");
 
     let response_data = reqwest::get(format!("{}/bans.json", config.server_sync_url))
@@ -144,13 +151,7 @@ pub async fn update_pool_rewards(config: &PoolConfig) -> Result<(), Box<dyn std:
     Ok(())
 }
 
-//pub async fn sync(
-//     config: &PoolConfig,
-//     sys: &mut Arc<Mutex<System>>,
-
-pub async fn sync(
-    sys: &mut Arc<Mutex<System>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn sync(sys: &mut Arc<Mutex<System>>) -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting sync..");
     let config = CONFIG.get().unwrap();
     if !std::fs::exists(&config.base_sync_folder)? {
@@ -158,7 +159,12 @@ pub async fn sync(
     }
 
     let mut sys = sys.lock().await;
-    let ip = get_pool_ip(&config).await.expect("failed to get pool ip");
+    let ip = match get_pool_ip(&config).await {
+        Ok(ok) => ok,
+        Err(err) => {
+            return Err(Box::from(format!("Failed to get pool ip {err}")));
+        }
+    };
     let block_increase = mining::GLOBAL_SHARES_INCREASE.load(Ordering::Relaxed);
     let big_blocks;
     {
@@ -173,6 +179,7 @@ pub async fn sync(
 
     //    if (use_ngrok && sync_count > 0 && sync_count % 50 == 0)
     //         await get_ngrok_ip();
+
     // only refresh certain parts of the system info
     let mut refresh_kind = RefreshKind::nothing();
 
@@ -188,7 +195,8 @@ pub async fn sync(
     sys.refresh_specifics(refresh_kind);
     let cpu_usage = sys.global_cpu_usage();
 
-    let mem_usage = (sys.used_memory() as f32 / sys.total_memory() as f32 * 1e4).round() / 100.0; // rounding to two decimals
+    let mem_usage =
+        (sys.free_like_used_memory() as f32 / sys.total_memory() as f32 * 1e4).round() / 100.0; // rounding to two decimals
     mining::GLOBAL_SHARES_INCREASE.store(0, Ordering::Relaxed);
 
     let worker_path = format!(
@@ -204,12 +212,10 @@ pub async fn sync(
 
     std::fs::write(&worker_path, &worker_content)?;
 
-
     let reward_path = format!(
         "{}/rewards_{}.json",
         config.base_sync_folder, config.pool_name
     );
-
 
     let request_url = format!(
         "https://{}/pool_sync/?host={}&port={}&version={}&identifier={}&name={}\
@@ -258,10 +264,7 @@ pub async fn sync(
             let status = res.status();
             if status.is_success() {
                 // remove all balances we've already synced
-                mining::BALANCES_TO_UPDATE.retain(|key, _|
-                    {
-                        !balances.contains_key(key)
-                    });
+                mining::BALANCES_TO_UPDATE.retain(|key, _| !balances.contains_key(key));
                 {
                     let mut block_lock = mining::GLOBAL_BLOCKS.lock().await;
                     block_lock.clear();

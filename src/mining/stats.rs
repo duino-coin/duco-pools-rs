@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct MinerStat
-{
+pub struct MinerStat {
     #[serde(rename = "u")]
     pub username: String, // this is stupid..
     #[serde(rename = "h")]

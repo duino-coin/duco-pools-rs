@@ -6,21 +6,20 @@ mod mining;
 mod sync;
 mod web;
 
-use std::net::SocketAddr;
-use std::process::{exit, Command};
 use crate::cfg::config::PoolConfig;
 use crate::data::data::{Bans, Connection};
 use crate::kolka::kolka::Kolka;
 use env_logger::Target;
 use log::{error, info, LevelFilter};
+use mimalloc::MiMalloc;
 use rand::{Rng, RngCore};
-use serde_json::Value;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::process::{exit, Command};
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicUsize};
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
-use anyhow::__private::not;
-use mimalloc::MiMalloc;
 use sysinfo::System;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -33,11 +32,9 @@ pub static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
 // doesn't look nice, but it's fine because these live during the entire runtime anyway
 // and it's cleaner than cloning hundreds of arcs..
-pub static BANS: LazyLock<Mutex<Bans>> = LazyLock::new(|| {
-    Mutex::new(Bans::load_bans().unwrap())
-});
+pub static BANS: LazyLock<Mutex<Bans>> = LazyLock::new(|| Mutex::new(Bans::load_bans().unwrap()));
 
-pub static POOL_REWARDS: OnceLock<Value> = OnceLock::new();
+pub static POOL_REWARDS: OnceLock<HashMap<String, sync::sync::Difficulty>> = OnceLock::new();
 
 pub static KOLKA: OnceLock<Kolka> = OnceLock::new();
 
@@ -50,8 +47,6 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 #[tokio::main]
 async fn main() {
-    // let _profiler = dhat::Profiler::new_heap();
-    // initialize logging
     env_logger::builder()
         .target(Target::Stdout)
         .filter_level(LevelFilter::Info)
@@ -67,7 +62,10 @@ async fn main() {
     }
     let mut restarter: Option<JoinHandle<()>> = None;
     if config.auto_restart > 0 && !config.restart_script.is_empty() {
-        info!("Auto restart is enabled. Restarting every {} minutes.", config.auto_restart);
+        info!(
+            "Auto restart is enabled. Restarting every {} minutes.",
+            config.auto_restart
+        );
         let restart_delay = (config.auto_restart.clone() * 60) as u64;
         let script_path = config.restart_script.clone();
 
@@ -75,7 +73,7 @@ async fn main() {
             loop {
                 let mut is_error = false;
                 tokio::time::sleep(Duration::from_secs(restart_delay)).await;
-     
+
                 match Command::new(&script_path).spawn() {
                     Ok(_) => {}
                     Err(err) => {
@@ -95,8 +93,6 @@ async fn main() {
     sync::sync::update_pool_rewards(&config)
         .await
         .expect("failed to update pool rewards");
-    // #[cfg(not(debug_assertions))]
-    // #[cfg(not(compile_env="test"))]
     #[cfg(not(debug_assertions))]
     sync::sync::login(&config).await.expect("failed to login");
 
@@ -105,15 +101,11 @@ async fn main() {
     let mut sys_clone = sys.clone();
     let sync_thread = tokio::spawn(async move {
         info!("Starting sync thread..");
-        // let config = config_arc_clone;
-        // #[cfg(not(debug_assertions))]
-        // #[cfg(not(compile_env="test"))]
         #[cfg(not(debug_assertions))]
         {
             let config = crate::CONFIG.get().unwrap();
             let sys = &mut sys_clone;
             loop {
-                // match sync::sync::sync(&config, sys).await {
                 match sync::sync::sync(sys).await {
                     Ok(_) => {}
                     Err(err) => {
@@ -130,7 +122,6 @@ async fn main() {
     })
     .expect("Failed to handle ctrl-c");
 
-
     start_tcp(rx).await;
     // when start_tcp yields, the server was ctrl-c'd
     if restarter.is_some() {
@@ -138,8 +129,6 @@ async fn main() {
     }
     sync_thread.abort();
     // last sync before shutdown
-    // #[cfg(not(debug_assertions))]
-    // #[cfg(not(compile_env="test"))]
     #[cfg(not(debug_assertions))]
     {
         sync::sync::sync(&mut sys)
@@ -149,10 +138,8 @@ async fn main() {
             .await
             .expect("failed to logout");
     }
-
 }
 
-// async fn start_tcp(config: Arc<PoolConfig>, mut rx: UnboundedReceiver<String>) {
 async fn start_tcp(mut rx: UnboundedReceiver<String>) {
     // set max open file descriptors to the maximum the platform allows, so we can handle *a lot* of sockets
     rlimit::increase_nofile_limit(u64::MAX).expect("failed to increase nofile limit");
@@ -160,9 +147,10 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
     // read and serialize pool rewards
     let reward_content = std::fs::read_to_string("./config/poolRewards.json")
         .expect("failed to read config poolRewards.json");
-    let pool_rewards: Value =
+    let pool_rewards: HashMap<String, sync::sync::Difficulty> =
         serde_json::from_str(&reward_content).expect("failed to parse config poolRewards.json");
 
+    // TODO: test new pool rewards structure
     POOL_REWARDS.get_or_init(|| pool_rewards);
     KOLKA.get_or_init(|| Kolka::new());
 
@@ -180,13 +168,11 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
 
     let tracker = tokio_util::task::TaskTracker::new();
     let token = CancellationToken::new();
-    // let guard = pprof::ProfilerGuardBuilder::default().frequency(1000).blocklist(&["libc", "libgcc", "pthread", "vdso"]).build().unwrap();
     let token_clone = token.clone();
     let tcp = tokio::spawn(async move {
         loop {
             match server.accept().await {
                 Ok((socket, addr)) => {
-
                     let local_token = token_clone.clone();
                     // add connection
                     CONNECTIONS.fetch_add(1, Relaxed);
@@ -229,7 +215,7 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                             },
                         }
                     });
-                },
+                }
                 Err(err) => {
                     error!("Accepting connection failed: {}", err);
                 }

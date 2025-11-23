@@ -1,18 +1,7 @@
-use crate::cfg::config::PoolConfig;
-use crate::data::data::{Bans, Connection, ConnectionClosed};
-use crate::kolka::kolka::Kolka;
+use crate::data::data::Connection;
 use crate::{mining, BANS, CONFIG};
-use arcstr::ArcStr;
-use log::{debug, error, info, warn};
-use rand::RngCore;
-use serde_json::Value;
-use std::error::Error;
-use std::net::SocketAddr;
+use log::warn;
 use std::process::Command;
-use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
-use tokio::sync::Mutex;
 
 //const CMD: &str = "csf -td ${ip}"; //csf
 //const CMD: &str = "iptables -A INPUT -s ${ip} -j DROP"; //iptables
@@ -29,18 +18,9 @@ async fn ban_ip(ip: &str) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-// pub async fn handle_connection(
-//     mut conn: &mut Connection,
-//     bans: Arc<Mutex<Bans>>,
-//     config: Arc<PoolConfig>,
-//     pool_rewards: Arc<Value>,
-//     kolka: Arc<Kolka>,
-pub async fn handle_connection(
-    mut conn: &mut Connection,
-) -> Result<(), anyhow::Error> {
+pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::Error> {
     let config = CONFIG.get().unwrap();
     conn.write(&format!("{}\n", config.server_version)).await?;
-
 
     loop {
         let data = conn.read_to_string().await?;
@@ -50,7 +30,7 @@ pub async fn handle_connection(
         // no clue what '!conn.remoteAddr' is supposed to do
         {
             conn.write("BAD,Incorrect data\n").await?;
-            return Ok(())
+            return Ok(());
         }
 
         // check for bans
@@ -59,7 +39,7 @@ pub async fn handle_connection(
             let mut ban = BANS.lock().await;
             if ban.banned_ips.contains(&conn.ip) && conn.ip != "127.0.0.1" {
                 conn.write("BAD,User banned\n").await?;
-                return Ok(())
+                return Ok(());
             }
             if data_split.len() >= 2 {
                 let username = data_split[1];
@@ -71,7 +51,7 @@ pub async fn handle_connection(
                     }
 
                     conn.write("BAD,User banned\n").await?;
-                    return Ok(())
+                    return Ok(());
                 }
             }
         }
@@ -79,28 +59,20 @@ pub async fn handle_connection(
         if data_split[0] == "JOB" {
             if data_split.len() == 1 {
                 conn.write("BAD,No username specified\n").await?;
-                return Ok(())
+                return Ok(());
             } else {
                 if conn.username.is_empty() {
                     conn.username = data_split[1].to_string();
                 } else if conn.username != data_split[1] {
-                    // handle_close(conn);
-                    return Ok(())
+                    return Ok(());
                 }
-                mining::mining::handle(
-                    &mut conn,
-                    data_split,
-                    config,
-                    false,
-                ).await?;
-                // handle_close(conn);
+                mining::mining::handle(&mut conn, data_split, config, false).await?;
                 break;
             }
         } else if data_split[0] == "MOTD" {
             conn.write(&config.motd).await?;
         }
     }
-
 
     Ok(())
 }
