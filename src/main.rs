@@ -9,18 +9,17 @@ mod web;
 use crate::cfg::config::PoolConfig;
 use crate::data::data::{Bans, Connection};
 use crate::kolka::kolka::Kolka;
+use dashmap::DashMap;
 use env_logger::Target;
 use log::{error, info, LevelFilter};
 use mimalloc::MiMalloc;
 use rand::{Rng, RngCore};
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::process::{exit, Command};
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
-use dashmap::DashMap;
 use sysinfo::System;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -36,7 +35,8 @@ pub static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 pub static BANS: LazyLock<Mutex<Bans>> = LazyLock::new(|| Mutex::new(Bans::load_bans().unwrap()));
 
 // pub static POOL_REWARDS: OnceLock<HashMap<String, sync::sync::Difficulty>> = OnceLock::new();
-pub static POOL_REWARDS: LazyLock<DashMap<String, sync::sync::Difficulty>> = LazyLock::new(|| DashMap::new());
+pub static POOL_REWARDS: LazyLock<DashMap<String, sync::sync::Difficulty>> =
+    LazyLock::new(|| DashMap::new());
 
 pub static KOLKA: OnceLock<Kolka> = OnceLock::new();
 

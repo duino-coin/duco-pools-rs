@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use crate::cfg::config::PoolConfig;
 use crate::data::data::Bans;
 use crate::mining::mining;
@@ -7,6 +6,7 @@ use data::data::LoginInfos;
 use log::{debug, error, info, warn};
 use reqwest::multipart;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::process::exit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -130,12 +130,10 @@ pub async fn logout(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-
 pub async fn resync_pool_rewards(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
     let reward_content = update_pool_rewards(config).await?;
-    let pool_rewards: HashMap<String, Difficulty> =
-        serde_json::from_str(&reward_content)?;
-    
+    let pool_rewards: HashMap<String, Difficulty> = serde_json::from_str(&reward_content)?;
+
     println!("Pool Rewards: {:?}", POOL_REWARDS);
     for (key, val) in pool_rewards {
         POOL_REWARDS.insert(key, val);
