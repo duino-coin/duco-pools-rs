@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use crate::cfg::config::PoolConfig;
 use crate::data::data::Bans;
 use crate::mining::mining;
-use crate::{data, CONFIG, CONNECTIONS};
+use crate::{data, CONFIG, CONNECTIONS, POOL_REWARDS};
 use data::data::LoginInfos;
 use log::{debug, error, info, warn};
 use reqwest::multipart;
@@ -129,26 +130,41 @@ pub async fn logout(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-pub async fn update_pool_rewards(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
+
+pub async fn resync_pool_rewards(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let reward_content = update_pool_rewards(config).await?;
+    let pool_rewards: HashMap<String, Difficulty> =
+        serde_json::from_str(&reward_content)?;
+    
+    println!("Pool Rewards: {:?}", POOL_REWARDS);
+    for (key, val) in pool_rewards {
+        POOL_REWARDS.insert(key, val);
+    }
+    println!("Pool Rewards: {:?}", POOL_REWARDS);
+
+    Ok(())
+}
+
+async fn update_pool_rewards(config: &PoolConfig) -> Result<String, Box<dyn std::error::Error>> {
     let response_data = reqwest::get(format!("{}/poolrewards.json", config.server_sync_url))
         .await?
         .text()
         .await?;
-    std::fs::write("./config/poolRewards.json", response_data)?;
+    std::fs::write("./config/poolRewards.json", &response_data)?;
     info!("Successfully updated pool rewards");
 
     let mut bans = Bans::load_bans().expect("failed to load config bans.json");
 
-    let response_data = reqwest::get(format!("{}/bans.json", config.server_sync_url))
+    let response_data_bans = reqwest::get(format!("{}/bans.json", config.server_sync_url))
         .await?
         .json::<Vec<String>>()
         .await?;
-    bans.banned_usernames = response_data;
+    bans.banned_usernames = response_data_bans;
 
     bans.save_bans().expect("failed to save config bans.json");
     info!("Synced bans.");
 
-    Ok(())
+    Ok(response_data)
 }
 
 pub async fn sync(sys: &mut Arc<Mutex<System>>) -> Result<(), Box<dyn std::error::Error>> {

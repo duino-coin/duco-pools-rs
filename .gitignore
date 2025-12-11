@@ -1,6 +1,7 @@
 /target
 /config/config-orig.json
 /config/config-node.json
+/config/bans.json
 /pool.zip
 /Cargo.lock
 /miner/

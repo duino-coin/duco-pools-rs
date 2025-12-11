@@ -60,8 +60,8 @@ pub async fn handle(
     let mut is_first_share = true;
 
     let kolka = KOLKA.get().unwrap();
-    let pool_rewards = POOL_REWARDS.get().unwrap();
-
+    // let pool_rewards = POOL_REWARDS.get().unwrap();
+    let pool_rewards = &POOL_REWARDS;
     let mut buffer = itoa::Buffer::new(); // used to convert nums to str a little faster
     let mut read; // needed for first share..
 

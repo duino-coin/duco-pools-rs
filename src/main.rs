@@ -20,6 +20,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
+use dashmap::DashMap;
 use sysinfo::System;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -34,7 +35,8 @@ pub static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 // and it's cleaner than cloning hundreds of arcs..
 pub static BANS: LazyLock<Mutex<Bans>> = LazyLock::new(|| Mutex::new(Bans::load_bans().unwrap()));
 
-pub static POOL_REWARDS: OnceLock<HashMap<String, sync::sync::Difficulty>> = OnceLock::new();
+// pub static POOL_REWARDS: OnceLock<HashMap<String, sync::sync::Difficulty>> = OnceLock::new();
+pub static POOL_REWARDS: LazyLock<DashMap<String, sync::sync::Difficulty>> = LazyLock::new(|| DashMap::new());
 
 pub static KOLKA: OnceLock<Kolka> = OnceLock::new();
 
@@ -90,9 +92,13 @@ async fn main() {
     }
     // TODO: impl ngrok
 
-    sync::sync::update_pool_rewards(&config)
+    // TODO: test
+    sync::sync::resync_pool_rewards(&config)
         .await
         .expect("failed to update pool rewards");
+    // sync::sync::update_pool_rewards(&config)
+    //     .await
+    //     .expect("failed to update pool rewards");
     #[cfg(not(debug_assertions))]
     sync::sync::login(&config).await.expect("failed to login");
 
@@ -104,14 +110,27 @@ async fn main() {
         #[cfg(not(debug_assertions))]
         {
             let config = crate::CONFIG.get().unwrap();
+            let pool_reward_sync_factor = (3600f64 / config.sync_time as f64).ceil() as u64;
+            let mut count = 0;
             let sys = &mut sys_clone;
             loop {
+                if count >= pool_reward_sync_factor {
+                    count = 0;
+                    match sync::sync::resync_pool_rewards(&config).await {
+                        Ok(_) => {}
+                        Err(err) => {
+                            error!("Failed to resync pool rewards: {}", err);
+                        }
+                    };
+                }
                 match sync::sync::sync(sys).await {
                     Ok(_) => {}
                     Err(err) => {
                         error!("Sync failed: {}", err);
                     }
                 };
+
+                count += 1;
                 tokio::time::sleep(tokio::time::Duration::from_secs(config.sync_time as u64)).await;
             }
         }
@@ -144,14 +163,7 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
     // set max open file descriptors to the maximum the platform allows, so we can handle *a lot* of sockets
     rlimit::increase_nofile_limit(u64::MAX).expect("failed to increase nofile limit");
     info!("Starting tcp server...");
-    // read and serialize pool rewards
-    let reward_content = std::fs::read_to_string("./config/poolRewards.json")
-        .expect("failed to read config poolRewards.json");
-    let pool_rewards: HashMap<String, sync::sync::Difficulty> =
-        serde_json::from_str(&reward_content).expect("failed to parse config poolRewards.json");
 
-    // TODO: test new pool rewards structure
-    POOL_REWARDS.get_or_init(|| pool_rewards);
     KOLKA.get_or_init(|| Kolka::new());
 
     let config = CONFIG.get().unwrap();

@@ -116,8 +116,6 @@ pub fn v3(sharetime: f32, expected_sharetime: u16, hashrate: f32) -> u32 {
 
 pub fn get_diff(req_diff: &str) -> u32 {
     let diff = POOL_REWARDS
-        .get()
-        .unwrap()
         .get(req_diff)
         .unwrap()
         .difficulty;
@@ -126,8 +124,6 @@ pub fn get_diff(req_diff: &str) -> u32 {
 
 fn get_decrease_perc(req_diff: &str) -> f32 {
     let diff = POOL_REWARDS
-        .get()
-        .unwrap()
         .get(req_diff)
         .unwrap()
         .kolka_decrease_perc;
