@@ -2,5 +2,5 @@
 duino-coin pools, but in rust
 
 # TODO
-- implement ngrok
-- test
+- implement ngrok (tbd)
+- implement period resync of pool rewards
