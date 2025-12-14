@@ -207,7 +207,7 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                                         let err_str = err.to_string();
                                         // this is impl seriously is horrendous
                                         if !err_str.contains("Connection reset by peer") && !err_str.contains("Connection timed out")
-                                            && !err_str.contains("Shutting down") && !err_str.contains("os error 10054") && !err_str.contains("Connection closed: Connection closed")
+                                            && !err_str.contains("Shutting down") && !err_str.contains("os error 10054") && !err_str.contains("Connection closed")
                                             && !err_str.contains("deadline")
                                         {
                                             info!("Connection closed: {:?}", err);

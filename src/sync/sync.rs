@@ -18,6 +18,7 @@ use tokio::sync::Mutex;
 
 static SYNC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+//#[serde(skip_serializing_if = "Option::is_none")]
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Difficulty {
     pub difficulty: u64,
