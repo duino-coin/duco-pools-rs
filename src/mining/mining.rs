@@ -210,13 +210,19 @@ pub async fn handle(
         }
 
         let mut wrong_reported_hashrate = false;
-        reported_hashrate = match data[1].parse::<f32>() {
-            Ok(rep) => rep,
-            Err(_) => {
-                wrong_reported_hashrate = true;
-                0f32
-            }
-        };
+        if data.len() >= 2 {
+            reported_hashrate = match data[1].parse::<f32>() {
+                Ok(rep) => rep,
+                Err(_) => {
+                    wrong_reported_hashrate = true;
+                    0f32
+                }
+            };
+        }
+        else {
+            wrong_reported_hashrate = true;
+            reported_hashrate = 0f32;
+        }
 
         if reported_hashrate <= 0f32 && !wrong_reported_hashrate {
             conn.miner_stat.reject_shares = "Invalid data".to_string();
