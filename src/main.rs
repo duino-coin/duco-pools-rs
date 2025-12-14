@@ -117,7 +117,9 @@ async fn main() {
                 if count >= pool_reward_sync_factor {
                     count = 0;
                     match sync::sync::resync_pool_rewards(&config).await {
-                        Ok(_) => {}
+                        Ok(_) => {
+                            info!("Resynced pool rewards.");
+                        }
                         Err(err) => {
                             error!("Failed to resync pool rewards: {}", err);
                         }

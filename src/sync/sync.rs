@@ -135,11 +135,9 @@ pub async fn resync_pool_rewards(config: &PoolConfig) -> Result<(), Box<dyn std:
     let reward_content = update_pool_rewards(config).await?;
     let pool_rewards: HashMap<String, Difficulty> = serde_json::from_str(&reward_content)?;
 
-    println!("Pool Rewards: {:?}", POOL_REWARDS);
     for (key, val) in pool_rewards {
         POOL_REWARDS.insert(key, val);
     }
-    println!("Pool Rewards: {:?}", POOL_REWARDS);
 
     Ok(())
 }
