@@ -38,7 +38,8 @@ pub async fn get_pool_ip(config: &&PoolConfig) -> Result<String, Box<dyn std::er
         .build()?;
     let response = client.get("https://api.ipify.org/").send().await?;
 
-    Ok(response.text().await?)
+    let text = response.text().await?;
+    Ok(text)
 }
 
 pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
@@ -164,7 +165,7 @@ async fn update_pool_rewards(config: &PoolConfig) -> Result<String, Box<dyn std:
     Ok(response_data)
 }
 
-pub async fn sync(sys: &mut Arc<Mutex<System>>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn sync(sys: &mut Arc<Mutex<System>>, last_ip: &str) -> Result<String, Box<dyn std::error::Error>> {
     info!("Starting sync..");
     let config = CONFIG.get().unwrap();
     if !std::fs::exists(&config.base_sync_folder)? {
@@ -175,7 +176,12 @@ pub async fn sync(sys: &mut Arc<Mutex<System>>) -> Result<(), Box<dyn std::error
     let ip = match get_pool_ip(&config).await {
         Ok(ok) => ok,
         Err(err) => {
-            return Err(Box::from(format!("Failed to get pool ip {err}")));
+            if last_ip.is_empty()
+            {
+                return Err(Box::from(format!("Failed to get pool ip {err}")));
+            }
+            error!("Failed to get pool ip: {err}. Falling back to last ip collected.");
+            last_ip.to_string()
         }
     };
     let block_increase = mining::GLOBAL_SHARES_INCREASE.load(Ordering::Relaxed);
@@ -187,7 +193,6 @@ pub async fn sync(sys: &mut Arc<Mutex<System>>) -> Result<(), Box<dyn std::error
     }
 
     let connections = CONNECTIONS.load(Ordering::Relaxed);
-
     // TODO: impl ngrok
 
     //    if (use_ngrok && sync_count > 0 && sync_count % 50 == 0)
@@ -304,5 +309,5 @@ pub async fn sync(sys: &mut Arc<Mutex<System>>) -> Result<(), Box<dyn std::error
 
     mining::USR_WORKERS.shrink_to_fit();
     mining::WORKERS.shrink_to_fit();
-    Ok(())
+    Ok(ip)
 }

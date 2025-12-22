@@ -113,6 +113,7 @@ async fn main() {
             let pool_reward_sync_factor = (3600f64 / config.sync_time as f64).ceil() as u64;
             let mut count = 0;
             let sys = &mut sys_clone;
+            let mut last_ip = String::new();
             loop {
                 if count >= pool_reward_sync_factor {
                     count = 0;
@@ -121,14 +122,19 @@ async fn main() {
                             info!("Resynced pool rewards.");
                         }
                         Err(err) => {
-                            error!("Failed to resync pool rewards: {}", err);
+                            error!("Failed to resync pool rewards: {err}");
                         }
                     };
                 }
-                match sync::sync::sync(sys).await {
-                    Ok(_) => {}
+                match sync::sync::sync(sys, &last_ip).await {
+                    Ok(ip) => {
+                        // just to be safe...
+                        if !ip.is_empty() {
+                            last_ip = ip;
+                        }
+                    }
                     Err(err) => {
-                        error!("Sync failed: {}", err);
+                        error!("Sync failed: {err}");
                     }
                 };
 
@@ -152,7 +158,7 @@ async fn main() {
     // last sync before shutdown
     #[cfg(not(debug_assertions))]
     {
-        sync::sync::sync(&mut sys)
+        sync::sync::sync(&mut sys, "")
             .await
             .expect("failed to sync database");
         sync::sync::logout(crate::CONFIG.get().unwrap())
