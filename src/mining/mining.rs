@@ -5,7 +5,7 @@ use crate::{cfg, kolka, KOLKA, POOL_REWARDS};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use dashmap::DashMap;
-use log::{debug, info};
+use log::{debug, info, log};
 use rand::{rng, Rng};
 use sha1_smol::Sha1;
 use std::str::FromStr;
@@ -175,8 +175,8 @@ pub async fn handle(
             let mut hasher = Sha1::from(&last_block_hash);
             hasher.update(buffer.format(random).as_bytes());
             new_hash = hasher.hexdigest();
-            let job = (last_block_hash, new_hash.clone());
 
+            let job = (last_block_hash, new_hash.clone());
             let diff_str = buffer.format(diff);
             let mut job_str =
                 String::with_capacity(",,,\n".len() + job.0.len() + job.1.len() + diff_str.len()); // faster than format macro
@@ -227,16 +227,21 @@ pub async fn handle(
         if reported_hashrate <= 0f32 && !wrong_reported_hashrate {
             conn.miner_stat.reject_shares = "Invalid data".to_string();
         }
-
-        if conn.miner_stat.share_time >= 0.5 || wrong_reported_hashrate {
+        print!("{reported_hashrate}: ");
+        // if conn.miner_stat.share_time >= 0.5 || wrong_reported_hashrate {
+        if conn.miner_stat.share_time > 0f32 {
             hashrate_calc = random as f32 / conn.miner_stat.share_time;
-
-            if wrong_reported_hashrate {
-                reported_hashrate = hashrate_calc;
-            }
-        } else {
-            hashrate_calc = reported_hashrate;
         }
+        else {
+            hashrate_calc = random as f32 / 1e-3; // I'd be damned if the sharetime's actually ever EXACTLY 0...
+        }
+
+        if wrong_reported_hashrate {
+            reported_hashrate = hashrate_calc;
+        }
+        // } else {
+        //     hashrate_calc = reported_hashrate;
+        // }
 
         conn.miner_stat.last_min_shares += 1;
 
@@ -263,6 +268,8 @@ pub async fn handle(
             }
         }
 
+        // let hashrate_perc_diff = perc_diff(reported_hashrate, hashrate_calc);
+
         hashrate_is_estimated = false;
         if reported_hashrate <= 0f32 {
             hashrate_is_estimated = true;
@@ -279,16 +286,31 @@ pub async fn handle(
             };
         }
 
+        let hashrate_perc_diff_for_calc = perc_diff(hashrate, hashrate_calc);
+
         if diff > kolka::kolka::get_diff("DUE")
             && diff <= kolka::kolka::get_diff("ESP8266NH")
-            && perc_diff(hashrate, hashrate_calc) > 15f32
+            && hashrate_perc_diff_for_calc > 15f32
             && conn.miner_stat.share_time >= 1.5
         {
             conn.miner_stat.reject_shares = "Modified hashrate".to_string();
         }
 
+        if hashrate_perc_diff_for_calc > 15f32 {
+            if hashrate_perc_diff_for_calc > 25f32 {
+                conn.miner_stat.reject_shares = "Modified hashrate".to_string();
+            }
+            hashrate = hashrate_calc;
+        }
+
+        let avg_sharetime = avg_from_array(&conn.miner_stat.share_times_list);
+        let actual_expected_share_time = random / (diff as u64 * 100 + 1) * expected_share_time as u64;
         if (conn.miner_stat.accepted_shares == 4
-            || (conn.miner_stat.accepted_shares > 4 && perc_diff(hashrate, start_hashrate) > 15f32))
+            || (
+                conn.miner_stat.accepted_shares > 4
+                && (perc_diff(hashrate, start_hashrate) > 15f32 || (1f32 - (avg_sharetime / actual_expected_share_time as f32)) * 100f32 > 20f32) // if the hashrate has changed substantially or if the sharetime is substantially lower than targeted, adjust
+            )
+        )
             && PC_DIFF_TIERS.contains(&req_difficulty.as_str())
         {
             start_hashrate = hashrate;
@@ -319,6 +341,8 @@ pub async fn handle(
 
             conn.write(&res).await?;
             feedback_sent = SystemTime::now();
+
+            conn.miner_stat.rejected_shares += 1;
         } else if hashrate < min_hashrate as f32 {
             conn.miner_stat.override_diff = kolka::kolka::v2_reverse(&req_difficulty);
             conn.miner_stat.rejected_shares += 1;
