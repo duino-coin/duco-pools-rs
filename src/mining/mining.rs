@@ -227,13 +227,17 @@ pub async fn handle(
         if reported_hashrate <= 0f32 && !wrong_reported_hashrate {
             conn.miner_stat.reject_shares = "Invalid data".to_string();
         }
-        print!("{reported_hashrate}: ");
         // if conn.miner_stat.share_time >= 0.5 || wrong_reported_hashrate {
-        if conn.miner_stat.share_time > 0f32 {
-            hashrate_calc = random as f32 / conn.miner_stat.share_time;
-        }
-        else {
-            hashrate_calc = random as f32 / 1e-3; // I'd be damned if the sharetime's actually ever EXACTLY 0...
+
+        {
+            let temp_share_time = conn.miner_stat.share_time + conn.miner_stat.ping; // it benefits the user
+            if temp_share_time > 0f32 {
+                hashrate_calc = random as f32 / temp_share_time;
+            }
+            else {
+                println!("exactly zero??");
+                hashrate_calc = if wrong_reported_hashrate { start_hashrate } else { reported_hashrate }; // I'd be damned if the sharetime's actually ever EXACTLY 0...
+            }
         }
 
         if wrong_reported_hashrate {
@@ -296,9 +300,12 @@ pub async fn handle(
             conn.miner_stat.reject_shares = "Modified hashrate".to_string();
         }
 
-        if hashrate_perc_diff_for_calc > 15f32 {
+
+        // we don't care whether they overreport their hashrate
+        if hashrate_perc_diff_for_calc > 15f32 && hashrate < hashrate_calc {
             if hashrate_perc_diff_for_calc > 25f32 {
                 conn.miner_stat.reject_shares = "Modified hashrate".to_string();
+                // println!("diff {hashrate_perc_diff_for_calc} {hashrate} {hashrate_calc} {random} {} {}", conn.miner_stat.share_time, conn.miner_stat.ping);
             }
             hashrate = hashrate_calc;
         }
@@ -308,7 +315,7 @@ pub async fn handle(
         if (conn.miner_stat.accepted_shares == 4
             || (
                 conn.miner_stat.accepted_shares > 4
-                && (perc_diff(hashrate, start_hashrate) > 15f32 || (1f32 - (avg_sharetime / actual_expected_share_time as f32)) * 100f32 > 20f32) // if the hashrate has changed substantially or if the sharetime is substantially lower than targeted, adjust
+                && (perc_diff(hashrate, start_hashrate) > 15f32 || (1f32 - (avg_sharetime / actual_expected_share_time as f32)) * 100f32 > 25f32) // if the hashrate has changed substantially or if the sharetime is substantially lower than targeted, adjust
             )
         )
             && PC_DIFF_TIERS.contains(&req_difficulty.as_str())
@@ -340,7 +347,7 @@ pub async fn handle(
             res.push_str("\n");
 
             conn.write(&res).await?;
-            feedback_sent = SystemTime::now();
+            // feedback_sent = SystemTime::now();
 
             conn.miner_stat.rejected_shares += 1;
         } else if hashrate < min_hashrate as f32 {
@@ -349,14 +356,14 @@ pub async fn handle(
             conn.write("BAD,Too high starting difficulty\n").await?;
             start_hashrate = -1f32;
             diff = kolka::kolka::get_diff(&conn.miner_stat.override_diff);
-            feedback_sent = SystemTime::now();
+            // feedback_sent = SystemTime::now();
         } else if hashrate >= max_hashrate as f32 {
             conn.miner_stat.override_diff = kolka::kolka::v2(&req_difficulty);
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too low starting difficulty\n").await?;
             start_hashrate = -1f32;
             diff = kolka::kolka::get_diff(&conn.miner_stat.override_diff);
-            feedback_sent = SystemTime::now();
+            // feedback_sent = SystemTime::now();
         } else if nonce == random {
             conn.miner_stat.accepted_shares += 1;
             if conn.miner_stat.accepted_shares > 10 {
@@ -399,15 +406,15 @@ pub async fn handle(
                 GLOBAL_BLOCKS.lock().await.push(block_infos);
                 conn.write("BLOCK\n").await?;
                 info!("Block found by {}", conn.username);
-                feedback_sent = SystemTime::now();
+                // feedback_sent = SystemTime::now();
             } else {
                 conn.write("GOOD\n").await?;
-                feedback_sent = SystemTime::now();
+                // feedback_sent = SystemTime::now();
             }
         } else {
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Incorrect result\n").await?;
-            feedback_sent = SystemTime::now();
+            // feedback_sent = SystemTime::now();
         }
 
         if conn.miner_stat.accepted_shares > 0
@@ -486,6 +493,8 @@ pub async fn handle(
             );
         }
 
+        // because feedback_sent is only used to calculate the ping, we want to set it as late as possible
+        feedback_sent = SystemTime::now();
         is_first_share = false;
     }
 }
