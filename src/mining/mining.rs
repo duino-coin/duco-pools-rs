@@ -5,7 +5,7 @@ use crate::{cfg, kolka, KOLKA, POOL_REWARDS};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use dashmap::DashMap;
-use log::{debug, info, log};
+use log::{debug, info};
 use rand::{rng, Rng};
 use sha1_smol::Sha1;
 use std::str::FromStr;
