@@ -100,6 +100,11 @@ pub async fn handle(
             }
         } else {
             read = conn.read_to_string().await?;
+
+            conn.miner_stat.ping = SystemTime::now()
+                .duration_since(feedback_sent)?
+                .as_secs_f32();
+
             data = read.split(",").collect::<Box<[&str]>>(); // receive new data and split by "args"
 
             req_difficulty = if data.len() < 3 || data[2].is_empty() {
@@ -111,10 +116,6 @@ pub async fn handle(
             if !pool_rewards.get(&req_difficulty).is_some() {
                 req_difficulty = "NET".to_string();
             }
-
-            conn.miner_stat.ping = SystemTime::now()
-                .duration_since(feedback_sent)?
-                .as_secs_f32();
 
             if !conn.miner_stat.override_diff.is_empty() {
                 let override_diff = conn.miner_stat.override_diff.clone();
@@ -201,6 +202,7 @@ pub async fn handle(
             conn.miner_stat.share_time -= conn.miner_stat.ping;
         }
 
+        // 1.5x to account that the average will be half the target (I don't know what this means, I copied the original comment)
         conn.miner_stat
             .share_times_list
             .push(conn.miner_stat.share_time * 1.5);
@@ -235,7 +237,6 @@ pub async fn handle(
                 hashrate_calc = random as f32 / temp_share_time;
             }
             else {
-                println!("exactly zero??");
                 hashrate_calc = if wrong_reported_hashrate { start_hashrate } else { reported_hashrate }; // I'd be damned if the sharetime's actually ever EXACTLY 0...
             }
         }
@@ -303,7 +304,8 @@ pub async fn handle(
 
         // we don't care whether they overreport their hashrate
         if hashrate_perc_diff_for_calc > 15f32 && hashrate < hashrate_calc {
-            if hashrate_perc_diff_for_calc > 25f32 {
+            // the difference is sometimes (currently) inexplicably high, therefore we rarely want to reject shares for it..
+            if hashrate_perc_diff_for_calc >= 50f32 {
                 conn.miner_stat.reject_shares = "Modified hashrate".to_string();
                 // println!("diff {hashrate_perc_diff_for_calc} {hashrate} {hashrate_calc} {random} {} {}", conn.miner_stat.share_time, conn.miner_stat.ping);
             }
