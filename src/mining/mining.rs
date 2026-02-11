@@ -305,7 +305,7 @@ pub async fn handle(
         // we don't care whether they overreport their hashrate
         if hashrate_perc_diff_for_calc > 15f32 && hashrate < hashrate_calc {
             // the difference is sometimes (currently) inexplicably high, therefore we rarely want to reject shares for it..
-            if hashrate_perc_diff_for_calc >= 50f32 {
+            if hashrate_perc_diff_for_calc >= 50f32 && false { // disabled for now..
                 conn.miner_stat.reject_shares = "Modified hashrate".to_string();
                 // println!("diff {hashrate_perc_diff_for_calc} {hashrate} {hashrate_calc} {random} {} {}", conn.miner_stat.share_time, conn.miner_stat.ping);
             }
