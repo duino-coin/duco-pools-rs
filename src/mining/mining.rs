@@ -4,7 +4,7 @@ use crate::mining::stats::{BlockInfos, MinerStat};
 use crate::{cfg, kolka, KOLKA, POOL_REWARDS};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use dashmap::DashMap;
+use dashmap::{DashMap, Entry};
 use log::{debug, info};
 use rand::{rng, Rng};
 use sha1_smol::Sha1;
@@ -19,8 +19,7 @@ use tokio::sync::Mutex;
 pub static WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 
 pub static USR_WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
-
-pub static AVAILABLE_IDS: LazyLock<DashMap<String, u16>> = LazyLock::new(|| DashMap::new());
+pub static RELEGATION_MAP: LazyLock<DashMap<String, Vec<u16>>> = LazyLock::new(|| DashMap::new());
 pub static BALANCES_TO_UPDATE: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 
 pub static MINER_STATS: LazyLock<DashMap<String, MinerStat>> = LazyLock::new(|| DashMap::new());
@@ -108,27 +107,6 @@ pub async fn handle(
                 .duration_since(feedback_sent)?
                 .as_secs_f32();
 
-            {
-                // this really isn't nice..
-                // TODO: test
-                if AVAILABLE_IDS.contains_key(&conn.username) {
-                    let got_id = match AVAILABLE_IDS.get(&conn.username) {
-                        None => {false}
-                        Some(r) => {
-                            // println!("{}", r.value());
-                            if r.value() > &0u16 {
-                                let id = r.value().clone();
-                                conn.miner_stat.amount_of_workers = id as f32;
-
-                            }
-                            r.value() > &0u16
-                        }
-                    };
-                    if got_id {
-                        *AVAILABLE_IDS.entry(conn.username.clone()).or_insert(1u16) -= 1;
-                    }
-                }
-            }
 
             data = read.split(",").collect::<Box<[&str]>>(); // receive new data and split by "args"
 
@@ -186,7 +164,24 @@ pub async fn handle(
         }
 
         if conn.miner_stat.amount_of_workers > max {
-            conn.miner_stat.amount_of_workers = max;
+            if RELEGATION_MAP.contains_key(&conn.miner_stat.username) {
+                let mut map_val = RELEGATION_MAP.entry(conn.miner_stat.username.clone()).or_default();
+                let val = map_val.value_mut();
+                let id = val.pop();
+                if id.is_some()
+                {
+                    conn.miner_stat.amount_of_workers = id.unwrap() as f32;
+                }
+                else
+                {
+                    conn.miner_stat.amount_of_workers = max;
+                }
+            }
+            else
+            {
+                conn.miner_stat.amount_of_workers = max;
+            }
+
         }
 
         random = rng().random_range(0u64..diff as u64 * 100u64) + 1;
