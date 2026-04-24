@@ -41,7 +41,7 @@ pub struct MinerStat {
     #[serde(skip_serializing, skip_deserializing)]
     pub server_miners: u64,
     #[serde(skip_serializing, skip_deserializing)]
-    pub amount_of_workers: f32,
+    pub amount_of_workers: f32, // it's actually the id for the current worker (read: nth worker)
     #[serde(skip_serializing, skip_deserializing)]
     pub last_share_reset: u64,
     #[serde(skip_serializing, skip_deserializing)]

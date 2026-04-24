@@ -12,12 +12,15 @@ use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+use dashmap::mapref::one::Ref;
 use tokio::sync::Mutex;
 
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
 pub static WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 
 pub static USR_WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
+
+pub static AVAILABLE_IDS: LazyLock<DashMap<String, u16>> = LazyLock::new(|| DashMap::new());
 pub static BALANCES_TO_UPDATE: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 
 pub static MINER_STATS: LazyLock<DashMap<String, MinerStat>> = LazyLock::new(|| DashMap::new());
@@ -105,6 +108,28 @@ pub async fn handle(
                 .duration_since(feedback_sent)?
                 .as_secs_f32();
 
+            {
+                // this really isn't nice..
+                // TODO: test
+                if AVAILABLE_IDS.contains_key(&conn.username) {
+                    let got_id = match AVAILABLE_IDS.get(&conn.username) {
+                        None => {false}
+                        Some(r) => {
+                            // println!("{}", r.value());
+                            if r.value() > &0u16 {
+                                let id = r.value().clone();
+                                conn.miner_stat.amount_of_workers = id as f32;
+
+                            }
+                            r.value() > &0u16
+                        }
+                    };
+                    if got_id {
+                        *AVAILABLE_IDS.entry(conn.username.clone()).or_insert(1u16) -= 1;
+                    }
+                }
+            }
+
             data = read.split(",").collect::<Box<[&str]>>(); // receive new data and split by "args"
 
             req_difficulty = if data.len() < 3 || data[2].is_empty() {
@@ -144,6 +169,7 @@ pub async fn handle(
             }
         }
 
+        // TODO: determine if needed after new fix
         let ip_workers = if conn.ip != "127.0.0.1" {
             get_ip_workers(&conn.ip)
         } else {
@@ -482,7 +508,7 @@ pub async fn handle(
             conn.miner_stat.username = conn.username.clone();
             conn.miner_stat.pool_name = config.pool_name.clone();
             MINER_STATS.insert(conn.id.clone(), conn.miner_stat.clone());
-
+            // println!("{} {}", conn.miner_stat.id, conn.miner_stat.kolka_drop);
             let mut last_block_hash = LAST_BLOCK_HASH.lock().await;
             *last_block_hash = new_hash;
             GLOBAL_SHARES_INCREASE.fetch_add(
@@ -495,9 +521,9 @@ pub async fn handle(
             );
         }
 
+        is_first_share = false;
         // because feedback_sent is only used to calculate the ping, we want to set it as late as possible
         feedback_sent = SystemTime::now();
-        is_first_share = false;
     }
 }
 

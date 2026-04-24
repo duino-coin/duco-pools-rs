@@ -309,5 +309,12 @@ pub async fn sync(sys: &mut Arc<Mutex<System>>, last_ip: &str) -> Result<String,
 
     mining::USR_WORKERS.shrink_to_fit();
     mining::WORKERS.shrink_to_fit();
+
+    mining::AVAILABLE_IDS.clear();
+    mining::USR_WORKERS.iter().for_each(|r| { // TODO: test
+            let key = r.key();
+            let val = r.value().ceil() as u16;
+            mining::AVAILABLE_IDS.insert(key.clone(), val);
+    });
     Ok(ip)
 }

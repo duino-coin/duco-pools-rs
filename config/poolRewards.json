@@ -69,7 +69,7 @@
     "difficulty": 8200,
     "info": "goal: 10 DUCO/day (dual core) OK",
     "reward": 85000,
-    "max_hashrate": 100000,
+    "max_hashrate": 130000,
     "min_hashrate": 25000,
     "kolka_decrease_perc": 94,
     "expected_sharetime": 10,
