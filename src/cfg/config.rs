@@ -1,8 +1,8 @@
 use config::Config;
+use rand::distr::{Distribution, Uniform};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::path::Path;
-use rand::distr::{Distribution, Uniform};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PoolConfig {

@@ -94,19 +94,17 @@ pub fn handle_close(conn: &mut Connection) {
     let opt = mining::mining::USR_WORKERS.get(&conn.username);
     if opt.is_some() {
         let value = *opt.unwrap().value();
-        if value <= 0f32
-        {
+        if value <= 0f32 {
             mining::mining::USR_WORKERS.remove(&conn.username);
             mining::mining::RELEGATION_MAP.remove(&conn.username);
-        }
-        else
-        {
-            if conn.miner_stat.amount_of_workers <= value
-            {
+        } else {
+            if conn.miner_stat.amount_of_workers <= value {
                 let id = conn.miner_stat.amount_of_workers.ceil() as u16;
-                mining::mining::RELEGATION_MAP.entry(conn.username.clone()).and_modify(|x| x.push(id)).or_insert(vec![id]);
+                mining::mining::RELEGATION_MAP
+                    .entry(conn.username.clone())
+                    .and_modify(|x| x.push(id))
+                    .or_insert(vec![id]);
             }
         }
     }
-
 }

@@ -4,7 +4,7 @@ use crate::mining::stats::{BlockInfos, MinerStat};
 use crate::{cfg, kolka, KOLKA, POOL_REWARDS};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use dashmap::{DashMap, Entry};
+use dashmap::{DashMap};
 use log::{debug, info};
 use rand::{rng, Rng};
 use sha1_smol::Sha1;
@@ -12,7 +12,6 @@ use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
-use dashmap::mapref::one::Ref;
 use tokio::sync::Mutex;
 
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
@@ -107,7 +106,6 @@ pub async fn handle(
                 .duration_since(feedback_sent)?
                 .as_secs_f32();
 
-
             data = read.split(",").collect::<Box<[&str]>>(); // receive new data and split by "args"
 
             req_difficulty = if data.len() < 3 || data[2].is_empty() {
@@ -165,23 +163,19 @@ pub async fn handle(
 
         if conn.miner_stat.amount_of_workers > max {
             if RELEGATION_MAP.contains_key(&conn.miner_stat.username) {
-                let mut map_val = RELEGATION_MAP.entry(conn.miner_stat.username.clone()).or_default();
+                let mut map_val = RELEGATION_MAP
+                    .entry(conn.miner_stat.username.clone())
+                    .or_default();
                 let val = map_val.value_mut();
                 let id = val.pop();
-                if id.is_some()
-                {
+                if id.is_some() {
                     conn.miner_stat.amount_of_workers = id.unwrap() as f32;
-                }
-                else
-                {
+                } else {
                     conn.miner_stat.amount_of_workers = max;
                 }
-            }
-            else
-            {
+            } else {
                 conn.miner_stat.amount_of_workers = max;
             }
-
         }
 
         random = rng().random_range(0u64..diff as u64 * 100u64) + 1;
@@ -241,8 +235,7 @@ pub async fn handle(
                     0f32
                 }
             };
-        }
-        else {
+        } else {
             wrong_reported_hashrate = true;
             reported_hashrate = 0f32;
         }
@@ -256,9 +249,12 @@ pub async fn handle(
             let temp_share_time = conn.miner_stat.share_time + conn.miner_stat.ping; // it benefits the user
             if temp_share_time > 0f32 {
                 hashrate_calc = random as f32 / temp_share_time;
-            }
-            else {
-                hashrate_calc = if wrong_reported_hashrate { start_hashrate } else { reported_hashrate }; // I'd be damned if the sharetime's actually ever EXACTLY 0...
+            } else {
+                hashrate_calc = if wrong_reported_hashrate {
+                    start_hashrate
+                } else {
+                    reported_hashrate
+                }; // I'd be damned if the sharetime's actually ever EXACTLY 0...
             }
         }
 
@@ -322,11 +318,11 @@ pub async fn handle(
             conn.miner_stat.reject_shares = "Modified hashrate".to_string();
         }
 
-
         // we don't care whether they overreport their hashrate
         if hashrate_perc_diff_for_calc > 15f32 && hashrate < hashrate_calc {
             // the difference is sometimes (currently) inexplicably high, therefore we rarely want to reject shares for it..
-            if hashrate_perc_diff_for_calc >= 50f32 && false { // disabled for now..
+            if hashrate_perc_diff_for_calc >= 50f32 && false {
+                // disabled for now..
                 conn.miner_stat.reject_shares = "Modified hashrate".to_string();
                 // println!("diff {hashrate_perc_diff_for_calc} {hashrate} {hashrate_calc} {random} {} {}", conn.miner_stat.share_time, conn.miner_stat.ping);
             }
@@ -334,13 +330,16 @@ pub async fn handle(
         }
 
         let avg_sharetime = avg_from_array(&conn.miner_stat.share_times_list);
-        let actual_expected_share_time = random / (diff as u64 * 100 + 1) * expected_share_time as u64;
+        let actual_expected_share_time =
+            random / (diff as u64 * 100 + 1) * expected_share_time as u64;
         if (conn.miner_stat.accepted_shares == 4
             || (
                 conn.miner_stat.accepted_shares > 4
-                && (perc_diff(hashrate, start_hashrate) > 15f32 || (1f32 - (avg_sharetime / actual_expected_share_time as f32)) * 100f32 > 25f32) // if the hashrate has changed substantially or if the sharetime is substantially lower than targeted, adjust
-            )
-        )
+                    && (perc_diff(hashrate, start_hashrate) > 15f32
+                        || (1f32 - (avg_sharetime / actual_expected_share_time as f32)) * 100f32
+                            > 25f32)
+                // if the hashrate has changed substantially or if the sharetime is substantially lower than targeted, adjust
+            ))
             && PC_DIFF_TIERS.contains(&req_difficulty.as_str())
         {
             start_hashrate = hashrate;

@@ -165,7 +165,10 @@ async fn update_pool_rewards(config: &PoolConfig) -> Result<String, Box<dyn std:
     Ok(response_data)
 }
 
-pub async fn sync(sys: &mut Arc<Mutex<System>>, last_ip: &str) -> Result<String, Box<dyn std::error::Error>> {
+pub async fn sync(
+    sys: &mut Arc<Mutex<System>>,
+    last_ip: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
     info!("Starting sync..");
     let config = CONFIG.get().unwrap();
     if !std::fs::exists(&config.base_sync_folder)? {
@@ -176,8 +179,7 @@ pub async fn sync(sys: &mut Arc<Mutex<System>>, last_ip: &str) -> Result<String,
     let ip = match get_pool_ip(&config).await {
         Ok(ok) => ok,
         Err(err) => {
-            if last_ip.is_empty()
-            {
+            if last_ip.is_empty() {
                 return Err(Box::from(format!("Failed to get pool ip {err}")));
             }
             error!("Failed to get pool ip: {err}. Falling back to last ip collected.");

@@ -1,10 +1,9 @@
+use crate::mining;
 use log::info;
 use serde::Serialize;
 use std::net::SocketAddr;
 use tokio::task::JoinHandle;
 use warp::Filter;
-use warp::http::StatusCode;
-use crate::mining;
 
 #[derive(Serialize)]
 struct HttpRes {
@@ -27,11 +26,10 @@ pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<(
         // .and(warp::get())
         .and(warp::query::<std::collections::HashMap<String, String>>())
         .and(warp::path::end())
-        .and_then (move |params: std::collections::HashMap<String, String>| {
+        .and_then(move |params: std::collections::HashMap<String, String>| {
             let dash_key_clone = dash_key.to_string();
             async move {
-                if params.contains_key("key")
-                {
+                if params.contains_key("key") {
                     let provided_key = params.get("key").unwrap();
                     if provided_key == &dash_key_clone {
                         let mut temp = mining::mining::USR_WORKERS.clone();
@@ -41,7 +39,6 @@ pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<(
                 }
                 Err(warp::reject::not_found())
             }
-
         });
     info!("Binding webserver to to {addr:?}");
     let route = ping.or(data);
