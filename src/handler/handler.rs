@@ -97,6 +97,7 @@ pub fn handle_close(conn: &mut Connection) {
         if value <= 0f32
         {
             mining::mining::USR_WORKERS.remove(&conn.username);
+            mining::mining::RELEGATION_MAP.remove(&conn.username);
         }
         else
         {

@@ -2,6 +2,7 @@ use config::Config;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::path::Path;
+use rand::distr::{Distribution, Uniform};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PoolConfig {
@@ -55,9 +56,18 @@ pub struct PoolConfig {
     pub max_shares_per_minute: u16, // probably shouldn't exceed 65k either
     pub restart_script: String,
     pub firewall_cmd: String,
+    #[serde(default = "generate_key")]
+    pub dashboard_key: String,
 }
 fn default_shares() -> u16 {
     80u16
+}
+
+fn generate_key() -> String {
+    let charset = Uniform::new_inclusive(char::from(33), char::from(126)).unwrap();
+    let mut rng = rand::rng();
+    let str: String = (0..32).map(|_| charset.sample(&mut rng)).collect();
+    str
 }
 
 impl Default for PoolConfig {
@@ -92,6 +102,7 @@ impl Default for PoolConfig {
             max_shares_per_minute: 80,
             restart_script: "".to_string(),
             firewall_cmd: "".to_string(),
+            dashboard_key: generate_key(),
         }
     }
 }
