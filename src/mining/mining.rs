@@ -15,7 +15,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
-// pub static WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 
 pub static USR_WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 pub static RELEGATION_MAP: LazyLock<DashMap<String, Vec<u16>>> = LazyLock::new(|| DashMap::new());
@@ -61,7 +60,6 @@ pub async fn handle(
     let mut is_first_share = true;
 
     let kolka = KOLKA.get().unwrap();
-    // let pool_rewards = POOL_REWARDS.get().unwrap();
     let pool_rewards = &POOL_REWARDS;
     let mut buffer = itoa::Buffer::new(); // used to convert nums to str a little faster
     let mut read; // needed for first share..
@@ -85,20 +83,10 @@ pub async fn handle(
             if req_difficulty == "ESP32" {
                 worker_add = 0.5;
             }
-            // *WORKERS.entry(conn.ip.clone()).or_insert(0f32) += worker_add;
+
             *USR_WORKERS.entry(conn.username.clone()).or_insert(0f32) += worker_add;
 
-            // if conn.ip != "127.0.0.1" {
-            //     conn.miner_stat.amount_of_workers = f32::max(
-            //         f32::max(get_user_workers(&conn.username), get_ip_workers(&conn.ip)),
-            //         conn.miner_stat.server_miners as f32,
-            //     ); // this is horrible
-            // } else {
-                conn.miner_stat.amount_of_workers = f32::max(
-                    get_user_workers(&conn.username),
-                    conn.miner_stat.server_miners as f32,
-                );
-            // }
+            conn.miner_stat.amount_of_workers = get_user_workers(&conn.username);
         } else {
             read = conn.read_to_string().await?;
 
@@ -145,37 +133,28 @@ pub async fn handle(
             }
         }
 
-        // TODO: determine if needed after new fix
-        // let ip_workers = if conn.ip != "127.0.0.1" {
-        //     get_ip_workers(&conn.ip)
-        // } else {
-        //     0f32
-        // };
         let user_workers = get_user_workers(&conn.username);
-        let max = max_f32(
-            // ip_workers,
-            0f32,
-            user_workers,
-            conn.miner_stat.server_miners as f32,
-        );
-        if check_workers(max, &config) {
+
+        if check_workers(user_workers, &config) {
             conn.miner_stat.reject_shares = "Too many workers".to_string();
         }
 
-        if conn.miner_stat.amount_of_workers > max {
+        if conn.miner_stat.amount_of_workers > user_workers {
+            // check if there a miner with a lower id disconnected
             if RELEGATION_MAP.contains_key(&conn.miner_stat.username) {
                 let mut map_val = RELEGATION_MAP
                     .entry(conn.miner_stat.username.clone())
                     .or_default();
+                // getting an id out of the vec stored
                 let val = map_val.value_mut();
                 let id = val.pop();
                 if id.is_some() {
                     conn.miner_stat.amount_of_workers = id.unwrap() as f32;
                 } else {
-                    conn.miner_stat.amount_of_workers = max;
+                    conn.miner_stat.amount_of_workers = user_workers;
                 }
             } else {
-                conn.miner_stat.amount_of_workers = max;
+                conn.miner_stat.amount_of_workers = user_workers;
             }
         }
 
@@ -244,7 +223,6 @@ pub async fn handle(
         if reported_hashrate <= 0f32 && !wrong_reported_hashrate {
             conn.miner_stat.reject_shares = "Invalid data".to_string();
         }
-        // if conn.miner_stat.share_time >= 0.5 || wrong_reported_hashrate {
 
         {
             let temp_share_time = conn.miner_stat.share_time + conn.miner_stat.ping; // it benefits the user
@@ -262,9 +240,6 @@ pub async fn handle(
         if wrong_reported_hashrate {
             reported_hashrate = hashrate_calc;
         }
-        // } else {
-        //     hashrate_calc = reported_hashrate;
-        // }
 
         conn.miner_stat.last_min_shares += 1;
 
@@ -291,7 +266,6 @@ pub async fn handle(
             }
         }
 
-        // let hashrate_perc_diff = perc_diff(reported_hashrate, hashrate_calc);
 
         hashrate_is_estimated = false;
         if reported_hashrate <= 0f32 {
@@ -325,7 +299,6 @@ pub async fn handle(
             if hashrate_perc_diff_for_calc >= 50f32 && false {
                 // disabled for now..
                 conn.miner_stat.reject_shares = "Modified hashrate".to_string();
-                // println!("diff {hashrate_perc_diff_for_calc} {hashrate} {hashrate_calc} {random} {} {}", conn.miner_stat.share_time, conn.miner_stat.ping);
             }
             hashrate = hashrate_calc;
         }
@@ -370,7 +343,6 @@ pub async fn handle(
             res.push_str("\n");
 
             conn.write(&res).await?;
-            // feedback_sent = SystemTime::now();
 
             conn.miner_stat.rejected_shares += 1;
         } else if hashrate < min_hashrate as f32 {
@@ -379,14 +351,12 @@ pub async fn handle(
             conn.write("BAD,Too high starting difficulty\n").await?;
             start_hashrate = -1f32;
             diff = kolka::kolka::get_diff(&conn.miner_stat.override_diff);
-            // feedback_sent = SystemTime::now();
         } else if hashrate >= max_hashrate as f32 {
             conn.miner_stat.override_diff = kolka::kolka::v2(&req_difficulty);
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too low starting difficulty\n").await?;
             start_hashrate = -1f32;
             diff = kolka::kolka::get_diff(&conn.miner_stat.override_diff);
-            // feedback_sent = SystemTime::now();
         } else if nonce == random {
             conn.miner_stat.accepted_shares += 1;
             if conn.miner_stat.accepted_shares > 10 {
@@ -429,15 +399,12 @@ pub async fn handle(
                 GLOBAL_BLOCKS.lock().await.push(block_infos);
                 conn.write("BLOCK\n").await?;
                 info!("Block found by {}", conn.username);
-                // feedback_sent = SystemTime::now();
             } else {
                 conn.write("GOOD\n").await?;
-                // feedback_sent = SystemTime::now();
             }
         } else {
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Incorrect result\n").await?;
-            // feedback_sent = SystemTime::now();
         }
 
         if conn.miner_stat.accepted_shares > 0
@@ -503,7 +470,7 @@ pub async fn handle(
             conn.miner_stat.username = conn.username.clone();
             conn.miner_stat.pool_name = config.pool_name.clone();
             MINER_STATS.insert(conn.id.clone(), conn.miner_stat.clone());
-            // println!("{} {}", conn.miner_stat.id, conn.miner_stat.kolka_drop);
+
             let mut last_block_hash = LAST_BLOCK_HASH.lock().await;
             *last_block_hash = new_hash;
             GLOBAL_SHARES_INCREASE.fetch_add(
@@ -538,16 +505,6 @@ fn get_user_workers(username: &String) -> f32 {
     }
 }
 
-// fn get_ip_workers(ip: &String) -> f32 {
-//     match WORKERS.get(ip) {
-//         None => {
-//             WORKERS.insert(ip.to_string(), 1.0);
-//             1f32
-//         }
-//         Some(some) => some.value().clone(),
-//     }
-// }
-
 fn check_workers(max: f32, config: &PoolConfig) -> bool {
     if config.max_workers <= 0 {
         return false;
@@ -573,8 +530,4 @@ fn clean_name(input: &str) -> String {
         |x: char| !x.is_ascii_alphanumeric() && !ALLOWED_SPECIAL.contains(&x),
         "",
     )
-}
-
-fn max_f32(x1: f32, x2: f32, x3: f32) -> f32 {
-    f32::max(f32::max(x1, x2), x3)
 }
