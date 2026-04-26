@@ -310,7 +310,7 @@ pub async fn sync(
     };
 
     mining::USR_WORKERS.shrink_to_fit();
-    mining::WORKERS.shrink_to_fit();
+    // mining::WORKERS.shrink_to_fit();
 
     Ok(ip)
 }

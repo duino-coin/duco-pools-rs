@@ -32,8 +32,8 @@ pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<(
                 if params.contains_key("key") {
                     let provided_key = params.get("key").unwrap();
                     if provided_key == &dash_key_clone {
-                        let mut temp = mining::mining::USR_WORKERS.clone();
-                        temp.extend(mining::mining::WORKERS.clone());
+                        let temp = mining::mining::USR_WORKERS.clone();
+                        // temp.extend(mining::mining::WORKERS.clone());
                         return Ok(warp::reply::json(&temp));
                     }
                 }

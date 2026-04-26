@@ -15,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
-pub static WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
+// pub static WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 
 pub static USR_WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 pub static RELEGATION_MAP: LazyLock<DashMap<String, Vec<u16>>> = LazyLock::new(|| DashMap::new());
@@ -85,20 +85,20 @@ pub async fn handle(
             if req_difficulty == "ESP32" {
                 worker_add = 0.5;
             }
-            *WORKERS.entry(conn.ip.clone()).or_insert(0f32) += worker_add;
+            // *WORKERS.entry(conn.ip.clone()).or_insert(0f32) += worker_add;
             *USR_WORKERS.entry(conn.username.clone()).or_insert(0f32) += worker_add;
 
-            if conn.ip != "127.0.0.1" {
-                conn.miner_stat.amount_of_workers = f32::max(
-                    f32::max(get_user_workers(&conn.username), get_ip_workers(&conn.ip)),
-                    conn.miner_stat.server_miners as f32,
-                ); // this is horrible
-            } else {
+            // if conn.ip != "127.0.0.1" {
+            //     conn.miner_stat.amount_of_workers = f32::max(
+            //         f32::max(get_user_workers(&conn.username), get_ip_workers(&conn.ip)),
+            //         conn.miner_stat.server_miners as f32,
+            //     ); // this is horrible
+            // } else {
                 conn.miner_stat.amount_of_workers = f32::max(
                     get_user_workers(&conn.username),
                     conn.miner_stat.server_miners as f32,
                 );
-            }
+            // }
         } else {
             read = conn.read_to_string().await?;
 
@@ -146,14 +146,15 @@ pub async fn handle(
         }
 
         // TODO: determine if needed after new fix
-        let ip_workers = if conn.ip != "127.0.0.1" {
-            get_ip_workers(&conn.ip)
-        } else {
-            0f32
-        };
+        // let ip_workers = if conn.ip != "127.0.0.1" {
+        //     get_ip_workers(&conn.ip)
+        // } else {
+        //     0f32
+        // };
         let user_workers = get_user_workers(&conn.username);
         let max = max_f32(
-            ip_workers,
+            // ip_workers,
+            0f32,
             user_workers,
             conn.miner_stat.server_miners as f32,
         );
@@ -537,15 +538,15 @@ fn get_user_workers(username: &String) -> f32 {
     }
 }
 
-fn get_ip_workers(ip: &String) -> f32 {
-    match WORKERS.get(ip) {
-        None => {
-            WORKERS.insert(ip.to_string(), 1.0);
-            1f32
-        }
-        Some(some) => some.value().clone(),
-    }
-}
+// fn get_ip_workers(ip: &String) -> f32 {
+//     match WORKERS.get(ip) {
+//         None => {
+//             WORKERS.insert(ip.to_string(), 1.0);
+//             1f32
+//         }
+//         Some(some) => some.value().clone(),
+//     }
+// }
 
 fn check_workers(max: f32, config: &PoolConfig) -> bool {
     if config.max_workers <= 0 {

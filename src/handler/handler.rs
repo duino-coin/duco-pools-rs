@@ -80,13 +80,14 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
 pub fn handle_close(conn: &mut Connection) {
     mining::mining::MINER_STATS.remove(&conn.id);
 
-    mining::mining::WORKERS
-        .entry(conn.ip.clone())
-        .and_modify(|w| *w -= 1f32);
-    let opt = mining::mining::WORKERS.get(&conn.ip);
-    if opt.is_some() && *opt.unwrap().value() <= 0f32 {
-        mining::mining::WORKERS.remove(&conn.ip);
-    }
+    // obsolete, for now..
+    // mining::mining::WORKERS
+    //     .entry(conn.ip.clone())
+    //     .and_modify(|w| *w -= 1f32);
+    // let opt = mining::mining::WORKERS.get(&conn.ip);
+    // if opt.is_some() && *opt.unwrap().value() <= 0f32 {
+    //     mining::mining::WORKERS.remove(&conn.ip);
+    // }
 
     mining::mining::USR_WORKERS
         .entry(conn.username.clone())
