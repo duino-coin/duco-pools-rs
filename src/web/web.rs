@@ -1,14 +1,23 @@
+use std::cmp::min;
 use crate::mining;
 use log::info;
 use serde::Serialize;
 use std::net::SocketAddr;
+use dashmap::DashMap;
 use tokio::task::JoinHandle;
 use warp::Filter;
+use crate::mining::stats::MinerStat;
 
 #[derive(Serialize)]
 struct HttpRes {
     result: String,
     success: bool,
+}
+
+#[derive(Serialize)]
+struct DataRes {
+    workers: DashMap<String, f32>,
+    miner_stats: DashMap<String, MinerStat>
 }
 
 pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<()> {
@@ -32,9 +41,8 @@ pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<(
                 if params.contains_key("key") {
                     let provided_key = params.get("key").unwrap();
                     if provided_key == &dash_key_clone {
-                        let temp = mining::mining::USR_WORKERS.clone();
-                        // temp.extend(mining::mining::WORKERS.clone());
-                        return Ok(warp::reply::json(&temp));
+                        let data_res = DataRes { workers: mining::mining::USR_WORKERS.clone(), miner_stats: mining::mining::MINER_STATS.clone() };
+                        return Ok(warp::reply::json(&data_res));
                     }
                 }
                 Err(warp::reject::not_found())
