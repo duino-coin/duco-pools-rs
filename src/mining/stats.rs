@@ -48,6 +48,8 @@ pub struct MinerStat {
     pub reject_shares: String,
     #[serde(skip_serializing, skip_deserializing)]
     pub override_diff: String,
+    #[serde(skip_serializing, skip_deserializing)]
+    pub is_req_diff_esp32: bool, // because "ESP32" only adds 0.5..
 }
 
 #[derive(Serialize, Deserialize, Debug)]

@@ -88,10 +88,11 @@ pub fn handle_close(conn: &mut Connection) {
     // if opt.is_some() && *opt.unwrap().value() <= 0f32 {
     //     mining::mining::WORKERS.remove(&conn.ip);
     // }
-
+    let worker_remove = if conn.miner_stat.is_req_diff_esp32 { 0.5 } else { 1f32 };
+    
     mining::mining::USR_WORKERS
         .entry(conn.username.clone())
-        .and_modify(|w| *w -= 1f32);
+        .and_modify(|w| *w -= worker_remove);
     let opt = mining::mining::USR_WORKERS.get(&conn.username);
     if opt.is_some() {
         let value = *opt.unwrap().value();

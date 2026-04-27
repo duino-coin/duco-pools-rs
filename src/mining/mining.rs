@@ -82,6 +82,7 @@ pub async fn handle(
             // why??
             if req_difficulty == "ESP32" {
                 worker_add = 0.5;
+                conn.miner_stat.is_req_diff_esp32 = true;
             }
 
             *USR_WORKERS.entry(conn.username.clone()).or_insert(0f32) += worker_add;

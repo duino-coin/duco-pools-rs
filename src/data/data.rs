@@ -44,7 +44,6 @@ impl Connection {
     pub async fn write(&mut self, content: &str) -> Result<(), anyhow::Error> {
         self.socket.write_all(content.as_bytes()).await?;
         tokio::time::timeout(Duration::from_secs(TIMEOUT_IN_SECS), self.socket.flush()).await??;
-
         Ok(())
     }
 
