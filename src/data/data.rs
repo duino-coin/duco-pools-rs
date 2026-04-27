@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
-static TIMEOUT_IN_SECS: u64 = 300;
+static TIMEOUT_IN_SECS: u64 = 90; // it's 90s in the js pools
 
 #[derive(Debug, Clone)]
 pub struct ConnectionClosed;
