@@ -1,4 +1,3 @@
-use std::cmp::min;
 use crate::mining;
 use log::info;
 use serde::Serialize;

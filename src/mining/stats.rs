@@ -12,8 +12,6 @@ pub struct MinerStat {
     pub accepted_shares: u64,
     #[serde(rename = "r")]
     pub rejected_shares: u64,
-    #[serde(rename = "c")]
-    pub kolka_drop: f32,
     #[serde(rename = "al")]
     pub algorithm: String,
     #[serde(rename = "d")]
@@ -38,7 +36,7 @@ pub struct MinerStat {
     #[serde(rename = "rw")]
     pub reward: f32,
     pub ip: String, // still annoying..
-    #[serde(skip_serializing, skip_deserializing)]
+    #[serde(rename = "c")]
     pub amount_of_workers: f32, // it's actually the id for the current worker (read: nth worker)
     #[serde(skip_serializing, skip_deserializing)]
     pub last_share_reset: u64,

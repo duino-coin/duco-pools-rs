@@ -80,14 +80,6 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
 pub fn handle_close(conn: &mut Connection) {
     mining::mining::MINER_STATS.remove(&conn.id);
 
-    // obsolete, for now..
-    // mining::mining::WORKERS
-    //     .entry(conn.ip.clone())
-    //     .and_modify(|w| *w -= 1f32);
-    // let opt = mining::mining::WORKERS.get(&conn.ip);
-    // if opt.is_some() && *opt.unwrap().value() <= 0f32 {
-    //     mining::mining::WORKERS.remove(&conn.ip);
-    // }
     let worker_remove = if conn.miner_stat.is_req_diff_esp32 { 0.5 } else { 1f32 };
     
     mining::mining::USR_WORKERS
@@ -101,7 +93,7 @@ pub fn handle_close(conn: &mut Connection) {
             mining::mining::RELEGATION_MAP.remove(&conn.username);
         } else {
             if conn.miner_stat.amount_of_workers <= value {
-                let id = conn.miner_stat.amount_of_workers.ceil() as u16;
+                let id = conn.miner_stat.amount_of_workers;
                 mining::mining::RELEGATION_MAP
                     .entry(conn.username.clone())
                     .and_modify(|x| x.push(id))

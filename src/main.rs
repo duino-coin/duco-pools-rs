@@ -25,7 +25,6 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-// use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 pub static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
@@ -107,7 +106,8 @@ async fn main() {
     let mut sys_clone = sys.clone();
     let sync_thread = tokio::spawn(async move {
         info!("Starting sync thread..");
-        #[cfg(not(debug_assertions))]
+        // only start a sync thread if: we want dummy syncs or we are in release mode
+        #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
         {
             let config = crate::CONFIG.get().unwrap();
             let pool_reward_sync_factor = (3600f64 / config.sync_time as f64).ceil() as u64;
@@ -201,6 +201,7 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                         // e.g. either the miner disconnects OR the token is cancelled
                         tokio::select! {
                             () = async move {
+                                // TODO: determine whether we can reduce this to 3 bytes (u8 has 256 ints; 3 positions => 256^3 ~= 16.7 million possible combinations), it only saves around 5-10 kilobytes though
                                 let mut bytes = [0; 8];
                                 rand::rng().fill_bytes(&mut bytes);
                                 let id = hex::encode(&bytes);
@@ -213,6 +214,7 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                                     Ok(_) => {}
                                     Err(err) => {
                                         let err_str = err.to_string();
+                                        // info!("Connection closed: {:?}", err);
                                         // this is impl seriously is horrendous
                                         if !err_str.contains("Connection reset by peer") && !err_str.contains("Connection timed out")
                                             && !err_str.contains("Shutting down") && !err_str.contains("os error 10054") && !err_str.contains("Connection closed")
@@ -222,7 +224,9 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                                         }
                                     }
                                 };
+                                // info!("handle close");
                                 handler::handler::handle_close(&mut conn);
+                                // println!("{:?}", mining::mining::USR_WORKERS);
                                 // to drop the socket and (hopefully) close it
                                 drop(conn);
                                 // remove connection

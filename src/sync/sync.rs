@@ -272,44 +272,102 @@ pub async fn sync(
 
     SYNC_COUNT.fetch_add(1, Ordering::Relaxed);
     debug!("Syncing to {request_url}");
-    let client = reqwest::Client::new();
-    match client
-        .post(request_url)
-        .multipart(form)
-        .timeout(Duration::from_secs(config.timeout as u64))
-        .send()
-        .await
+    #[cfg(not(feature = "dummy_sync"))]
     {
-        Ok(res) => {
-            let status = res.status();
-            if status.is_success() {
-                // remove all balances we've already synced
-                mining::BALANCES_TO_UPDATE.retain(|key, _| !balances.contains_key(key));
-                {
-                    let mut block_lock = mining::GLOBAL_BLOCKS.lock().await;
-                    block_lock.clear();
-                    block_lock.shrink_to_fit();
-                }
-                drop(balances);
-                mining::BALANCES_TO_UPDATE.shrink_to_fit();
-                info!("Successfully synced {}", SYNC_COUNT.load(Ordering::Relaxed));
-                std::fs::remove_file(&reward_path)?; // so we don't accidentally sync the same thing twice
-                std::fs::remove_file(&worker_path)?;
-            } else {
-                warn!(
+        let client = reqwest::Client::new();
+        match client
+            .post(request_url)
+            .multipart(form)
+            .timeout(Duration::from_secs(config.timeout as u64))
+            .send()
+            .await
+        {
+            Ok(res) => {
+                let status = res.status();
+                if status.is_success() {
+                    // remove all balances we've already synced
+                    mining::BALANCES_TO_UPDATE.retain(|key, _| !balances.contains_key(key));
+                    {
+                        let mut block_lock = mining::GLOBAL_BLOCKS.lock().await;
+                        block_lock.clear();
+                        block_lock.shrink_to_fit();
+                    }
+                    drop(balances);
+                    mining::BALANCES_TO_UPDATE.shrink_to_fit();
+                    info!("Successfully synced {}", SYNC_COUNT.load(Ordering::Relaxed));
+                    std::fs::remove_file(&reward_path)?; // so we don't accidentally sync the same thing twice
+                    std::fs::remove_file(&worker_path)?;
+                } else {
+                    warn!(
                     "Failed to sync {}: {}",
                     SYNC_COUNT.load(Ordering::Relaxed),
                     res.text().await?
                 );
+                }
+            }
+            Err(err) => {
+                error!("Error while syncing: {}", err);
+                return Err(Box::new(err));
+            }
+        };
+    }
+    mining::USR_WORKERS.shrink_to_fit();
+
+    // with a standard sync delay of 15s, this is 300 seconds (or every 5 minutes)
+    let sync_count = SYNC_COUNT.load(Ordering::Relaxed);
+    // this is a dirty fix for the kolka_id "randomly" starting at a higher point..
+    if sync_count != 0 && sync_count % 20 == 0 {
+        // this entire thing roughly takes 150ms for 10k miners..
+        let mut mismatched = Vec::new();
+
+
+        let mut user_miner_count = HashMap::new();
+        let mut user_conn_ids = HashMap::new();
+        let mut total_connections = 0;
+        // let miner_stats_clone = mining::MINER_STATS.clone();
+
+        mining::MINER_STATS.iter().map(|x| (x.key().clone(), x.value().clone()))
+            .for_each(|(id, stats)|{
+                total_connections += 1;
+                *user_miner_count.entry(stats.username.clone()).or_insert(0f32) += if stats.is_req_diff_esp32 { 0.5 } else { 1.0 };
+                user_conn_ids.entry(stats.username).and_modify(|id_vec: &mut Vec<String>| id_vec.push(id.clone())).or_insert(vec![id]);
+            });
+
+
+        user_miner_count.into_iter().for_each(|(username, count)|{
+            if !mining::USR_WORKERS.contains_key(&username) || *mining::USR_WORKERS.get(&username).unwrap().value() != count {
+                mismatched.push(username.clone());
+                *mining::USR_WORKERS.entry(username).or_insert(count) = count;
+            }
+        });
+
+        info!("Readjusted {} miners' assignment", mismatched.len());
+        for username in mismatched {
+            // TODO: test
+            let mut current = 0.0;
+            if user_conn_ids.contains_key(&username) {
+                // iterate through every connection associated with this username
+                user_conn_ids.get(&username).unwrap().iter().for_each(|id|{
+                    // get the corresponding MinerStat struct
+                    mining::MINER_STATS.entry(id.to_string()).and_modify(|stat| {
+                        let worker_add;
+                        // determine the new kolka_id
+                       if stat.is_req_diff_esp32 {
+                           worker_add = 0.5;
+                       } else {
+                           worker_add = 1.0;
+                       }
+                        let id = current + worker_add;
+                        current += worker_add;
+                        // and set the new kolka id
+                        stat.amount_of_workers = id;
+                    });
+                })
             }
         }
-        Err(err) => {
-            error!("Error while syncing: {}", err);
-            return Err(Box::new(err));
-        }
-    };
-
-    mining::USR_WORKERS.shrink_to_fit();
+        
+        CONNECTIONS.store(total_connections, Ordering::Relaxed);
+    }
     // mining::WORKERS.shrink_to_fit();
 
     Ok(ip)

@@ -17,7 +17,7 @@ use tokio::sync::Mutex;
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
 
 pub static USR_WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
-pub static RELEGATION_MAP: LazyLock<DashMap<String, Vec<u16>>> = LazyLock::new(|| DashMap::new());
+pub static RELEGATION_MAP: LazyLock<DashMap<String, Vec<f32>>> = LazyLock::new(|| DashMap::new());
 pub static BALANCES_TO_UPDATE: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 
 pub static MINER_STATS: LazyLock<DashMap<String, MinerStat>> = LazyLock::new(|| DashMap::new());
@@ -140,22 +140,31 @@ pub async fn handle(
             conn.miner_stat.reject_shares = "Too many workers".to_string();
         }
 
-        if conn.miner_stat.amount_of_workers > user_workers {
-            // check if there a miner with a lower id disconnected
-            if RELEGATION_MAP.contains_key(&conn.miner_stat.username) {
-                let mut map_val = RELEGATION_MAP
-                    .entry(conn.miner_stat.username.clone())
-                    .or_default();
-                // getting an id out of the vec stored
-                let val = map_val.value_mut();
-                let id = val.pop();
-                if id.is_some() {
-                    conn.miner_stat.amount_of_workers = id.unwrap() as f32;
+        {
+            if conn.miner_stat.amount_of_workers > user_workers {
+                // check if there a miner with a lower id disconnected
+                if RELEGATION_MAP.contains_key(&conn.miner_stat.username) {
+                    let mut map_val = RELEGATION_MAP
+                        .entry(conn.miner_stat.username.clone())
+                        .or_default();
+                    // getting an id out of the vec stored
+                    let val = map_val.value_mut();
+                    let id_opt = val.pop();
+                    if id_opt.is_some() {
+                        let mut id = id_opt.unwrap();
+                        if !conn.miner_stat.is_req_diff_esp32
+                        {
+                            // this theoretically produces duplicate ids..
+                            // TODO: fix if "temp fix" in sync.rs is removed
+                            id = id.ceil();
+                        }
+                        conn.miner_stat.amount_of_workers = id;
+                    } else {
+                        conn.miner_stat.amount_of_workers = user_workers;
+                    }
                 } else {
                     conn.miner_stat.amount_of_workers = user_workers;
                 }
-            } else {
-                conn.miner_stat.amount_of_workers = user_workers;
             }
         }
 
@@ -464,7 +473,7 @@ pub async fn handle(
                 conn.miner_stat.last_min_shares = 0;
             }
 
-            conn.miner_stat.kolka_drop = conn.miner_stat.amount_of_workers;
+            // conn.miner_stat.kolka_drop = conn.miner_stat.amount_of_workers;
             conn.miner_stat.this_miner_chipid = this_miner_chipid.clone();
             conn.miner_stat.reward = reward;
             conn.miner_stat.ip = conn.ip.clone();
