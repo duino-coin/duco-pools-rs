@@ -17,7 +17,10 @@ use tokio::sync::Mutex;
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
 
 pub static USR_WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
+// TODO: determine whether needed
 pub static RELEGATION_MAP: LazyLock<DashMap<String, Vec<f32>>> = LazyLock::new(|| DashMap::new());
+// key = conn id, val = kolka id
+pub static SYNC_RELEGATION_MAP: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 pub static BALANCES_TO_UPDATE: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 
 pub static MINER_STATS: LazyLock<DashMap<String, MinerStat>> = LazyLock::new(|| DashMap::new());
@@ -140,8 +143,9 @@ pub async fn handle(
             conn.miner_stat.reject_shares = "Too many workers".to_string();
         }
 
+        // id adjustment
         {
-            if conn.miner_stat.amount_of_workers > user_workers {
+            if conn.miner_stat.amount_of_workers > user_workers && !SYNC_RELEGATION_MAP.contains_key(&conn.id){
                 // check if there a miner with a lower id disconnected
                 if RELEGATION_MAP.contains_key(&conn.miner_stat.username) {
                     let mut map_val = RELEGATION_MAP
@@ -166,6 +170,13 @@ pub async fn handle(
                     conn.miner_stat.amount_of_workers = user_workers;
                 }
             }
+            // if a sync process assigned a new id to the miner, set that one
+            if SYNC_RELEGATION_MAP.contains_key(&conn.id) {
+                let id = SYNC_RELEGATION_MAP.get(&conn.id).unwrap().value().clone();
+                conn.miner_stat.amount_of_workers = id;
+                SYNC_RELEGATION_MAP.remove(&conn.id);
+            }
+
         }
 
         random = rng().random_range(0u64..diff as u64 * 100u64) + 1;
@@ -424,9 +435,8 @@ pub async fn handle(
                 .entry(conn.username.clone())
                 .or_insert(0f32) += reward;
 
-            let cleaned_name = clean_name(&data[2]);
-
             miner_name = if data.len() >= 3 {
+                let cleaned_name = clean_name(&data[2]);
                 match cleaned_name.as_str() {
                     "" => "Unknown miner".to_string(),
                     _ => cleaned_name,

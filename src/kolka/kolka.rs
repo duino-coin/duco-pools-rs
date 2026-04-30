@@ -40,6 +40,7 @@ pub fn v1(
                 * kolka
                     .gpu_mining_percentage
                     .powi((amount_of_workers - 1.0) as i32));
+        
     } else if difficulty > kolka.highest_esp_diff {
         // PC
         output = 2f32
