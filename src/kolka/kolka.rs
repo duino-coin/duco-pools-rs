@@ -105,9 +105,9 @@ pub fn v3(sharetime: f32, expected_sharetime: u16, hashrate: f32) -> u32 {
     let deviation = sharetime / expected_sharetime as f32;
     const HASHRATE_SCALING_FACTOR: f32 = 0.28;
     if deviation < 0.9 {
-        new_diff_temp *= (1.0 + HASHRATE_SCALING_FACTOR);
+        new_diff_temp *= 1.0 + HASHRATE_SCALING_FACTOR;
     } else if deviation > 1.0 {
-        new_diff_temp *= (1.0 - HASHRATE_SCALING_FACTOR);
+        new_diff_temp *= 1.0 - HASHRATE_SCALING_FACTOR;
     }
     const MIN_DIFF: u32 = 5000;
     let mut new_diff = new_diff_temp as u32;

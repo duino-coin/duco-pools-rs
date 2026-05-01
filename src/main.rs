@@ -50,7 +50,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 async fn main() {
     env_logger::builder()
         .target(Target::Stdout)
-        .filter_level(LevelFilter::Debug)
+        .filter_level(LevelFilter::Info)
         .init();
 
     let mut config = cfg::config::load_config().unwrap();
