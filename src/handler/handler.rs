@@ -9,8 +9,9 @@ use std::process::Command;
 //const CMD: &str = "sudo ufw deny from ${ip} to any"; //ufw
 // const CMD: &str = ""; //none
 async fn ban_ip(ip: &str) -> Result<(), anyhow::Error> {
-    let command = &CONFIG.get().unwrap().firewall_cmd;
+    let mut command = CONFIG.get().unwrap().firewall_cmd.clone();
     if !command.is_empty() {
+        command = command.replace("${ip}", ip);
         let cmd_split = command.split(" ").collect::<Vec<&str>>();
         let cmd = cmd_split[0].trim();
         Command::new(cmd).args(&cmd_split[1..]).spawn()?;
@@ -47,7 +48,8 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
                 if ban.banned_usernames.contains(&username.to_string()) && conn.ip != "127.0.0.1" {
                     if !ban.banned_ips.contains(&conn.ip) {
                         ban_ip(&conn.ip).await?;
-                        ban.banned_ips.push(conn.ip.clone());
+                        // ban.banned_ips.push(conn.ip.clone());
+                        ban.banned_ips.insert(conn.ip.clone());
                         ban.save_bans().expect("failed to save config bans.json");
                     }
 

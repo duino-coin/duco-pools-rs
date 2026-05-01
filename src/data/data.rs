@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use crate::mining;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -106,16 +107,16 @@ impl LoginInfos {
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Bans {
     #[serde(rename = "bannedUsernames")]
-    pub banned_usernames: Vec<String>,
+    pub banned_usernames: HashSet<String>,
     #[serde(rename = "bannedIPs")]
-    pub banned_ips: Vec<String>,
+    pub banned_ips: HashSet<String>,
 }
 
 impl Bans {
     pub fn new() -> Self {
         Bans {
-            banned_usernames: vec![],
-            banned_ips: vec![],
+            banned_usernames: HashSet::new(),
+            banned_ips: HashSet::new(),
         }
     }
 

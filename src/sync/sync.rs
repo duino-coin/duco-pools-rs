@@ -6,7 +6,7 @@ use data::data::LoginInfos;
 use log::{debug, error, info, warn};
 use reqwest::multipart;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::exit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -155,7 +155,7 @@ async fn update_pool_rewards(config: &PoolConfig) -> Result<String, Box<dyn std:
 
     let response_data_bans = reqwest::get(format!("{}/bans.json", config.server_sync_url))
         .await?
-        .json::<Vec<String>>()
+        .json::<HashSet<String>>()
         .await?;
     bans.banned_usernames = response_data_bans;
 
@@ -240,7 +240,7 @@ pub async fn sync(
                 *current += worker_add;
                 mining::SYNC_RELEGATION_MAP.insert(id.to_string(), current.clone());
             });
-        
+
     }
 
     let mut sys = sys.lock().await;

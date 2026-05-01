@@ -39,7 +39,8 @@ pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<(
             async move {
                 if params.contains_key("key") {
                     let provided_key = params.get("key").unwrap();
-                    if provided_key == &dash_key_clone {
+                    // if provided_key == &dash_key_clone {
+                    if ct_eq(&provided_key, &dash_key_clone) {
                         let data_res = DataRes { workers: mining::mining::USR_WORKERS.clone(), miner_stats: mining::mining::MINER_STATS.clone() };
                         return Ok(warp::reply::json(&data_res));
                     }
@@ -53,4 +54,10 @@ pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<(
 
     let web = tokio::spawn(serve.run());
     web
+}
+
+// constant time equals check, prevents timing-based brute forcing
+fn ct_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() { return false; }
+    a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
