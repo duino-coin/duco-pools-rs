@@ -51,19 +51,17 @@ impl Connection {
             self.socket.flush().await?;
             Ok::<(), anyhow::Error>(())
         }).await??;
-        // tokio::time::timeout(TIMEOUT, self.socket.write_all(content.as_bytes())).await??;
-        // // self.socket.write_all(content.as_bytes()).await?;
-        // tokio::time::timeout(TIMEOUT, self.socket.flush()).await??;
         Ok(())
     }
 
     pub async fn read_to_string(&mut self) -> Result<Box<str>, anyhow::Error> {
         self.read_buf.clear();
         {
-            let mut reader = BufReader::new(&mut self.socket);
+            // 256 bytes should be plenty and we avoid allocating 8KB everytime we read
+            let mut reader = BufReader::with_capacity(256, &mut self.socket);
             let received = tokio::time::timeout(TIMEOUT, reader.fill_buf())
                 .await??;
-
+        
             if received.is_empty() {
                 return Err(ConnectionClosed.into());
             }
