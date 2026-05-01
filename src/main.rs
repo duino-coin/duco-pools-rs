@@ -16,8 +16,7 @@ use mimalloc::MiMalloc;
 use rand::{Rng, RngCore};
 use std::net::SocketAddr;
 use std::process::{Command};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
 use sysinfo::System;
@@ -178,6 +177,7 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
     KOLKA.get_or_init(|| Kolka::new());
 
     let config = CONFIG.get().unwrap();
+    
     let server = TcpListener::bind(format!("{}:{}", config.host, config.port))
         .await
         .expect("failed to bind to address");
@@ -206,10 +206,10 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                             () = async move {
                                 let mut bytes = [0; 8];
                                 rand::rng().fill_bytes(&mut bytes);
-                                let id = hex::encode(&bytes);
+                                let id: Box<str> = hex::encode(&bytes).into_boxed_str();
                                 let mut conn = Connection::new(socket, addr, String::new(), id);
                                 match handler::handler::handle_connection(
-                                    &mut conn,
+                                    &mut conn
                                 )
                                     .await
                                 {
@@ -233,17 +233,9 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                                 drop(conn);
                                 // remove connection
                                 debug!("Pre-connection: {}", CONNECTIONS.load(Relaxed));
-                                // if CONNECTIONS.load(Relaxed) > 0
-                                // {
-                                //     CONNECTIONS.fetch_sub(1, Relaxed);
-                                // }
-                                let res = CONNECTIONS.fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
+                                let _ = CONNECTIONS.fetch_update(Relaxed, Relaxed, |v| {
                                     if v > 0 { Some(v - 1) } else { Some(0) }
                                 });
-                                if res.is_err()
-                                {
-                                    error!("Failed to update CONNECTIONS.");
-                                }
                                 debug!("After-connection: {}", CONNECTIONS.load(Relaxed));
                             } => {
 

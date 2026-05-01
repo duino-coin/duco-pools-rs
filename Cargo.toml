@@ -23,6 +23,7 @@ env_logger = "0.11.8"
 anyhow = "1.0.100"
 rlimit = "0.10.2"
 mimalloc = "0.1.48"
+compact_str = { version = "0.8", features = ["serde"] }
 tokio-util = { version = "0.7.16", features = ["rt"] }
 
 [profile.profiling]

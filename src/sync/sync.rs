@@ -247,11 +247,11 @@ pub async fn sync(
         config.base_sync_folder, config.pool_name
     );
 
-    let stats = mining::MINER_STATS.clone();
+    // let stats = mining::MINER_STATS.clone();
     // mining::MINER_STATS.retain(|key, _| !stats.contains_key(key));
     mining::MINER_STATS.shrink_to_fit();
-    let worker_content = serde_json::to_string(&stats)?;
-    drop(stats);
+    let worker_content = serde_json::to_string(&*mining::MINER_STATS)?;
+    // drop(stats);
 
     std::fs::write(&worker_path, &worker_content)?;
 
@@ -281,8 +281,9 @@ pub async fn sync(
     let workers = multipart::Part::text(worker_content)
         .file_name(format!("workers_{}.json", config.pool_name));
 
-    let balances = mining::BALANCES_TO_UPDATE.clone();
-    let rewards_content = serde_json::to_string(&balances)?;
+    // let balances = mining::BALANCES_TO_UPDATE.clone();
+    let balance_keys: Vec<String> = mining::BALANCES_TO_UPDATE.iter().map(|e| e.key().clone()).collect();
+    let rewards_content = serde_json::to_string(&*mining::BALANCES_TO_UPDATE)?;
 
     std::fs::write(&reward_path, &rewards_content)?;
 
@@ -309,13 +310,16 @@ pub async fn sync(
                 let status = res.status();
                 if status.is_success() {
                     // remove all balances we've already synced
-                    mining::BALANCES_TO_UPDATE.retain(|key, _| !balances.contains_key(key));
+                    // mining::BALANCES_TO_UPDATE.retain(|key, _| !balance_keys.contains(key));
+                    balance_keys.iter().for_each(|key| {
+                        mining::BALANCES_TO_UPDATE.remove(key);
+                    });
                     {
                         let mut block_lock = mining::GLOBAL_BLOCKS.lock().await;
                         block_lock.clear();
                         block_lock.shrink_to_fit();
                     }
-                    drop(balances);
+                    // drop(balances);
                     mining::BALANCES_TO_UPDATE.shrink_to_fit();
                     info!("Successfully synced {}", SYNC_COUNT.load(Ordering::Relaxed));
                     std::fs::remove_file(&reward_path)?; // so we don't accidentally sync the same thing twice

@@ -1,4 +1,3 @@
-use std::cmp::{Ordering};
 use crate::data::data::Connection;
 use crate::{mining, BANS, CONFIG};
 use log::{debug, warn};
@@ -84,7 +83,7 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
 
 pub fn handle_close(conn: &mut Connection) {
     debug!("{} Handling close", conn.id);
-    mining::mining::MINER_STATS.remove(&conn.id);
+    mining::mining::MINER_STATS.remove(&*conn.id);
 
     let should_remove = {
         let mut alloc = match USR_WORKERS_ALLOC.get_mut(&conn.username) {
@@ -106,4 +105,3 @@ pub fn handle_close(conn: &mut Connection) {
 
     debug!("Handling after-close");
 }
-

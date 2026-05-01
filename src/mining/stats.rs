@@ -1,9 +1,10 @@
+use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct MinerStat {
     #[serde(rename = "u")]
-    pub username: String, // this is stupid..
+    pub username: CompactString, // this is stupid..
     #[serde(rename = "h")]
     pub hashrate: f32,
     #[serde(rename = "s")]
@@ -13,29 +14,29 @@ pub struct MinerStat {
     #[serde(rename = "r")]
     pub rejected_shares: u64,
     #[serde(rename = "al")]
-    pub algorithm: String,
+    pub algorithm: CompactString,
     #[serde(rename = "d")]
     pub difficulty: u32,
     #[serde(rename = "p")]
-    pub pool_name: String,
+    pub pool_name: CompactString,
     #[serde(rename = "sft")]
-    pub software: String,
-    pub id: String,
+    pub software: CompactString,
+    pub id: CompactString,
     #[serde(rename = "wd")]
-    pub wallet_id: String,
+    pub wallet_id: CompactString,
     #[serde(rename = "k")]
-    pub this_miner_chipid: String, // this_miner_chipid (whatever this is)
+    pub this_miner_chipid: CompactString, // this_miner_chipid (whatever this is)
     #[serde(rename = "pw")]
-    pub password: String,
+    pub password: CompactString,
     #[serde(rename = "ls")]
     pub last_min_shares: u16, // if it exceeds that would be ~1.1k shares per SECOND..
     #[serde(rename = "it")]
-    pub iot_reading: String,
+    pub iot_reading: CompactString,
     #[serde(rename = "pg")]
     pub ping: f32,
     #[serde(rename = "rw")]
     pub reward: f32,
-    pub ip: String, // still annoying..
+    pub ip: CompactString, // still annoying..
     #[serde(rename = "c")]
     pub amount_of_workers: f32, // it's actually the id for the current worker (read: nth worker)
     #[serde(skip_serializing, skip_deserializing)]
@@ -43,9 +44,9 @@ pub struct MinerStat {
     #[serde(skip_serializing, skip_deserializing)]
     pub share_times_list: Vec<f32>,
     #[serde(skip_serializing, skip_deserializing)]
-    pub reject_shares: String,
+    pub reject_shares: CompactString,
     #[serde(skip_serializing, skip_deserializing)]
-    pub override_diff: String,
+    pub override_diff: CompactString,
     #[serde(skip_serializing, skip_deserializing)]
     pub is_req_diff_esp32: bool, // because "ESP32" only adds 0.5..
 }

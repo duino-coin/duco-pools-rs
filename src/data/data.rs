@@ -26,12 +26,14 @@ pub struct Connection {
     // pub addr: SocketAddr,
     pub ip: String,
     pub username: String,
-    pub id: String,
+    pub id: Box<str>,
     pub miner_stat: mining::stats::MinerStat,
+    // Reusable buffer for reads — avoids re-allocating on every read_to_string call
+    read_buf: Vec<u8>,
 }
 
 impl Connection {
-    pub fn new(socket: TcpStream, addr: SocketAddr, username: String, id: String) -> Self {
+    pub fn new(socket: TcpStream, addr: SocketAddr, username: String, id: Box<str>) -> Self {
         Connection {
             socket,
             // addr,
@@ -39,6 +41,7 @@ impl Connection {
             username,
             id,
             miner_stat: Default::default(),
+            read_buf: Vec::with_capacity(128),
         }
     }
 
@@ -54,36 +57,40 @@ impl Connection {
         Ok(())
     }
 
-    pub async fn read(&mut self) -> Result<Vec<u8>, anyhow::Error> {
-        let mut reader = BufReader::new(&mut self.socket);
-        let received: Vec<u8> =
-            tokio::time::timeout(TIMEOUT, reader.fill_buf())
-                .await??
-                .to_vec();
-
-        if received.is_empty() {
-            return Err(ConnectionClosed.into());
-        }
-        reader.consume(received.len());
-
-        Ok(received)
-    }
-
     pub async fn read_to_string(&mut self) -> Result<Box<str>, anyhow::Error> {
-        let received = self.read().await?;
-        if received.is_empty() {
+        self.read_buf.clear();
+        {
+            let mut reader = BufReader::new(&mut self.socket);
+            let received = tokio::time::timeout(TIMEOUT, reader.fill_buf())
+                .await??;
+
+            if received.is_empty() {
+                return Err(ConnectionClosed.into());
+            }
+            let len = received.len();
+            self.read_buf.extend_from_slice(received);
+            reader.consume(len);
+        }
+
+        // Strip trailing newlines in-place (protocol uses \n as delimiter)
+        while self.read_buf.last() == Some(&b'\n') {
+            self.read_buf.pop();
+        }
+
+        if self.read_buf.is_empty() {
             return Err(ConnectionClosed.into());
         }
-        let data = String::from_utf8(received)
+
+        // Validate UTF-8 on the reused buffer and copy into Box<str>
+        let s = std::str::from_utf8(&self.read_buf)
             .map_err(|_| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    "Invalid UTF-8 data ".to_string() + self.username.as_str(),
+                    "Invalid UTF-8 data",
                 )
-            })
-            .map(|x| x.replace("\n", ""))?;
+            })?;
 
-        Ok(data.into_boxed_str())
+        Ok(s.into())
     }
 }
 
