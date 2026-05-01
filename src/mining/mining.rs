@@ -12,16 +12,16 @@ use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
-use dashmap::mapref::one::Ref;
 use tokio::sync::Mutex;
-use crate::sync::sync::Difficulty;
+use crate::mining::id_allocator::WorkerAllocator;
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
 
-pub static USR_WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
+// pub static USR_WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
+pub static USR_WORKERS_ALLOC: LazyLock<DashMap<String, WorkerAllocator>> = LazyLock::new(|| DashMap::new());
 // TODO: determine whether needed
-pub static RELEGATION_MAP: LazyLock<DashMap<String, Vec<f32>>> = LazyLock::new(|| DashMap::new());
+// pub static RELEGATION_MAP: LazyLock<DashMap<String, Vec<f32>>> = LazyLock::new(|| DashMap::new());
 // key = conn id, val = kolka id
-pub static SYNC_RELEGATION_MAP: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
+// pub static SYNC_RELEGATION_MAP: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 pub static BALANCES_TO_UPDATE: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
 
 pub static MINER_STATS: LazyLock<DashMap<String, MinerStat>> = LazyLock::new(|| DashMap::new());
@@ -82,19 +82,20 @@ pub async fn handle(
             }
             diff = kolka::kolka::get_diff(&req_difficulty);
 
-            let mut worker_add = 1f32;
+            // let mut worker_add = 1f32;
             // why??
             if req_difficulty == "ESP32" {
-                worker_add = 0.5;
+                // worker_add = 0.5;
                 conn.miner_stat.is_req_diff_esp32 = true;
             }
-            debug!("{}: Worker add: {worker_add}, amt of workers: {}", conn.id, get_user_workers(&conn.username));
-            let val = USR_WORKERS.entry(conn.username.clone()).and_modify(|x| *x += worker_add).or_insert(worker_add);
-            let kolka_id = *val.value();
-            // *USR_WORKERS.entry(conn.username.clone()).or_insert(0f32) += worker_add;
-
+            let mut alloc = USR_WORKERS_ALLOC.entry(conn.username.clone()).or_default();
+            let kolka_id = alloc.allocate(conn.miner_stat.is_req_diff_esp32);
+            // debug!("{}: Worker add: {worker_add}, amt of workers: {}", conn.id, get_user_workers(&conn.username));
+            // let val = USR_WORKERS.entry(conn.username.clone()).and_modify(|x| *x += worker_add).or_insert(worker_add);
+            // let kolka_id = *val.value();
+  
             conn.miner_stat.amount_of_workers = kolka_id;
-            drop(val);
+            // drop(val);
             debug!("{}, Assigned {}", conn.id, conn.miner_stat.amount_of_workers);
         } else {
             read = conn.read_to_string().await?;
@@ -150,37 +151,42 @@ pub async fn handle(
 
         // id adjustment
         {
-            if conn.miner_stat.amount_of_workers > user_workers && !SYNC_RELEGATION_MAP.contains_key(&conn.id){
-                // check if there a miner with a lower id disconnected
-                if RELEGATION_MAP.contains_key(&conn.miner_stat.username) {
-                    let mut map_val = RELEGATION_MAP
-                        .entry(conn.miner_stat.username.clone())
-                        .or_default();
-                    // getting an id out of the vec stored
-                    let val = map_val.value_mut();
-                    let id_opt = val.pop();
-                    if id_opt.is_some() {
-                        let mut id = id_opt.unwrap();
-                        if !conn.miner_stat.is_req_diff_esp32
-                        {
-                            // this theoretically produces duplicate ids..
-                            // TODO: fix if "temp fix" in sync.rs is removed
-                            id = id.ceil();
-                        }
-                        conn.miner_stat.amount_of_workers = id;
-                    } else {
-                        conn.miner_stat.amount_of_workers = user_workers;
-                    }
-                } else {
-                    conn.miner_stat.amount_of_workers = user_workers;
+            if let Some(mut alloc) = USR_WORKERS_ALLOC.get_mut(&conn.username) {
+                if let Some(new_id) = alloc.try_recycle(conn.miner_stat.amount_of_workers, conn.miner_stat.is_req_diff_esp32) {
+                    conn.miner_stat.amount_of_workers = new_id;
                 }
             }
-            // if a sync process assigned a new id to the miner, set that one
-            if SYNC_RELEGATION_MAP.contains_key(&conn.id) {
-                let id = SYNC_RELEGATION_MAP.get(&conn.id).unwrap().value().clone();
-                conn.miner_stat.amount_of_workers = id;
-                SYNC_RELEGATION_MAP.remove(&conn.id);
-            }
+            // if conn.miner_stat.amount_of_workers > user_workers && !SYNC_RELEGATION_MAP.contains_key(&conn.id){
+            //     // check if there a miner with a lower id disconnected
+            //     if RELEGATION_MAP.contains_key(&conn.miner_stat.username) {
+            //         let mut map_val = RELEGATION_MAP
+            //             .entry(conn.miner_stat.username.clone())
+            //             .or_default();
+            //         // getting an id out of the vec stored
+            //         let val = map_val.value_mut();
+            //         let id_opt = val.pop();
+            //         if id_opt.is_some() {
+            //             let mut id = id_opt.unwrap();
+            //             if !conn.miner_stat.is_req_diff_esp32
+            //             {
+            //                 // this theoretically produces duplicate ids..
+            //                 // TODO: fix if "temp fix" in sync.rs is removed
+            //                 id = id.ceil();
+            //             }
+            //             conn.miner_stat.amount_of_workers = id;
+            //         } else {
+            //             conn.miner_stat.amount_of_workers = user_workers;
+            //         }
+            //     } else {
+            //         conn.miner_stat.amount_of_workers = user_workers;
+            //     }
+            // }
+            // // if a sync process assigned a new id to the miner, set that one
+            // if SYNC_RELEGATION_MAP.contains_key(&conn.id) {
+            //     let id = SYNC_RELEGATION_MAP.get(&conn.id).unwrap().value().clone();
+            //     conn.miner_stat.amount_of_workers = id;
+            //     SYNC_RELEGATION_MAP.remove(&conn.id);
+            // }
 
         }
 
@@ -532,14 +538,20 @@ fn avg_from_array(share_times_list: &Vec<f32>) -> f32 {
 fn perc_diff(hashrate: f32, hashrate_calc: f32) -> f32 {
     (100f32 * ((hashrate - hashrate_calc) / ((hashrate + hashrate_calc) / 2f32)).abs()).floor()
 }
-fn get_user_workers(username: &String) -> f32 {
-    match USR_WORKERS.get(username) {
-        None => {
-            USR_WORKERS.insert(username.to_owned(), 0f32);
-            0f32
-        }
-        Some(some) => some.value().clone(),
-    }
+// fn get_user_workers(username: &String) -> f32 {
+//     match USR_WORKERS.get(username) {
+//         None => {
+//             USR_WORKERS.insert(username.to_owned(), 0f32);
+//             0f32
+//         }
+//         Some(some) => some.value().clone(),
+//     }
+// }
+fn get_user_workers(username: &str) -> f32 {
+    USR_WORKERS_ALLOC
+        .get(username)
+        .map(|a| a.active_workers())
+        .unwrap_or(0.0)
 }
 
 fn check_workers(max: f32, config: &PoolConfig) -> bool {

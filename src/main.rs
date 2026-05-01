@@ -15,7 +15,7 @@ use log::{debug, error, info, LevelFilter};
 use mimalloc::MiMalloc;
 use rand::{Rng, RngCore};
 use std::net::SocketAddr;
-use std::process::{exit, Command};
+use std::process::{Command};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, LazyLock, OnceLock};
@@ -204,7 +204,6 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                         // e.g. either the miner disconnects OR the token is cancelled
                         tokio::select! {
                             () = async move {
-                                // TODO: determine whether we can reduce this to 3 bytes (u8 has 256 ints; 3 positions => 256^3 ~= 16.7 million possible combinations), it only saves around 5-10 kilobytes though
                                 let mut bytes = [0; 8];
                                 rand::rng().fill_bytes(&mut bytes);
                                 let id = hex::encode(&bytes);

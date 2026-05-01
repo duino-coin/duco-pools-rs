@@ -176,27 +176,27 @@ pub async fn sync(
     }
 
     // with a standard sync delay of 15s, this is 300 seconds (or every 5 minutes)
-    let sync_count = SYNC_COUNT.load(Ordering::Relaxed);
-    // this is a dirty fix for the kolka_id "randomly" starting at a higher point..
-    if sync_count != 0 && sync_count % 10 == 0 {
-        let mut current_id_map: HashMap<String, f32> = HashMap::new();
+    // let sync_count = SYNC_COUNT.load(Ordering::Relaxed);
+    // // this is a dirty fix for the kolka_id "randomly" starting at a higher point..
+    // if sync_count != 0 && sync_count % 10 == 0 {
+    //     let mut current_id_map: HashMap<String, f32> = HashMap::new();
 
-        mining::MINER_STATS.iter().map(|x| (x.key().clone(), x.value().clone()))
-            .for_each(|(id, stat)|{
+    //     mining::MINER_STATS.iter().map(|x| (x.key().clone(), x.value().clone()))
+    //         .for_each(|(id, stat)|{
 
-                let worker_add;
-                // determine the new kolka_id
-                if stat.is_req_diff_esp32 {
-                    worker_add = 0.5;
-                } else {
-                    worker_add = 1.0;
-                }
-                let current = current_id_map.entry(stat.username.clone()).or_insert(0.0);
-                *current += worker_add;
-                mining::SYNC_RELEGATION_MAP.insert(id.to_string(), current.clone());
-            });
+    //             let worker_add;
+    //             // determine the new kolka_id
+    //             if stat.is_req_diff_esp32 {
+    //                 worker_add = 0.5;
+    //             } else {
+    //                 worker_add = 1.0;
+    //             }
+    //             let current = current_id_map.entry(stat.username.clone()).or_insert(0.0);
+    //             *current += worker_add;
+    //             mining::SYNC_RELEGATION_MAP.insert(id.to_string(), current.clone());
+    //         });
 
-    }
+    // }
 
     let mut sys = sys.lock().await;
     let ip = match get_pool_ip(&config).await {
@@ -335,7 +335,8 @@ pub async fn sync(
             }
         };
     }
-    mining::USR_WORKERS.shrink_to_fit();
+    mining::USR_WORKERS_ALLOC.shrink_to_fit();
+    // mining::USR_WORKERS.shrink_to_fit();
     // mining::WORKERS.shrink_to_fit();
 
     Ok(ip)

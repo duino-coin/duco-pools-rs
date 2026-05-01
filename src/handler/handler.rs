@@ -1,8 +1,9 @@
-use std::cmp::Ordering;
+use std::cmp::{Ordering};
 use crate::data::data::Connection;
 use crate::{mining, BANS, CONFIG};
 use log::{debug, warn};
 use std::process::Command;
+use crate::mining::mining::USR_WORKERS_ALLOC;
 
 //const CMD: &str = "csf -td ${ip}"; //csf
 //const CMD: &str = "iptables -A INPUT -s ${ip} -j DROP"; //iptables
@@ -82,62 +83,27 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
 }
 
 pub fn handle_close(conn: &mut Connection) {
-    let amt = match mining::mining::USR_WORKERS
-        .get(&conn.username) {
-        None => {0f32}
-        Some(ok) => {*ok.value()}
-    };
-    debug!("{} Handling close ({amt})", conn.id);
+    debug!("{} Handling close", conn.id);
     mining::mining::MINER_STATS.remove(&conn.id);
 
-    let worker_remove = if conn.miner_stat.is_req_diff_esp32 { 0.5 } else { 1f32 };
-    
-    mining::mining::USR_WORKERS
-        .entry(conn.username.clone())
-        .and_modify(|w| *w -= worker_remove);
-    let opt = mining::mining::USR_WORKERS.get(&conn.username);
-    if opt.is_some() {
-        let value = *opt.unwrap().value();
-        if value <= 0f32 {
-            debug!("Removed {}", conn.username);
-            mining::mining::USR_WORKERS.remove(&conn.username);
-            mining::mining::RELEGATION_MAP.remove(&conn.username);
-        } else {
-            if conn.miner_stat.amount_of_workers <= value {
-                let id = conn.miner_stat.amount_of_workers;
-                mining::mining::RELEGATION_MAP
-                    .entry(conn.username.clone())
-                    .and_modify(|x| {
-                        x.push(id);
-                        // sort smallest to biggest
-                        x.sort_by(|a, b| cmp_f32(a, b));
-                        // reverse to it's biggest to smallest, so we always get the lowest id with .pop()
-                        x.reverse();
-                    })
-                    .or_insert(vec![id]);
-            }
-        }
-    }
-    let amt = match mining::mining::USR_WORKERS
-        .get(&conn.username) {
-        None => {0f32}
-        Some(ok) => {ok.value().clone()}
+    let should_remove = {
+        let mut alloc = match USR_WORKERS_ALLOC.get_mut(&conn.username) {
+            Some(a) => a,
+            None => return,
+        };
+        alloc.release(
+            conn.miner_stat.amount_of_workers,
+            conn.miner_stat.is_req_diff_esp32,
+        );
+        alloc.is_empty()
     };
-    debug!("Handling after-close ({amt})");
+    // drop the RefMut before removing, so we don't deadlock
+
+    if should_remove {
+        USR_WORKERS_ALLOC.remove(&conn.username);
+        debug!("Removed {}", conn.username);
+    }
+
+    debug!("Handling after-close");
 }
 
-// stolen from stackoverflow
-fn cmp_f32(a: &f32, b: &f32) -> Ordering {
-    if a.is_nan() {
-        return Ordering::Greater;
-    }
-    if b.is_nan() {
-        return Ordering::Less;
-    }
-    if a < b {
-        return Ordering::Less;
-    } else if a > b {
-        return Ordering::Greater;
-    }
-    Ordering::Equal
-}

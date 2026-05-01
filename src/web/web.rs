@@ -15,7 +15,7 @@ struct HttpRes {
 
 #[derive(Serialize)]
 struct DataRes {
-    workers: DashMap<String, f32>,
+    workers: DashMap<String, mining::id_allocator::WorkerAllocator>,
     miner_stats: DashMap<String, MinerStat>
 }
 
@@ -41,7 +41,7 @@ pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<(
                     let provided_key = params.get("key").unwrap();
                     // if provided_key == &dash_key_clone {
                     if ct_eq(&provided_key, &dash_key_clone) {
-                        let data_res = DataRes { workers: mining::mining::USR_WORKERS.clone(), miner_stats: mining::mining::MINER_STATS.clone() };
+                        let data_res = DataRes { workers: mining::mining::USR_WORKERS_ALLOC.clone(), miner_stats: mining::mining::MINER_STATS.clone() };
                         return Ok(warp::reply::json(&data_res));
                     }
                 }
