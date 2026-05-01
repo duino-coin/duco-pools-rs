@@ -248,8 +248,7 @@ pub async fn sync(
     );
 
     let stats = mining::MINER_STATS.clone();
-    // keep everything we won't sync
-    mining::MINER_STATS.retain(|key, _| !stats.contains_key(key));
+    // mining::MINER_STATS.retain(|key, _| !stats.contains_key(key));
     mining::MINER_STATS.shrink_to_fit();
     let worker_content = serde_json::to_string(&stats)?;
     drop(stats);
