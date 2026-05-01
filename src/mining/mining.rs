@@ -12,8 +12,9 @@ use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+use dashmap::mapref::one::Ref;
 use tokio::sync::Mutex;
-
+use crate::sync::sync::Difficulty;
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
 
 pub static USR_WORKERS: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
@@ -350,9 +351,18 @@ pub async fn handle(
                 hashrate,
             );
         }
-        let diff_obj = pool_rewards
-            .get(&req_difficulty)
-            .expect("Missing pool reward");
+        let diff_obj = match pool_rewards
+            .get(&req_difficulty) {
+            None => {
+                let ret = if !conn.miner_stat.override_diff.is_empty() {
+                    pool_rewards.get(&conn.miner_stat.override_diff).expect(&format!("failed to get diff {}", conn.miner_stat.override_diff))
+                } else {
+                    pool_rewards.get("NET").expect("failed to get diff NET")
+                };
+                ret
+            }
+            Some(ok) => {ok}
+        };
 
         let reward_div = diff_obj.reward;
         let max_hashrate = diff_obj.max_hashrate;

@@ -24,6 +24,7 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
     let config = CONFIG.get().unwrap();
     conn.write(&format!("{}\n", config.server_version)).await?;
 
+    // this loop only handles one JOB requests, however, it is necessary so the user can first request the MOTD
     loop {
         let data = conn.read_to_string().await?;
         let data_split = data.trim().split(",").collect::<Box<[&str]>>();

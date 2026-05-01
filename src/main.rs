@@ -62,6 +62,7 @@ async fn main() {
         cfg::config::save_config(&config);
     }
     let mut restarter: Option<JoinHandle<()>> = None;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     if config.auto_restart > 0 && !config.restart_script.is_empty() {
         info!(
             "Auto restart is enabled. Restarting every {} minutes.",
@@ -69,8 +70,9 @@ async fn main() {
         );
         let restart_delay = (config.auto_restart.clone() * 60) as u64;
         let script_path = config.restart_script.clone();
-
+        let tx_clone = tx.clone();
         restarter = Some(tokio::spawn(async move {
+            let tx = tx_clone;
             loop {
                 let mut is_error = false;
                 tokio::time::sleep(Duration::from_secs(restart_delay)).await;
@@ -84,7 +86,8 @@ async fn main() {
                 };
                 // don't exit if the replacement server couldn't be spawned
                 if !is_error {
-                    exit(0);
+                    tx.send("s".to_owned()).unwrap();
+                    // exit(0);
                 }
             }
         }));
@@ -143,7 +146,7 @@ async fn main() {
             }
         }
     });
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
     ctrlc::set_handler(move || {
         tx.send("s".to_owned()).unwrap();
     })
