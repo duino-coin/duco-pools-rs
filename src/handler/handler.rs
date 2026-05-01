@@ -84,7 +84,7 @@ pub fn handle_close(conn: &mut Connection) {
     let amt = match mining::mining::USR_WORKERS
         .get(&conn.username) {
         None => {0f32}
-        Some(ok) => {ok.value().clone()}
+        Some(ok) => {*ok.value()}
     };
     debug!("{} Handling close ({amt})", conn.id);
     mining::mining::MINER_STATS.remove(&conn.id);

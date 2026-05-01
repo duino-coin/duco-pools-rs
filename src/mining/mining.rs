@@ -89,7 +89,7 @@ pub async fn handle(
             }
             debug!("{}: Worker add: {worker_add}, amt of workers: {}", conn.id, get_user_workers(&conn.username));
             let val = USR_WORKERS.entry(conn.username.clone()).and_modify(|x| *x += worker_add).or_insert(worker_add);
-            let kolka_id = val.value().clone();
+            let kolka_id = *val.value();
             // *USR_WORKERS.entry(conn.username.clone()).or_insert(0f32) += worker_add;
 
             conn.miner_stat.amount_of_workers = kolka_id;

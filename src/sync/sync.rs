@@ -179,51 +179,6 @@ pub async fn sync(
     let sync_count = SYNC_COUNT.load(Ordering::Relaxed);
     // this is a dirty fix for the kolka_id "randomly" starting at a higher point..
     if sync_count != 0 && sync_count % 10 == 0 {
-        // this entire thing roughly takes 150ms for 10k miners..
-        // let mut mismatched = Vec::new();
-        //
-        //
-        // let mut user_miner_count = HashMap::new();
-        // let mut user_conn_ids = HashMap::new();
-        let total_connections = mining::MINER_STATS.len();
-        // let miner_stats_clone = mining::MINER_STATS.clone();
-
-        // mining::MINER_STATS.iter().map(|x| (x.key().clone(), x.value().clone()))
-        //     .for_each(|(id, stats)|{
-        //         *user_miner_count.entry(stats.username.clone()).or_insert(0f32) += if stats.is_req_diff_esp32 { 0.5 } else { 1.0 };
-        //         user_conn_ids.entry(stats.username).and_modify(|id_vec: &mut Vec<String>| id_vec.push(id.clone())).or_insert(vec![id]);
-        //     });
-        //
-        //
-        // user_miner_count.into_iter().for_each(|(username, count)|{
-        //     if !mining::USR_WORKERS.contains_key(&username) || *mining::USR_WORKERS.get(&username).unwrap().value() != count {
-        //         mismatched.push(username.clone());
-        //         *mining::USR_WORKERS.entry(username).or_insert(count) = count;
-        //     }
-        // });
-
-        // info!("Readjusted {} miners' assignment", mismatched.len());
-        // for username in mismatched {
-        //     // TODO: test
-        //     let mut current = 0.0;
-        //     if user_conn_ids.contains_key(&username) {
-        //         // iterate through every connection associated with this username
-        //         user_conn_ids.get(&username).unwrap().iter().for_each(|id|{
-        //             // get the corresponding MinerStat struct
-        //             mining::MINER_STATS.entry(id.to_string()).and_modify(|stat| {
-        //                 let worker_add;
-        //                 // determine the new kolka_id
-        //                 if stat.is_req_diff_esp32 {
-        //                     worker_add = 0.5;
-        //                 } else {
-        //                     worker_add = 1.0;
-        //                 }
-        //                 current += worker_add;
-        //                 mining::SYNC_RELEGATION_MAP.insert(id.to_string(), current);
-        //             });
-        //         })
-        //     }
-        // }
         let mut current_id_map: HashMap<String, f32> = HashMap::new();
 
         mining::MINER_STATS.iter().map(|x| (x.key().clone(), x.value().clone()))
