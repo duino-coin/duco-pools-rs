@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
-static TIMEOUT_IN_SECS: u64 = 90; // it's 90s in the js pools
+static TIMEOUT: Duration = Duration::from_secs(90);// it's 90s in the js pools
 
 #[derive(Debug, Clone)]
 pub struct ConnectionClosed;
@@ -43,15 +43,16 @@ impl Connection {
     }
 
     pub async fn write(&mut self, content: &str) -> Result<(), anyhow::Error> {
-        self.socket.write_all(content.as_bytes()).await?;
-        tokio::time::timeout(Duration::from_secs(TIMEOUT_IN_SECS), self.socket.flush()).await??;
+        tokio::time::timeout(TIMEOUT, self.socket.write_all(content.as_bytes())).await??;
+        // self.socket.write_all(content.as_bytes()).await?;
+        tokio::time::timeout(TIMEOUT, self.socket.flush()).await??;
         Ok(())
     }
 
     pub async fn read(&mut self) -> Result<Vec<u8>, anyhow::Error> {
         let mut reader = BufReader::new(&mut self.socket);
         let received: Vec<u8> =
-            tokio::time::timeout(Duration::from_secs(TIMEOUT_IN_SECS), reader.fill_buf())
+            tokio::time::timeout(TIMEOUT, reader.fill_buf())
                 .await??
                 .to_vec();
 
