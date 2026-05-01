@@ -370,6 +370,7 @@ pub async fn handle(
 
             conn.write(&res).await?;
 
+            conn.miner_stat.reject_shares.clear();
             conn.miner_stat.rejected_shares += 1;
         } else if hashrate < min_hashrate as f32 {
             conn.miner_stat.override_diff = kolka::kolka::v2_reverse(&req_difficulty);
