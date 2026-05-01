@@ -87,10 +87,14 @@ pub async fn handle(
                 worker_add = 0.5;
                 conn.miner_stat.is_req_diff_esp32 = true;
             }
+            debug!("{}: Worker add: {worker_add}, amt of workers: {}", conn.id, get_user_workers(&conn.username));
+            let val = USR_WORKERS.entry(conn.username.clone()).and_modify(|x| *x += worker_add).or_insert(worker_add);
+            let kolka_id = val.value().clone();
+            // *USR_WORKERS.entry(conn.username.clone()).or_insert(0f32) += worker_add;
 
-            *USR_WORKERS.entry(conn.username.clone()).or_insert(0f32) += worker_add;
-
-            conn.miner_stat.amount_of_workers = get_user_workers(&conn.username);
+            conn.miner_stat.amount_of_workers = kolka_id;
+            drop(val);
+            debug!("{}, Assigned {}", conn.id, conn.miner_stat.amount_of_workers);
         } else {
             read = conn.read_to_string().await?;
 
@@ -224,7 +228,8 @@ pub async fn handle(
             .push(conn.miner_stat.share_time * 1.5);
 
         if conn.miner_stat.share_times_list.len() > 50 {
-            let _ = conn.miner_stat.share_times_list.pop();
+            // let _ = conn.miner_stat.share_times_list.pop();
+            conn.miner_stat.share_times_list.remove(0);
         }
 
         let mut wrong_reported_hashrate = false;
@@ -326,7 +331,7 @@ pub async fn handle(
 
         let avg_sharetime = avg_from_array(&conn.miner_stat.share_times_list);
         let actual_expected_share_time =
-            random / (diff as u64 * 100 + 1) * expected_share_time as u64;
+            random * expected_share_time as u64 / (diff as u64 * 100 + 1);
         if (conn.miner_stat.accepted_shares == 4
             || (
                 conn.miner_stat.accepted_shares > 4
@@ -411,7 +416,8 @@ pub async fn handle(
                 reward += config.block_reward;
 
                 let block_infos = BlockInfos::new(
-                    UNIX_EPOCH.duration_since(SystemTime::now())?.as_secs(),
+                    // UNIX_EPOCH.duration_since(SystemTime::now())?.as_secs(),
+                    SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
                     conn.username.clone(),
                     reward,
                     "DUCO-S1".to_string(),
@@ -518,8 +524,8 @@ fn perc_diff(hashrate: f32, hashrate_calc: f32) -> f32 {
 fn get_user_workers(username: &String) -> f32 {
     match USR_WORKERS.get(username) {
         None => {
-            USR_WORKERS.insert(username.to_owned(), 1f32);
-            1f32
+            USR_WORKERS.insert(username.to_owned(), 0f32);
+            0f32
         }
         Some(some) => some.value().clone(),
     }

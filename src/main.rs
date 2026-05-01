@@ -11,7 +11,7 @@ use crate::data::data::{Bans, Connection};
 use crate::kolka::kolka::Kolka;
 use dashmap::DashMap;
 use env_logger::Target;
-use log::{error, info, LevelFilter};
+use log::{debug, error, info, LevelFilter};
 use mimalloc::MiMalloc;
 use rand::{Rng, RngCore};
 use std::net::SocketAddr;
@@ -50,7 +50,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 async fn main() {
     env_logger::builder()
         .target(Target::Stdout)
-        .filter_level(LevelFilter::Info)
+        .filter_level(LevelFilter::Debug)
         .init();
 
     let mut config = cfg::config::load_config().unwrap();
@@ -214,7 +214,7 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                                     Ok(_) => {}
                                     Err(err) => {
                                         let err_str = err.to_string();
-                                        info!("Connection closed: {:?}", err);
+                                        debug!("Connection closed: {:?}", err);
                                         // this is impl seriously is horrendous
                                         if !err_str.contains("Connection reset by peer") && !err_str.contains("Connection timed out")
                                             && !err_str.contains("Shutting down") && !err_str.contains("os error 10054") && !err_str.contains("Connection closed")
@@ -230,7 +230,12 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                                 // to drop the socket and (hopefully) close it
                                 drop(conn);
                                 // remove connection
-                                CONNECTIONS.fetch_sub(1, Relaxed);
+                                debug!("Pre-connection: {}", CONNECTIONS.load(Relaxed));
+                                if CONNECTIONS.load(Relaxed) > 0
+                                {
+                                    CONNECTIONS.fetch_sub(1, Relaxed);
+                                }
+                                debug!("After-connection: {}", CONNECTIONS.load(Relaxed));
                             } => {
 
                             },

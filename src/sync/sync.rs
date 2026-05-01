@@ -240,14 +240,7 @@ pub async fn sync(
                 *current += worker_add;
                 mining::SYNC_RELEGATION_MAP.insert(id.to_string(), current.clone());
             });
-        mining::USR_WORKERS.iter_mut()
-            .for_each(|mut ref_item| {
-                let count = current_id_map.entry(ref_item.key().clone()).or_insert(0.0);
-                *ref_item.value_mut() = *count;
-        });
-        info!("Adjusting connections from {} to {total_connections}", CONNECTIONS.load(Ordering::Relaxed));
-
-        CONNECTIONS.store(total_connections, Ordering::Relaxed);
+        
     }
 
     let mut sys = sys.lock().await;

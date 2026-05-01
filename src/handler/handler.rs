@@ -1,6 +1,7 @@
+use std::cmp::Ordering;
 use crate::data::data::Connection;
 use crate::{mining, BANS, CONFIG};
-use log::warn;
+use log::{debug, warn};
 use std::process::Command;
 
 //const CMD: &str = "csf -td ${ip}"; //csf
@@ -78,6 +79,12 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
 }
 
 pub fn handle_close(conn: &mut Connection) {
+    let amt = match mining::mining::USR_WORKERS
+        .get(&conn.username) {
+        None => {0f32}
+        Some(ok) => {ok.value().clone()}
+    };
+    debug!("{} Handling close ({amt})", conn.id);
     mining::mining::MINER_STATS.remove(&conn.id);
 
     let worker_remove = if conn.miner_stat.is_req_diff_esp32 { 0.5 } else { 1f32 };
@@ -89,6 +96,7 @@ pub fn handle_close(conn: &mut Connection) {
     if opt.is_some() {
         let value = *opt.unwrap().value();
         if value <= 0f32 {
+            debug!("Removed {}", conn.username);
             mining::mining::USR_WORKERS.remove(&conn.username);
             mining::mining::RELEGATION_MAP.remove(&conn.username);
         } else {
@@ -96,9 +104,37 @@ pub fn handle_close(conn: &mut Connection) {
                 let id = conn.miner_stat.amount_of_workers;
                 mining::mining::RELEGATION_MAP
                     .entry(conn.username.clone())
-                    .and_modify(|x| x.push(id))
+                    .and_modify(|x| {
+                        x.push(id);
+                        // sort smallest to biggest
+                        x.sort_by(|a, b| cmp_f32(a, b));
+                        // reverse to it's biggest to smallest, so we always get the lowest id with .pop()
+                        x.reverse();
+                    })
                     .or_insert(vec![id]);
             }
         }
     }
+    let amt = match mining::mining::USR_WORKERS
+        .get(&conn.username) {
+        None => {0f32}
+        Some(ok) => {ok.value().clone()}
+    };
+    debug!("Handling after-close ({amt})");
+}
+
+// stolen from stackoverflow
+fn cmp_f32(a: &f32, b: &f32) -> Ordering {
+    if a.is_nan() {
+        return Ordering::Greater;
+    }
+    if b.is_nan() {
+        return Ordering::Less;
+    }
+    if a < b {
+        return Ordering::Less;
+    } else if a > b {
+        return Ordering::Greater;
+    }
+    Ordering::Equal
 }

@@ -100,16 +100,17 @@ pub fn v2_reverse(difficulty: &str) -> String {
     .to_string()
 }
 pub fn v3(sharetime: f32, expected_sharetime: u16, hashrate: f32) -> u32 {
-    let mut new_diff = ((hashrate / 100f32).floor() * expected_sharetime as f32).round() as u32;
+    let mut new_diff_temp = ((hashrate / 100f32).floor() * expected_sharetime as f32).round();
 
     let deviation = sharetime / expected_sharetime as f32;
     const HASHRATE_SCALING_FACTOR: f32 = 0.28;
     if deviation < 0.9 {
-        new_diff *= (1.0 + HASHRATE_SCALING_FACTOR).round() as u32;
+        new_diff_temp *= (1.0 + HASHRATE_SCALING_FACTOR);
     } else if deviation > 1.0 {
-        new_diff *= (1.0 - HASHRATE_SCALING_FACTOR).round() as u32;
+        new_diff_temp *= (1.0 - HASHRATE_SCALING_FACTOR);
     }
     const MIN_DIFF: u32 = 5000;
+    let mut new_diff = new_diff_temp as u32;
     new_diff = MIN_DIFF.max(new_diff);
 
     new_diff
