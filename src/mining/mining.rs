@@ -1,6 +1,7 @@
+use std::collections::VecDeque;
 use crate::cfg::config::PoolConfig;
 use crate::data::data::Connection;
-use crate::mining::stats::{BlockInfos, MinerStat};
+use crate::mining::stats::{BlockInfos, MinerStatSlim};
 use crate::{cfg, kolka, KOLKA, POOL_REWARDS};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -17,11 +18,11 @@ use tokio::sync::Mutex;
 use crate::mining::id_allocator::WorkerAllocator;
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
 
-pub static USR_WORKERS_ALLOC: LazyLock<DashMap<String, WorkerAllocator>> = LazyLock::new(|| DashMap::new());
+pub static USR_WORKERS_ALLOC: LazyLock<DashMap<CompactString, WorkerAllocator>> = LazyLock::new(|| DashMap::new());
 
-pub static BALANCES_TO_UPDATE: LazyLock<DashMap<String, f32>> = LazyLock::new(|| DashMap::new());
+pub static BALANCES_TO_UPDATE: LazyLock<DashMap<CompactString, f32>> = LazyLock::new(|| DashMap::new());
 
-pub static MINER_STATS: LazyLock<DashMap<String, MinerStat>> = LazyLock::new(|| DashMap::new());
+pub static MINER_STATS: LazyLock<DashMap<String, MinerStatSlim>> = LazyLock::new(|| DashMap::new());
 
 static LAST_BLOCK_HASH: LazyLock<Mutex<String>> = LazyLock::new(|| {
     let config = cfg::config::load_config().expect("failed to load config (static)");
@@ -48,7 +49,7 @@ pub async fn handle(
     // Reusable buffer — req_difficulty cycles through short fixed strings every iteration
     let mut req_difficulty = String::with_capacity(16);
     let mut this_miner_chipid = CompactString::default();
-    let mut miner_name;
+    // let mut miner_name;
     let mut expected_share_time = 0;
     let mut feedback_sent = SystemTime::now();
     let mut start_hashrate = -1f32;
@@ -85,7 +86,7 @@ pub async fn handle(
             if req_difficulty == "ESP32" {
                 conn.miner_stat.is_req_diff_esp32 = true;
             }
-            let mut alloc = USR_WORKERS_ALLOC.entry(conn.username.clone()).or_default();
+            let mut alloc = USR_WORKERS_ALLOC.entry(conn.miner_stat.username.clone()).or_default();
             let kolka_id = alloc.allocate(conn.miner_stat.is_req_diff_esp32);
   
             conn.miner_stat.amount_of_workers = kolka_id;
@@ -141,7 +142,7 @@ pub async fn handle(
             }
         }
 
-        let user_workers = get_user_workers(&conn.username);
+        let user_workers = get_user_workers(&conn.miner_stat.username);
 
         if check_workers(user_workers, &config) {
             conn.miner_stat.reject_shares = CompactString::const_new("Too many workers");
@@ -149,7 +150,7 @@ pub async fn handle(
 
         // id adjustment
         {
-            if let Some(mut alloc) = USR_WORKERS_ALLOC.get_mut(&conn.username) {
+            if let Some(mut alloc) = USR_WORKERS_ALLOC.get_mut(&conn.miner_stat.username) {
                 if let Some(new_id) = alloc.try_recycle(conn.miner_stat.amount_of_workers, conn.miner_stat.is_req_diff_esp32) {
                     conn.miner_stat.amount_of_workers = new_id;
                 }
@@ -164,23 +165,27 @@ pub async fn handle(
             random = 1;
         }
 
-        // used to lose the lock on LAST_BLOCK_HASH
+        // used so we don't keep the lock on LAST_BLOCK_HASH over a conn.write (+ to drop job_str implicitly)
         {
-            let last_block_hash = LAST_BLOCK_HASH.lock().await;
-            let mut hasher = Sha1::from(last_block_hash.as_str());
-            hasher.update(buffer.format(random).as_bytes());
-            new_hash = hasher.hexdigest();
+            // used to lose the lock on LAST_BLOCK_HASH
+            let job_str = {
+                let last_block_hash = LAST_BLOCK_HASH.lock().await;
+                let mut hasher = Sha1::from(last_block_hash.as_str());
+                hasher.update(buffer.format(random).as_bytes());
+                new_hash = hasher.hexdigest();
 
-            let diff_str = buffer.format(diff);
-            let mut job_str =
-                String::with_capacity(last_block_hash.len() + 1 + new_hash.len() + 1 + diff_str.len() + 1);
-            job_str.push_str(&last_block_hash);
-            job_str.push_str(",");
-            job_str.push_str(new_hash.as_str());
-            job_str.push_str(",");
-            job_str.push_str(diff_str);
-            job_str.push_str("\n");
+                let diff_str = buffer.format(diff);
+                let mut job_str =
+                    String::with_capacity(last_block_hash.len() + 1 + new_hash.len() + 1 + diff_str.len() + 1);
+                job_str.push_str(&last_block_hash);
+                job_str.push_str(",");
+                job_str.push_str(new_hash.as_str());
+                job_str.push_str(",");
+                job_str.push_str(diff_str);
+                job_str.push_str("\n");
 
+                job_str
+            };
             conn.write(&job_str).await?;
         }
 
@@ -198,11 +203,11 @@ pub async fn handle(
         // 1.5x to account that the average will be half the target (I don't know what this means, I copied the original comment)
         conn.miner_stat
             .share_times_list
-            .push(conn.miner_stat.share_time * 1.5);
+            .push_back(conn.miner_stat.share_time * 1.5);
 
         if conn.miner_stat.share_times_list.len() > 50 {
-            // let _ = conn.miner_stat.share_times_list.pop();
-            conn.miner_stat.share_times_list.remove(0);
+            // conn.miner_stat.share_times_list.remove(0);
+            conn.miner_stat.share_times_list.pop_front();
         }
 
         let mut wrong_reported_hashrate = false;
@@ -399,14 +404,14 @@ pub async fn handle(
                 let block_infos = BlockInfos::new(
                     // UNIX_EPOCH.duration_since(SystemTime::now())?.as_secs(),
                     SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-                    conn.username.clone(),
+                    conn.miner_stat.username.to_string(),
                     reward,
                     "DUCO-S1".to_string(),
                     new_hash.clone(),
                 );
                 GLOBAL_BLOCKS.lock().await.push(block_infos);
                 conn.write("BLOCK\n").await?;
-                info!("Block found by {}", conn.username);
+                info!("Block found by {}", conn.miner_stat.username);
             } else {
                 conn.write("GOOD\n").await?;
             }
@@ -419,19 +424,30 @@ pub async fn handle(
             && conn.miner_stat.accepted_shares % config.update_miners_stats_every as u64 == 0
         {
             *BALANCES_TO_UPDATE
-                .entry(conn.username.clone())
+                .entry(conn.miner_stat.username.clone())
                 .or_insert(0f32) += reward;
 
-            miner_name = if data.len() >= 3 {
-                let cleaned_name = clean_name(&data[2]);
-                match cleaned_name.as_str() {
-                    "" => "Unknown miner".to_string(),
-                    _ => cleaned_name,
+            // miner_name = if data.len() >= 3 {
+            //     let cleaned_name = clean_name(&data[2]);
+            //     match cleaned_name.as_str() {
+            //         "" => "Unknown miner".to_string(),
+            //         _ => cleaned_name,
+            //     }
+            // } else {
+            //     "Unknown miner".to_string()
+            // };
+            // conn.miner_stat.software = CompactString::from(&miner_name);
+            conn.miner_stat.software = CompactString::from(
+                if data.len() >= 3 {
+                    let cleaned_name = clean_name(&data[2]);
+                    match cleaned_name.as_str() {
+                        "" => "Unknown miner".to_string(),
+                        _ => cleaned_name,
+                    }
+                } else {
+                    "Unknown miner".to_string()
                 }
-            } else {
-                "Unknown miner".to_string()
-            };
-            conn.miner_stat.software = CompactString::from(&miner_name);
+            );
 
             let wallet_id = if data.len() >= 6 { &data[5] } else { "None" };
             conn.miner_stat.wallet_id = CompactString::from(wallet_id.replace("\n", ""));
@@ -473,10 +489,12 @@ pub async fn handle(
             // conn.miner_stat.kolka_drop = conn.miner_stat.amount_of_workers;
             conn.miner_stat.this_miner_chipid = this_miner_chipid.clone();
             conn.miner_stat.reward = reward;
-            conn.miner_stat.ip = CompactString::from(&conn.ip);
-            conn.miner_stat.username = CompactString::from(&conn.username);
+            // conn.miner_stat.ip = CompactString::from(&conn.ip);
+            // conn.miner_stat.username = CompactString::from(&conn.username);
             conn.miner_stat.pool_name = CompactString::from(&config.pool_name);
-            MINER_STATS.insert((*conn.id).to_string(), conn.miner_stat.clone());
+
+            let miner_stat_slim = conn.miner_stat.convert_slim();
+            MINER_STATS.insert((*conn.id).to_string(), miner_stat_slim);
 
             let mut last_block_hash = LAST_BLOCK_HASH.lock().await;
             last_block_hash.clear();
@@ -497,7 +515,7 @@ pub async fn handle(
     }
 }
 
-fn avg_from_array(share_times_list: &Vec<f32>) -> f32 {
+fn avg_from_array(share_times_list: &VecDeque<f32>) -> f32 {
     share_times_list.iter().sum::<f32>() / share_times_list.len() as f32
 }
 fn perc_diff(hashrate: f32, hashrate_calc: f32) -> f32 {

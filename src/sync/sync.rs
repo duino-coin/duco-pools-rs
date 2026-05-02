@@ -11,6 +11,7 @@ use std::process::exit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use compact_str::CompactString;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -282,7 +283,7 @@ pub async fn sync(
         .file_name(format!("workers_{}.json", config.pool_name));
 
     // let balances = mining::BALANCES_TO_UPDATE.clone();
-    let balance_keys: Vec<String> = mining::BALANCES_TO_UPDATE.iter().map(|e| e.key().clone()).collect();
+    let balance_keys: Vec<CompactString> = mining::BALANCES_TO_UPDATE.iter().map(|e| e.key().clone()).collect();
     let rewards_content = serde_json::to_string(&*mining::BALANCES_TO_UPDATE)?;
 
     std::fs::write(&reward_path, &rewards_content)?;

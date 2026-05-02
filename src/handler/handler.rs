@@ -2,6 +2,7 @@ use crate::data::data::Connection;
 use crate::{mining, BANS, CONFIG};
 use log::{debug, warn};
 use std::process::Command;
+use compact_str::CompactString;
 use crate::mining::mining::USR_WORKERS_ALLOC;
 
 //const CMD: &str = "csf -td ${ip}"; //csf
@@ -29,7 +30,7 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
         let data = conn.read_to_string().await?;
         let data_split = data.trim().split(",").collect::<Box<[&str]>>();
 
-        if conn.ip.is_empty() || data_split.len() > 6
+        if conn.miner_stat.ip.is_empty() || data_split.len() > 6
         // no clue what '!conn.remoteAddr' is supposed to do
         {
             conn.write("BAD,Incorrect data\n").await?;
@@ -40,17 +41,17 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
         // block so we lose the lock on the mutex
         {
             let mut ban = BANS.lock().await;
-            if ban.banned_ips.contains(&conn.ip) && conn.ip != "127.0.0.1" {
+            if ban.banned_ips.contains(&conn.miner_stat.ip) && conn.miner_stat.ip != "127.0.0.1" {
                 conn.write("BAD,User banned\n").await?;
                 return Ok(());
             }
             if data_split.len() >= 2 {
                 let username = data_split[1];
-                if ban.banned_usernames.contains(&username.to_string()) && conn.ip != "127.0.0.1" {
-                    if !ban.banned_ips.contains(&conn.ip) {
-                        ban_ip(&conn.ip).await?;
+                if ban.banned_usernames.contains(&username.to_string()) && conn.miner_stat.ip != "127.0.0.1" {
+                    if !ban.banned_ips.contains(&conn.miner_stat.ip) {
+                        ban_ip(&conn.miner_stat.ip).await?;
                         // ban.banned_ips.push(conn.ip.clone());
-                        ban.banned_ips.insert(conn.ip.clone());
+                        ban.banned_ips.insert(conn.miner_stat.ip.clone());
                         ban.save_bans().expect("failed to save config bans.json");
                     }
 
@@ -65,9 +66,9 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
                 conn.write("BAD,No username specified\n").await?;
                 return Ok(());
             } else {
-                if conn.username.is_empty() {
-                    conn.username = data_split[1].to_string();
-                } else if conn.username != data_split[1] {
+                if conn.miner_stat.username.is_empty() {
+                    conn.miner_stat.username = CompactString::from(data_split[1].to_string());
+                } else if conn.miner_stat.username != data_split[1] {
                     return Ok(());
                 }
                 mining::mining::handle(&mut conn, data_split, config, false).await?;
@@ -86,7 +87,7 @@ pub fn handle_close(conn: &mut Connection) {
     mining::mining::MINER_STATS.remove(&*conn.id);
 
     let should_remove = {
-        let mut alloc = match USR_WORKERS_ALLOC.get_mut(&conn.username) {
+        let mut alloc = match USR_WORKERS_ALLOC.get_mut(&conn.miner_stat.username) {
             Some(a) => a,
             None => return,
         };
@@ -99,8 +100,8 @@ pub fn handle_close(conn: &mut Connection) {
     // drop the RefMut before removing, so we don't deadlock
 
     if should_remove {
-        USR_WORKERS_ALLOC.remove(&conn.username);
-        debug!("Removed {}", conn.username);
+        USR_WORKERS_ALLOC.remove(&conn.miner_stat.username);
+        debug!("Removed {}", conn.miner_stat.username);
     }
 
     debug!("Handling after-close");

@@ -22,7 +22,7 @@ use std::time::Duration;
 use sysinfo::System;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -31,7 +31,6 @@ pub static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 // doesn't look nice, but it's fine because these live during the entire runtime anyway
 // and it's cleaner than cloning hundreds of arcs..
 pub static BANS: LazyLock<Mutex<Bans>> = LazyLock::new(|| Mutex::new(Bans::load_bans().unwrap()));
-
 // pub static POOL_REWARDS: OnceLock<HashMap<String, sync::sync::Difficulty>> = OnceLock::new();
 pub static POOL_REWARDS: LazyLock<DashMap<String, sync::sync::Difficulty>> =
     LazyLock::new(|| DashMap::new());

@@ -1,8 +1,75 @@
+use std::collections::VecDeque;
 use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+// #[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct MinerStat {
+    // u
+    pub username: CompactString, // this is stupid..
+    // h
+    pub hashrate: f32,
+    // s
+    pub share_time: f32,
+    // a
+    pub accepted_shares: u64,
+    // r
+    pub rejected_shares: u64,
+    // al
+    pub algorithm: CompactString,
+    // d
+    pub difficulty: u32,
+    // p
+    pub pool_name: CompactString,
+    // sft
+    pub software: CompactString,
+    // id
+    pub id: CompactString,
+    // wd
+    pub wallet_id: CompactString,
+    // k
+    pub this_miner_chipid: CompactString, // this_miner_chipid (whatever this is)
+    // pw
+    pub password: CompactString,
+    // ls
+    pub last_min_shares: u16, // if it exceeds that would be ~1.1k shares per SECOND..
+    // it
+    pub iot_reading: CompactString,
+    // pg
+    pub ping: f32,
+    // rw
+    pub reward: f32,
+    // ip
+    pub ip: CompactString, // still annoying..
+    // c
+    pub amount_of_workers: f32, // it's actually the id for the current worker (read: nth worker)
+
+    // NEVER SERIALIZED:
+    pub last_share_reset: u64,
+    pub share_times_list: VecDeque<f32>,
+    pub reject_shares: CompactString,
+    pub override_diff: CompactString,
+    pub is_req_diff_esp32: bool, // because "ESP32" only adds 0.5..
+}
+
+impl MinerStat
+{
+    pub fn new(ip: String, username: String) -> MinerStat
+    {
+        let mut default = MinerStat::default();
+        default.ip = CompactString::from(ip);
+        default.username = CompactString::from(username);
+        default
+    }
+
+    pub fn convert_slim(&self) -> MinerStatSlim
+    {
+        MinerStatSlim::new(self)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct MinerStatSlim {
     #[serde(rename = "u")]
     pub username: CompactString, // this is stupid..
     #[serde(rename = "h")]
@@ -39,17 +106,36 @@ pub struct MinerStat {
     pub ip: CompactString, // still annoying..
     #[serde(rename = "c")]
     pub amount_of_workers: f32, // it's actually the id for the current worker (read: nth worker)
-    #[serde(skip_serializing, skip_deserializing)]
-    pub last_share_reset: u64,
-    #[serde(skip_serializing, skip_deserializing)]
-    pub share_times_list: Vec<f32>,
-    #[serde(skip_serializing, skip_deserializing)]
-    pub reject_shares: CompactString,
-    #[serde(skip_serializing, skip_deserializing)]
-    pub override_diff: CompactString,
-    #[serde(skip_serializing, skip_deserializing)]
-    pub is_req_diff_esp32: bool, // because "ESP32" only adds 0.5..
 }
+
+impl MinerStatSlim
+{
+    pub fn new(miner_stat: &MinerStat) -> MinerStatSlim
+    {
+        MinerStatSlim {
+            username: miner_stat.username.clone(),
+            hashrate: miner_stat.hashrate,
+            share_time: miner_stat.share_time,
+            accepted_shares: miner_stat.accepted_shares,
+            rejected_shares: miner_stat.rejected_shares,
+            algorithm: miner_stat.algorithm.clone(),
+            difficulty: miner_stat.difficulty,
+            pool_name: miner_stat.pool_name.clone(),
+            software: miner_stat.software.clone(),
+            id: miner_stat.id.clone(),
+            wallet_id: miner_stat.wallet_id.clone(),
+            this_miner_chipid: miner_stat.this_miner_chipid.clone(),
+            password: miner_stat.password.clone(),
+            last_min_shares: miner_stat.last_min_shares,
+            iot_reading: miner_stat.iot_reading.clone(),
+            ping: miner_stat.ping,
+            reward: miner_stat.reward,
+            ip: miner_stat.ip.clone(),
+            amount_of_workers: miner_stat.amount_of_workers,
+        }
+    }
+}
+
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct BlockInfos {
