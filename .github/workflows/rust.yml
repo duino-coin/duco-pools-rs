@@ -40,6 +40,6 @@ jobs:
       - name: Publish artifacts and release
         uses: houseabsolute/actions-rust-release@v0
         with:
-          executable-name: duco-pools-rs
+          executable-name: duco-pool-rs
           target: ${{ matrix.platform.target }}
           changes-file: ""
