@@ -27,7 +27,8 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
 
     // this loop only handles one JOB requests, however, it is necessary so the user can first request the MOTD
     loop {
-        let data = conn.read_to_string().await?;
+        let mut data = String::new();
+        conn.read_to_string(&mut data).await?;
         let data_split = data.trim().split(",").collect::<Box<[&str]>>();
 
         if conn.miner_stat.ip.is_empty() || data_split.len() > 6

@@ -13,8 +13,9 @@ use sha1_smol::Sha1;
 use std::collections::VecDeque;
 use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use arc_swap::ArcSwap;
 use tokio::sync::Mutex;
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
 
@@ -22,11 +23,11 @@ pub static USR_WORKERS_ALLOC: LazyLock<DashMap<CompactString, WorkerAllocator>> 
 
 pub static BALANCES_TO_UPDATE: LazyLock<DashMap<CompactString, f32>> = LazyLock::new(|| DashMap::new());
 
-pub static MINER_STATS: LazyLock<DashMap<String, MinerStatSlim>> = LazyLock::new(|| DashMap::new());
+pub static MINER_STATS: LazyLock<DashMap<Box<str>, MinerStatSlim>> = LazyLock::new(|| DashMap::new());
 
-static LAST_BLOCK_HASH: LazyLock<Mutex<String>> = LazyLock::new(|| {
+static LAST_BLOCK_HASH: LazyLock<ArcSwap<String>> = LazyLock::new(|| {
     let config = cfg::config::load_config().expect("failed to load config (static)");
-    Mutex::new(config.initial_blockhash)
+    ArcSwap::from_pointee(config.initial_blockhash)
 });
 
 pub static GLOBAL_BLOCKS: LazyLock<Mutex<Vec<BlockInfos>>> =
@@ -45,11 +46,12 @@ pub async fn handle(
     using_avr: bool,
 ) -> Result<(), anyhow::Error> {
     let mut random;
-    let mut new_hash;
+    let mut hasher = Sha1::new();
+    let mut hex_buf = [0u8; 40]; // stack-allocated, reused every iteration
+    let mut job_str = String::with_capacity(128); // reused write buffer (Change 3B)
     // Reusable buffer — req_difficulty cycles through short fixed strings every iteration
     let mut req_difficulty = String::with_capacity(16);
     let mut this_miner_chipid = CompactString::default();
-    // let mut miner_name;
     let mut expected_share_time = 0;
     let mut feedback_sent = SystemTime::now();
     let mut start_hashrate = -1f32;
@@ -64,14 +66,20 @@ pub async fn handle(
     let kolka = KOLKA.get().unwrap();
     let pool_rewards = &POOL_REWARDS;
     let mut buffer = itoa::Buffer::new(); // used to convert nums to str a little faster
-    let mut read; // needed for first share..
+    let mut data: [&str; 8] = [""; 8];
+    let mut data_len: usize;
+    let mut read = String::with_capacity(128); // needed for first share..
 
-    let mut data = initial_data.iter().map(|&x| x).collect::<Box<[&str]>>();
+    data_len = initial_data.len().min(8);
+    data[..data_len].copy_from_slice(&initial_data[..data_len]);
     drop(initial_data);
+
+    // 4 bytes (BAD,) + 1 (\n) + 18 (longest message) = 23
+    let mut msg = String::with_capacity(23); // reused rejection message buffer
     loop {
         if is_first_share {
             req_difficulty.clear();
-            if data.len() < 3 || data[2].is_empty() {
+            if data_len < 3 || data[2].is_empty() {
                 req_difficulty.push_str("NET");
             } else {
                 req_difficulty.push_str(data[2]);
@@ -90,27 +98,25 @@ pub async fn handle(
             let kolka_id = alloc.allocate(conn.miner_stat.is_req_diff_esp32);
 
             conn.miner_stat.amount_of_workers = kolka_id;
-            // drop(val);
+
             debug!("{}, Assigned {}", conn.id, conn.miner_stat.amount_of_workers);
         } else {
-            read = conn.read_to_string().await?;
+            data = [""; 8];
+            conn.read_to_string(&mut read).await?;
 
             conn.miner_stat.ping = SystemTime::now()
                 .duration_since(feedback_sent)?
                 .as_secs_f32();
 
-            data = read.split(",").collect::<Box<[&str]>>(); // receive new data and split by "args"
-
+            data_len = scan_fields(&read, &mut data);
             req_difficulty.clear();
 
             if !conn.miner_stat.override_diff.is_empty() {
-                req_difficulty.clear();
                 req_difficulty.push_str(&conn.miner_stat.override_diff);
             } else if using_avr {
-                req_difficulty.clear();
                 req_difficulty.push_str("AVR");
             } else {
-                if data.len() < 3 || data[2].is_empty() {
+                if data_len < 3 || data[2].is_empty() {
                     req_difficulty.push_str("NET");
                 } else {
                     req_difficulty.push_str(data[2]);
@@ -122,15 +128,14 @@ pub async fn handle(
                 }
             }
         }
-
-        conn.miner_stat.password = if data.len() >= 4 {
+        conn.miner_stat.password = if data_len >= 4 {
             CompactString::from(BASE64_STANDARD.encode(data[3]))
         } else {
             CompactString::default()
         };
 
         // IoT reading stuff
-        if data.len() >= 5 {
+        if data_len >= 5 {
             let cleaned_iot = clean_iot(&data[4]);
             if cleaned_iot.is_empty() {
                 conn.miner_stat.iot_reading = CompactString::default();
@@ -163,34 +168,29 @@ pub async fn handle(
             random = 1;
         }
 
-        // used so we don't keep the lock on LAST_BLOCK_HASH over a conn.write (+ to drop job_str implicitly)
-        {
-            // used to lose the lock on LAST_BLOCK_HASH
-            let job_str = {
-                let last_block_hash = LAST_BLOCK_HASH.lock().await;
-                let mut hasher = Sha1::from(last_block_hash.as_str());
-                hasher.update(buffer.format(random).as_bytes());
-                new_hash = hasher.hexdigest();
+        let last_block_hash = LAST_BLOCK_HASH.load(); // Arc<String>
+        hasher.reset();
+        hasher.update(last_block_hash.as_bytes());
+        hasher.update(buffer.format(random).as_bytes());
 
-                let diff_str = buffer.format(diff);
-                let mut job_str =
-                    String::with_capacity(last_block_hash.len() + 1 + new_hash.len() + 1 + diff_str.len() + 1);
-                job_str.push_str(&last_block_hash);
-                job_str.push_str(",");
-                job_str.push_str(new_hash.as_str());
-                job_str.push_str(",");
-                job_str.push_str(diff_str);
-                job_str.push_str("\n");
+        let raw = hasher.digest().bytes();
+        hex::encode_to_slice(raw, &mut hex_buf).unwrap();
+        let new_hash_str = std::str::from_utf8(&hex_buf)?;
 
-                job_str
-            };
-            conn.write(&job_str).await?;
-        }
+        job_str.clear();
+        job_str.push_str(&last_block_hash);
+        job_str.push_str(",");
+        job_str.push_str(new_hash_str);
+        job_str.push_str(",");
+        job_str.push_str(buffer.format(diff));
+        job_str.push_str("\n");
+        conn.write(&job_str).await?;
 
         let job_sent = SystemTime::now();
-        read = conn.read_to_string().await?;
+        data = [""; 8];
+        conn.read_to_string(&mut read).await?;
 
-        data = read.split(",").collect::<Box<[&str]>>();
+        data_len = scan_fields(&read, &mut data);
         let answer_received = SystemTime::now();
 
         conn.miner_stat.share_time = answer_received.duration_since(job_sent)?.as_secs_f32();
@@ -208,7 +208,7 @@ pub async fn handle(
         }
 
         let mut wrong_reported_hashrate = false;
-        if data.len() >= 2 {
+        if data_len >= 2 {
             reported_hashrate = match data[1].parse::<f32>() {
                 Ok(rep) => rep,
                 Err(_) => {
@@ -277,7 +277,7 @@ pub async fn handle(
         }
 
         if is_first_share {
-            this_miner_chipid = if data.len() >= 5 {
+            this_miner_chipid = if data_len >= 5 {
                 CompactString::from(data[4])
             } else {
                 CompactString::default()
@@ -346,7 +346,7 @@ pub async fn handle(
 
         reward = 0f32;
         if !conn.miner_stat.reject_shares.is_empty() {
-            let mut msg = String::with_capacity(4 + conn.miner_stat.reject_shares.len() + 1);
+            msg.clear();
             msg.push_str("BAD,");
             msg.push_str(&conn.miner_stat.reject_shares);
             msg.push('\n');
@@ -373,7 +373,7 @@ pub async fn handle(
                 if diff <= kolka::kolka::get_diff("ESP8266NH") {
                     if this_miner_chipid.is_empty() {
                         conn.miner_stat.rejected_shares += 1;
-                    } else if data.len() >= 5 && data[4] != this_miner_chipid.as_str() {
+                    } else if data_len >= 5 && data[4] != this_miner_chipid.as_str() {
                         conn.miner_stat.rejected_shares += 1;
                     } else {
                         reward = kolka::kolka::v1(
@@ -399,12 +399,11 @@ pub async fn handle(
                 reward += config.block_reward;
 
                 let block_infos = BlockInfos::new(
-                    // UNIX_EPOCH.duration_since(SystemTime::now())?.as_secs(),
                     SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
                     conn.miner_stat.username.to_string(),
                     reward,
                     "DUCO-S1".to_string(),
-                    new_hash.clone(),
+                    new_hash_str.to_string(),
                 );
                 GLOBAL_BLOCKS.lock().await.push(block_infos);
                 conn.write("BLOCK\n").await?;
@@ -424,18 +423,8 @@ pub async fn handle(
                 .entry(conn.miner_stat.username.clone())
                 .or_insert(0f32) += reward;
 
-            // miner_name = if data.len() >= 3 {
-            //     let cleaned_name = clean_name(&data[2]);
-            //     match cleaned_name.as_str() {
-            //         "" => "Unknown miner".to_string(),
-            //         _ => cleaned_name,
-            //     }
-            // } else {
-            //     "Unknown miner".to_string()
-            // };
-            // conn.miner_stat.software = CompactString::from(&miner_name);
             conn.miner_stat.software = CompactString::from(
-                if data.len() >= 3 {
+                if data_len >= 3 {
                     let cleaned_name = clean_name(&data[2]);
                     match cleaned_name.as_str() {
                         "" => "Unknown miner".to_string(),
@@ -446,26 +435,26 @@ pub async fn handle(
                 }
             );
 
-            let wallet_id = if data.len() >= 6 { &data[5] } else { "None" };
-            conn.miner_stat.wallet_id = CompactString::from(wallet_id.replace("\n", ""));
+            let wallet_id = if data_len >= 6 { &data[5] } else { "None" };
+            conn.miner_stat.wallet_id = CompactString::from(wallet_id.trim_end_matches("\n"));
 
-            let cut_rigid = if data.len() >= 4 {
-                data[3].split(":").collect::<Vec<&str>>()
+            let (rig_part, key_part) = if data_len >= 4 {
+                match data[3].split_once(':') {
+                    Some((r, k)) => (r, Some(k)),
+                    None => (data[3], None),
+                }
             } else {
-                Vec::new()
+                ("", None)
             };
-            let rig_identifier = if cut_rigid.len() > 0 {
-                let cleaned = clean_name(cut_rigid[0]);
-
+            let rig_identifier = {
+                let cleaned = clean_name(rig_part);
                 match cleaned.as_str() {
                     "" => "None".to_string(),
                     _ => cleaned,
                 }
-            } else {
-                "None".to_string()
             };
+
             conn.miner_stat.id = CompactString::from(&rig_identifier);
-            // conn.miner_stat.algorithm = CompactString::const_new("DUCO-S1");
             conn.miner_stat.hashrate = if hashrate_is_estimated {
                 hashrate
             } else {
@@ -473,29 +462,31 @@ pub async fn handle(
             };
             conn.miner_stat.difficulty = diff;
 
-            if cut_rigid.len() >= 2 {
+            if let Some(key) = key_part {
                 // mining key backwards compatibility for old miners
-                conn.miner_stat.password = CompactString::from(BASE64_STANDARD.encode(cut_rigid[1]));
+                conn.miner_stat.password = CompactString::from(BASE64_STANDARD.encode(key));
             }
 
-            if UNIX_EPOCH.elapsed()?.as_secs() - conn.miner_stat.last_share_reset >= 60 {
-                conn.miner_stat.last_share_reset = UNIX_EPOCH.elapsed()?.as_secs();
-                conn.miner_stat.last_min_shares = 0;
+
+            {
+                let now_secs = UNIX_EPOCH.elapsed()?.as_secs();
+                if now_secs - conn.miner_stat.last_share_reset >= 60 {
+                    conn.miner_stat.last_share_reset = now_secs;
+                    conn.miner_stat.last_min_shares = 0;
+                }
             }
 
-            // conn.miner_stat.kolka_drop = conn.miner_stat.amount_of_workers;
             conn.miner_stat.this_miner_chipid = this_miner_chipid.clone();
             conn.miner_stat.reward = reward;
-            // conn.miner_stat.ip = CompactString::from(&conn.ip);
-            // conn.miner_stat.username = CompactString::from(&conn.username);
-            // conn.miner_stat.pool_name = CompactString::from(&config.pool_name);
 
             let miner_stat_slim = conn.miner_stat.convert_slim();
-            MINER_STATS.insert((*conn.id).to_string(), miner_stat_slim);
 
-            let mut last_block_hash = LAST_BLOCK_HASH.lock().await;
-            last_block_hash.clear();
-            last_block_hash.push_str(&new_hash);
+            match MINER_STATS.get_mut(&*conn.id) {
+                Some(mut e) => *e = miner_stat_slim,
+                None => { MINER_STATS.insert(conn.id.clone(), miner_stat_slim); }
+            }
+
+            LAST_BLOCK_HASH.store(Arc::new(new_hash_str.to_string()));
             GLOBAL_SHARES_INCREASE.fetch_add(
                 config.update_miners_stats_every as u64,
                 std::sync::atomic::Ordering::Relaxed,
@@ -551,4 +542,25 @@ fn clean_name(input: &str) -> String {
         |x: char| !x.is_ascii_alphanumeric() && !ALLOWED_SPECIAL.contains(&x),
         "",
     )
+}
+
+// split s by commas into dst, missing fields are ""
+fn scan_fields<'a>(s: &'a str, dst: &mut [&'a str; 8]) -> usize {
+    let mut n = 0;
+    let mut rest = s;
+    while n < dst.len() {
+        match rest.find(',') {
+            Some(i) => {
+                dst[n] = &rest[..i];
+                n += 1;
+                rest = &rest[i + 1..];
+            }
+            None => {
+                dst[n] = rest;
+                n += 1;
+                return n;
+            }
+        }
+    }
+    n
 }

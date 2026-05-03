@@ -193,6 +193,7 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
         loop {
             match server.accept().await {
                 Ok((socket, addr)) => {
+                    let _ = socket.set_nodelay(true);
                     let local_token = token_clone.clone();
                     // add connection
                     CONNECTIONS.fetch_add(1, Relaxed);
@@ -216,14 +217,14 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                                         debug!("Connection closed: {:?}", err);
                                         // this is impl seriously is horrendous
                                         if !err_str.contains("Connection reset by peer") && !err_str.contains("Connection timed out")
-                                            && !err_str.contains("Shutting down") && !err_str.contains("os error 10054") && !err_str.contains("Connection closed")
+                                            && !err_str.contains("Shutting down") && !err_str.contains("os error 10054") && !err_str.contains("os error 10053") && !err_str.contains("Connection closed")
                                             && !err_str.contains("deadline") && !err_str.contains("Invalid UTF")
                                         {
                                             info!("Connection closed: {:?}", err);
                                         }
                                     }
                                 };
-                                handler::handler::handle_close(&mut conn);
+                                // handler::handler::handle_close(&mut conn);
                                 // to drop the socket and (hopefully) close it
                                 drop(conn);
                                 // remove connection

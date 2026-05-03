@@ -248,8 +248,6 @@ pub async fn sync(
         config.base_sync_folder, config.pool_name
     );
 
-    mining::MINER_STATS.shrink_to_fit();
-
     // we inject the pool_name AND the algorithm, because they're the same for every miner
     let worker_content = serde_json::to_string(&stats::StatsWithContext {
         stats: &mining::MINER_STATS,
@@ -343,6 +341,7 @@ pub async fn sync(
         };
     }
     mining::USR_WORKERS_ALLOC.shrink_to_fit();
+    mining::MINER_STATS.shrink_to_fit();
     // mining::USR_WORKERS.shrink_to_fit();
     // mining::WORKERS.shrink_to_fit();
 

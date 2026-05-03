@@ -37,6 +37,13 @@ pub struct Connection {
     read_buf: Vec<u8>,
 }
 
+impl Drop for Connection {
+    fn drop(&mut self) {
+        // Guaranteed cleanup on connection drop (normal or panic)
+        crate::handler::handler::handle_close(self);
+    }
+}
+
 impl Connection {
     pub fn new(socket: TcpStream, addr: SocketAddr, username: String, id: Box<str>) -> Self {
         let (read_half, write_half) = socket.into_split();
@@ -68,7 +75,7 @@ impl Connection {
     }
 
     // written by Opus 4.6
-    pub async fn read_to_string(&mut self) -> Result<Box<str>, anyhow::Error> {
+    pub async fn read_to_string(&mut self, output: &mut String) -> Result<(), anyhow::Error> {
         self.read_buf.clear();
 
         // Wrap the entire read in the 90s overall timeout
@@ -133,7 +140,10 @@ impl Connection {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid UTF-8 data")
         })?;
 
-        Ok(s.into())
+        output.clear();
+        output.push_str(s);
+        // Ok(s.into())
+        Ok(())
     }
 
 

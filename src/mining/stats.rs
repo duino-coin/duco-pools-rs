@@ -147,7 +147,7 @@ struct MinerStatSlimContext<'a> {
 }
 
 pub struct StatsWithContext<'a> {
-    pub stats: &'a dashmap::DashMap<String, MinerStatSlim>,
+    pub stats: &'a dashmap::DashMap<Box<str>, MinerStatSlim>,
     pub pool_name: &'a str,
 }
 impl<'a> serde::Serialize for StatsWithContext<'a> {
