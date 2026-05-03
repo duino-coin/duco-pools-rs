@@ -15,14 +15,15 @@ use log::{debug, error, info, LevelFilter};
 use mimalloc::MiMalloc;
 use rand::{Rng, RngCore};
 use std::net::SocketAddr;
-use std::process::{Command};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
 use sysinfo::System;
+use tokio::count;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::{Mutex};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -85,14 +86,12 @@ async fn main() {
                 // don't exit if the replacement server couldn't be spawned
                 if !is_error {
                     tx.send("s".to_owned()).unwrap();
-                    // exit(0);
                 }
             }
         }));
     }
     // TODO: impl ngrok
 
-    // TODO: test
     sync::sync::resync_pool_rewards(&config)
         .await
         .expect("failed to update pool rewards");
@@ -148,7 +147,7 @@ async fn main() {
     ctrlc::set_handler(move || {
         tx.send("s".to_owned()).unwrap();
     })
-    .expect("Failed to handle ctrl-c");
+        .expect("Failed to handle ctrl-c");
 
     start_tcp(rx).await;
     // when start_tcp yields, the server was ctrl-c'd
@@ -176,7 +175,7 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
     KOLKA.get_or_init(|| Kolka::new());
 
     let config = CONFIG.get().unwrap();
-    
+
     let server = TcpListener::bind(format!("{}:{}", config.host, config.port))
         .await
         .expect("failed to bind to address");
@@ -225,9 +224,7 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                                         }
                                     }
                                 };
-                                // info!("handle close");
                                 handler::handler::handle_close(&mut conn);
-                                // println!("{:?}", mining::mining::USR_WORKERS);
                                 // to drop the socket and (hopefully) close it
                                 drop(conn);
                                 // remove connection

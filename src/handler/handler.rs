@@ -1,9 +1,9 @@
 use crate::data::data::Connection;
+use crate::mining::mining::USR_WORKERS_ALLOC;
 use crate::{mining, BANS, CONFIG};
+use compact_str::CompactString;
 use log::{debug, warn};
 use std::process::Command;
-use compact_str::CompactString;
-use crate::mining::mining::USR_WORKERS_ALLOC;
 
 //const CMD: &str = "csf -td ${ip}"; //csf
 //const CMD: &str = "iptables -A INPUT -s ${ip} -j DROP"; //iptables

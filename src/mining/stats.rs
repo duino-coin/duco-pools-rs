@@ -1,6 +1,6 @@
-use std::collections::VecDeque;
 use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 // #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[derive(Debug, Default, Clone)]

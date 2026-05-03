@@ -37,31 +37,30 @@ pub fn v1(
         // GPU, Extreme PC
         output = 2f32
             * (output
-                * kolka
-                    .gpu_mining_percentage
-                    .powi((amount_of_workers - 1.0) as i32));
-        
+            * kolka
+            .gpu_mining_percentage
+            .powi((amount_of_workers - 1.0) as i32));
     } else if difficulty > kolka.highest_esp_diff {
         // PC
         output = 2f32
             * (output
-                * kolka
-                    .pc_mining_percentage
-                    .powi((amount_of_workers - 1.0) as i32));
+            * kolka
+            .pc_mining_percentage
+            .powi((amount_of_workers - 1.0) as i32));
     } else if difficulty > kolka.highest_avr_diff {
         // ESP
         output = 2f32
             * (output
-                * kolka
-                    .esp_mining_percentage
-                    .powi((amount_of_workers - 1.0) as i32));
+            * kolka
+            .esp_mining_percentage
+            .powi((amount_of_workers - 1.0) as i32));
     } else {
         // AVR
         output = 2f32
             * (output
-                * kolka
-                    .avr_mining_percentage
-                    .powi((amount_of_workers - 1.0) as i32));
+            * kolka
+            .avr_mining_percentage
+            .powi((amount_of_workers - 1.0) as i32));
     }
     output
 }
@@ -80,7 +79,7 @@ pub fn v2(difficulty: &str) -> String {
         "NET" => "EXTREME",
         _ => difficulty,
     }
-    .to_string()
+        .to_string()
 }
 
 pub fn v2_reverse(difficulty: &str) -> String {
@@ -97,7 +96,7 @@ pub fn v2_reverse(difficulty: &str) -> String {
         "EXTREME" => "NET",
         _ => difficulty,
     }
-    .to_string()
+        .to_string()
 }
 pub fn v3(sharetime: f32, expected_sharetime: u16, hashrate: f32) -> u32 {
     let mut new_diff_temp = ((hashrate / 100f32).floor() * expected_sharetime as f32).round();

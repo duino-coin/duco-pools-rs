@@ -1,16 +1,16 @@
-use std::collections::HashSet;
 use crate::mining;
+use crate::mining::stats::MinerStat;
+use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::time::Duration;
-use compact_str::CompactString;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
-use crate::mining::stats::MinerStat;
 
-static TIMEOUT: Duration = Duration::from_secs(90);// it's 90s in the js pools
+static TIMEOUT: Duration = Duration::from_secs(90); // it's 90s in the js pools
 
 #[derive(Debug, Clone)]
 pub struct ConnectionClosed;

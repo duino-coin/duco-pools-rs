@@ -1,21 +1,21 @@
-use std::collections::VecDeque;
 use crate::cfg::config::PoolConfig;
 use crate::data::data::Connection;
+use crate::mining::id_allocator::WorkerAllocator;
 use crate::mining::stats::{BlockInfos, MinerStatSlim};
 use crate::{cfg, kolka, KOLKA, POOL_REWARDS};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use compact_str::CompactString;
-use dashmap::{DashMap};
+use dashmap::DashMap;
 use log::{debug, info};
 use rand::{rng, Rng};
 use sha1_smol::Sha1;
+use std::collections::VecDeque;
 use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
-use crate::mining::id_allocator::WorkerAllocator;
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
 
 pub static USR_WORKERS_ALLOC: LazyLock<DashMap<CompactString, WorkerAllocator>> = LazyLock::new(|| DashMap::new());
@@ -88,7 +88,7 @@ pub async fn handle(
             }
             let mut alloc = USR_WORKERS_ALLOC.entry(conn.miner_stat.username.clone()).or_default();
             let kolka_id = alloc.allocate(conn.miner_stat.is_req_diff_esp32);
-  
+
             conn.miner_stat.amount_of_workers = kolka_id;
             // drop(val);
             debug!("{}, Assigned {}", conn.id, conn.miner_stat.amount_of_workers);
@@ -109,8 +109,7 @@ pub async fn handle(
             } else if using_avr {
                 req_difficulty.clear();
                 req_difficulty.push_str("AVR");
-            }
-            else {
+            } else {
                 if data.len() < 3 || data[2].is_empty() {
                     req_difficulty.push_str("NET");
                 } else {
@@ -155,7 +154,6 @@ pub async fn handle(
                     conn.miner_stat.amount_of_workers = new_id;
                 }
             }
-
         }
 
         random = rng().random_range(0u64..diff as u64 * 100u64) + 1;
@@ -206,7 +204,6 @@ pub async fn handle(
             .push_back(conn.miner_stat.share_time * 1.5);
 
         if conn.miner_stat.share_times_list.len() > 50 {
-            // conn.miner_stat.share_times_list.remove(0);
             conn.miner_stat.share_times_list.pop_front();
         }
 
@@ -312,12 +309,12 @@ pub async fn handle(
             random * expected_share_time as u64 / (diff as u64 * 100 + 1);
         if (conn.miner_stat.accepted_shares == 4
             || (
-                conn.miner_stat.accepted_shares > 4
-                    && (perc_diff(hashrate, start_hashrate) > 15f32
-                        || (1f32 - (avg_sharetime / actual_expected_share_time as f32)) * 100f32
-                            > 25f32)
-                // if the hashrate has changed substantially or if the sharetime is substantially lower than targeted, adjust
-            ))
+            conn.miner_stat.accepted_shares > 4
+                && (perc_diff(hashrate, start_hashrate) > 15f32
+                || (1f32 - (avg_sharetime / actual_expected_share_time as f32)) * 100f32
+                > 25f32)
+            // if the hashrate has changed substantially or if the sharetime is substantially lower than targeted, adjust
+        ))
             && PC_DIFF_TIERS.contains(&req_difficulty.as_str())
         {
             start_hashrate = hashrate;
@@ -338,7 +335,7 @@ pub async fn handle(
                 };
                 ret
             }
-            Some(ok) => {ok}
+            Some(ok) => { ok }
         };
 
         let reward_div = diff_obj.reward;
