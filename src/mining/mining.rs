@@ -465,7 +465,7 @@ pub async fn handle(
                 "None".to_string()
             };
             conn.miner_stat.id = CompactString::from(&rig_identifier);
-            conn.miner_stat.algorithm = CompactString::const_new("DUCO-S1");
+            // conn.miner_stat.algorithm = CompactString::const_new("DUCO-S1");
             conn.miner_stat.hashrate = if hashrate_is_estimated {
                 hashrate
             } else {
@@ -488,7 +488,7 @@ pub async fn handle(
             conn.miner_stat.reward = reward;
             // conn.miner_stat.ip = CompactString::from(&conn.ip);
             // conn.miner_stat.username = CompactString::from(&conn.username);
-            conn.miner_stat.pool_name = CompactString::from(&config.pool_name);
+            // conn.miner_stat.pool_name = CompactString::from(&config.pool_name);
 
             let miner_stat_slim = conn.miner_stat.convert_slim();
             MINER_STATS.insert((*conn.id).to_string(), miner_stat_slim);

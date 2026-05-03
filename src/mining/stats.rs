@@ -16,11 +16,11 @@ pub struct MinerStat {
     // r
     pub rejected_shares: u64,
     // al
-    pub algorithm: CompactString,
+    // pub algorithm: CompactString,
     // d
     pub difficulty: u32,
     // p
-    pub pool_name: CompactString,
+    // pub pool_name: CompactString,
     // sft
     pub software: CompactString,
     // id
@@ -80,12 +80,12 @@ pub struct MinerStatSlim {
     pub accepted_shares: u64,
     #[serde(rename = "r")]
     pub rejected_shares: u64,
-    #[serde(rename = "al")]
-    pub algorithm: CompactString,
+    // #[serde(rename = "al")]
+    // pub algorithm: CompactString,
     #[serde(rename = "d")]
     pub difficulty: u32,
-    #[serde(rename = "p")]
-    pub pool_name: CompactString,
+    // #[serde(rename = "p")]
+    // pub pool_name: CompactString,
     #[serde(rename = "sft")]
     pub software: CompactString,
     pub id: CompactString,
@@ -118,9 +118,9 @@ impl MinerStatSlim
             share_time: miner_stat.share_time,
             accepted_shares: miner_stat.accepted_shares,
             rejected_shares: miner_stat.rejected_shares,
-            algorithm: miner_stat.algorithm.clone(),
+            // algorithm: miner_stat.algorithm.clone(),
             difficulty: miner_stat.difficulty,
-            pool_name: miner_stat.pool_name.clone(),
+            // pool_name: miner_stat.pool_name.clone(),
             software: miner_stat.software.clone(),
             id: miner_stat.id.clone(),
             wallet_id: miner_stat.wallet_id.clone(),
@@ -133,6 +133,36 @@ impl MinerStatSlim
             ip: miner_stat.ip.clone(),
             amount_of_workers: miner_stat.amount_of_workers,
         }
+    }
+}
+
+#[derive(Serialize)]
+struct MinerStatSlimContext<'a> {
+    #[serde(flatten)]
+    stat: &'a MinerStatSlim, // inlines all existing fields
+    #[serde(rename = "al")]
+    algorithm: &'a str,
+    #[serde(rename = "p")]
+    pool_name: &'a str,
+}
+
+pub struct StatsWithContext<'a> {
+    pub stats: &'a dashmap::DashMap<String, MinerStatSlim>,
+    pub pool_name: &'a str,
+}
+impl<'a> serde::Serialize for StatsWithContext<'a> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.stats.len()))?;
+        for entry in self.stats.iter() {
+            let ctx = MinerStatSlimContext {
+                stat: entry.value(),
+                algorithm: "DUCO-S1",
+                pool_name: self.pool_name,
+            };
+            map.serialize_entry(entry.key(), &ctx)?;
+        }
+        map.end()
     }
 }
 

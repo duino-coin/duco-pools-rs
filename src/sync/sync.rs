@@ -1,6 +1,6 @@
 use crate::cfg::config::PoolConfig;
 use crate::data::data::Bans;
-use crate::mining::mining;
+use crate::mining::{mining, stats};
 use crate::{data, CONFIG, CONNECTIONS, POOL_REWARDS};
 use compact_str::CompactString;
 use data::data::LoginInfos;
@@ -248,10 +248,13 @@ pub async fn sync(
         config.base_sync_folder, config.pool_name
     );
 
-    // let stats = mining::MINER_STATS.clone();
-    // mining::MINER_STATS.retain(|key, _| !stats.contains_key(key));
     mining::MINER_STATS.shrink_to_fit();
-    let worker_content = serde_json::to_string(&*mining::MINER_STATS)?;
+
+    // we inject the pool_name AND the algorithm, because they're the same for every miner
+    let worker_content = serde_json::to_string(&stats::StatsWithContext {
+        stats: &mining::MINER_STATS,
+        pool_name: &config.pool_name,
+    })?;
     // drop(stats);
 
     std::fs::write(&worker_path, &worker_content)?;
