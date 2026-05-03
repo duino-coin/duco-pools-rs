@@ -2,9 +2,8 @@ name: Rust
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    tags:
+      - v[0-9]+.[0-9]+.[0-9]+
 
 env:
   CARGO_TERM_COLOR: always
@@ -41,6 +40,6 @@ jobs:
       - name: Publish artifacts and release
         uses: houseabsolute/actions-rust-release@v0
         with:
-          executable-name: ubi
+          executable-name: duco-pools-rs
           target: ${{ matrix.platform.target }}
           changes-file: ""
