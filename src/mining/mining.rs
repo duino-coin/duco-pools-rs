@@ -2,6 +2,7 @@ use crate::cfg::config::PoolConfig;
 use crate::data::data::Connection;
 use crate::mining::id_allocator::WorkerAllocator;
 use crate::mining::stats::{BlockInfos, MinerStatSlim};
+use crate::sync::sync::Difficulty;
 use crate::{cfg, kolka, KOLKA, POOL_REWARDS};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -12,7 +13,8 @@ use rand::{rng, Rng};
 use sha1_smol::Sha1;
 use std::collections::VecDeque;
 use std::str::FromStr;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use arc_swap::ArcSwap;
@@ -37,6 +39,10 @@ pub static GLOBAL_SHARES_INCREASE: LazyLock<AtomicU64> = LazyLock::new(|| Atomic
 
 pub static GLOBAL_SHARES_TOTAL: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
 
+pub static ESP8266NH_DIFF_CACHE: LazyLock<AtomicU32> = LazyLock::new(|| AtomicU32::new(0));
+
+pub static DUE_DIFF_CACHE: LazyLock<AtomicU32> = LazyLock::new(|| AtomicU32::new(0));
+
 const PC_DIFF_TIERS: [&str; 4] = ["EXTREME", "NET", "MEDIUM", "LOW"];
 
 pub async fn handle(
@@ -48,9 +54,8 @@ pub async fn handle(
     let mut random;
     let mut hasher = Sha1::new();
     let mut hex_buf = [0u8; 40]; // stack-allocated, reused every iteration
-    let mut job_str = String::with_capacity(128); // reused write buffer (Change 3B)
-    // Reusable buffer — req_difficulty cycles through short fixed strings every iteration
-    let mut req_difficulty = String::with_capacity(16);
+    let mut password_buf = [0u8; 128];
+    let mut req_difficulty = CompactString::with_capacity(16);
     let mut this_miner_chipid = CompactString::default();
     let mut expected_share_time = 0;
     let mut feedback_sent = SystemTime::now();
@@ -68,30 +73,33 @@ pub async fn handle(
     let mut buffer = itoa::Buffer::new(); // used to convert nums to str a little faster
     let mut data: [&str; 8] = [""; 8];
     let mut data_len: usize;
-    let mut read = String::with_capacity(128); // needed for first share..
+    let mut read = String::with_capacity(32); // needed for first share..
 
     data_len = initial_data.len().min(8);
     data[..data_len].copy_from_slice(&initial_data[..data_len]);
     drop(initial_data);
 
-    // 4 bytes (BAD,) + 1 (\n) + 18 (longest message) = 23
-    let mut msg = String::with_capacity(23); // reused rejection message buffer
+    let mut job_str = String::with_capacity(32);
+    let mut msg = String::with_capacity(23);
+
     loop {
         if is_first_share {
             req_difficulty.clear();
             if data_len < 3 || data[2].is_empty() {
                 req_difficulty.push_str("NET");
             } else {
-                req_difficulty.push_str(data[2]);
+                if !set_req_difficulty(&mut req_difficulty, data[2]) {
+                    req_difficulty.push_str("NET");
+                }
             }
-            if !pool_rewards.get(&req_difficulty).is_some() {
-                req_difficulty.clear();
-                req_difficulty.push_str("NET");
-            }
-            diff = kolka::kolka::get_diff(&req_difficulty);
+            // if !pool_rewards.contains_key(&req_difficulty) {
+            //     req_difficulty.clear();
+            //     req_difficulty.push_str("NET");
+            // }
+            // diff = kolka::kolka::get_diff(&req_difficulty);
 
             // why??
-            if req_difficulty == "ESP32" {
+            if req_difficulty.as_str() == "ESP32" {
                 conn.miner_stat.is_req_diff_esp32 = true;
             }
             let mut alloc = USR_WORKERS_ALLOC.entry(conn.miner_stat.username.clone()).or_default();
@@ -112,56 +120,91 @@ pub async fn handle(
             req_difficulty.clear();
 
             if !conn.miner_stat.override_diff.is_empty() {
-                req_difficulty.push_str(&conn.miner_stat.override_diff);
+                if !set_req_difficulty(&mut req_difficulty, conn.miner_stat.override_diff.as_str()) {
+                    req_difficulty.push_str("NET");
+                }
             } else if using_avr {
                 req_difficulty.push_str("AVR");
             } else {
                 if data_len < 3 || data[2].is_empty() {
                     req_difficulty.push_str("NET");
                 } else {
-                    req_difficulty.push_str(data[2]);
+                    if !set_req_difficulty(&mut req_difficulty, data[2]) {
+                        req_difficulty.push_str("NET");
+                    }
                 }
 
-                if !pool_rewards.get(&req_difficulty).is_some() {
+                if pool_rewards.get(req_difficulty.as_str()).is_none() {
                     req_difficulty.clear();
                     req_difficulty.push_str("NET");
                 }
             }
         }
-        conn.miner_stat.password = if data_len >= 4 {
-            CompactString::from(BASE64_STANDARD.encode(data[3]))
+
+        if data_len >= 4 {
+            let encoded_len = BASE64_STANDARD.encode_slice(data[3].as_bytes(), &mut password_buf)?;
+            let encoded = std::str::from_utf8(&password_buf[..encoded_len])?;
+            conn.miner_stat.password.clear();
+            conn.miner_stat.password.push_str(encoded);
         } else {
-            CompactString::default()
-        };
+            conn.miner_stat.password.clear();
+        }
 
         // IoT reading stuff
         if data_len >= 5 {
-            let cleaned_iot = clean_iot(&data[4]);
-            if cleaned_iot.is_empty() {
-                conn.miner_stat.iot_reading = CompactString::default();
-            } else if data[4].len() > 48 {
+            if data[4].len() > 48
+            {
                 conn.miner_stat.iot_reading = CompactString::const_new("Error:data too long");
-            } else {
-                conn.miner_stat.iot_reading = CompactString::from(data[4]);
             }
+            else
+            {
+                clean_iot_into(&data[4], &mut conn.miner_stat.iot_reading);
+            }
+            // let cleaned_iot = clean_iot(&data[4]);
+
+            // if cleaned_iot.is_empty() {
+            //     conn.miner_stat.iot_reading = CompactString::default();
+            // } else if data[4].len() > 48 {
+            //     conn.miner_stat.iot_reading = CompactString::const_new("Error:data too long");
+            // } else {
+            //     conn.miner_stat.iot_reading = CompactString::from(data[4]);
+            // }
         }
 
-        let user_workers = get_user_workers(&conn.miner_stat.username);
+        // let user_workers = get_user_workers(&conn.miner_stat.username);
+        let (user_workers, new_id) = USR_WORKERS_ALLOC
+            .get_mut(&conn.miner_stat.username)
+            .map(|mut alloc| {
+                let workers = alloc.active_workers();
+                let new_id = alloc.try_recycle(conn.miner_stat.amount_of_workers, conn.miner_stat.is_req_diff_esp32);
+                (workers, new_id)
+            })
+            .unwrap_or((0.0, None));
 
         if check_workers(user_workers, &config) {
             conn.miner_stat.reject_shares = CompactString::const_new("Too many workers");
         }
-
-        // id adjustment
-        {
-            if let Some(mut alloc) = USR_WORKERS_ALLOC.get_mut(&conn.miner_stat.username) {
-                if let Some(new_id) = alloc.try_recycle(conn.miner_stat.amount_of_workers, conn.miner_stat.is_req_diff_esp32) {
-                    conn.miner_stat.amount_of_workers = new_id;
-                }
-            }
+        if let Some(id) = new_id {
+            conn.miner_stat.amount_of_workers = id;
         }
 
-        random = rng().random_range(0u64..diff as u64 * 100u64) + 1;
+        let diff_info =
+            resolve_reward_info(pool_rewards, req_difficulty.as_str(), conn.miner_stat.override_diff.as_str())
+                .ok_or_else(|| anyhow::anyhow!("failed to resolve difficulty info"))?;
+        if is_first_share {
+            diff = diff_info.difficulty as u32;
+        }
+
+        // id adjustment
+        // {
+        //     if let Some(mut alloc) = USR_WORKERS_ALLOC.get_mut(&conn.miner_stat.username) {
+        //         if let Some(new_id) = alloc.try_recycle(conn.miner_stat.amount_of_workers, conn.miner_stat.is_req_diff_esp32) {
+        //             conn.miner_stat.amount_of_workers = new_id;
+        //         }
+        //     }
+        // }
+
+        random = rand::rng().random_range(0u64..diff as u64 * 100u64) + 1;
 
         #[cfg(feature = "bench")]
         {
@@ -178,12 +221,12 @@ pub async fn handle(
         let new_hash_str = std::str::from_utf8(&hex_buf)?;
 
         job_str.clear();
-        job_str.push_str(&last_block_hash);
-        job_str.push_str(",");
+        job_str.push_str(last_block_hash.as_str());
+        job_str.push(',');
         job_str.push_str(new_hash_str);
-        job_str.push_str(",");
+        job_str.push(',');
         job_str.push_str(buffer.format(diff));
-        job_str.push_str("\n");
+        job_str.push('\n');
         conn.write(&job_str).await?;
 
         let job_sent = SystemTime::now();
@@ -199,12 +242,13 @@ pub async fn handle(
         }
 
         // 1.5x to account that the average will be half the target (I don't know what this means, I copied the original comment)
+        let val = conn.miner_stat.share_time * 1.5;
         conn.miner_stat
             .share_times_list
-            .push_back(conn.miner_stat.share_time * 1.5);
-
+            .push_back(val);
+        conn.miner_stat.total_share_times += val;
         if conn.miner_stat.share_times_list.len() > 50 {
-            conn.miner_stat.share_times_list.pop_front();
+            conn.miner_stat.total_share_times -= conn.miner_stat.share_times_list.pop_front().unwrap_or_else(|| 0f32);
         }
 
         let mut wrong_reported_hashrate = false;
@@ -277,17 +321,16 @@ pub async fn handle(
         }
 
         if is_first_share {
-            this_miner_chipid = if data_len >= 5 {
-                CompactString::from(data[4])
-            } else {
-                CompactString::default()
-            };
+            this_miner_chipid.clear();
+            if data_len >= 5 {
+                this_miner_chipid.push_str(data[4]);
+            }
         }
 
         let hashrate_perc_diff_for_calc = perc_diff(hashrate, hashrate_calc);
 
-        if diff > kolka::kolka::get_diff("DUE")
-            && diff <= kolka::kolka::get_diff("ESP8266NH")
+        if diff > DUE_DIFF_CACHE.load(Relaxed)
+            && diff <= ESP8266NH_DIFF_CACHE.load(Relaxed)
             && hashrate_perc_diff_for_calc > 15f32
             && conn.miner_stat.share_time >= 1.5
         {
@@ -295,7 +338,7 @@ pub async fn handle(
         }
 
         // we don't care whether they overreport their hashrate
-        if hashrate_perc_diff_for_calc > 15f32 && hashrate < hashrate_calc {
+        if conn.miner_stat.share_time >= 1.5 && hashrate_perc_diff_for_calc > 15f32 && hashrate < hashrate_calc {
             // the difference is sometimes (currently) inexplicably high, therefore we rarely want to reject shares for it..
             if hashrate_perc_diff_for_calc >= 50f32 && false {
                 // disabled for now..
@@ -304,7 +347,7 @@ pub async fn handle(
             hashrate = hashrate_calc;
         }
 
-        let avg_sharetime = avg_from_array(&conn.miner_stat.share_times_list);
+        let avg_sharetime = conn.miner_stat.total_share_times / conn.miner_stat.share_times_list.len() as f32;
         let actual_expected_share_time =
             random * expected_share_time as u64 / (diff as u64 * 100 + 1);
         if (conn.miner_stat.accepted_shares == 4
@@ -320,48 +363,36 @@ pub async fn handle(
             start_hashrate = hashrate;
 
             diff = kolka::kolka::v3(
-                avg_from_array(&conn.miner_stat.share_times_list),
+                // avg_from_array(&conn.miner_stat.share_times_list),
+                avg_sharetime,
                 expected_share_time,
                 hashrate,
             );
         }
-        let diff_obj = match pool_rewards
-            .get(&req_difficulty) {
-            None => {
-                let ret = if !conn.miner_stat.override_diff.is_empty() {
-                    pool_rewards.get(conn.miner_stat.override_diff.as_str()).expect(&format!("failed to get diff {}", conn.miner_stat.override_diff))
-                } else {
-                    pool_rewards.get("NET").expect("failed to get diff NET")
-                };
-                ret
-            }
-            Some(ok) => { ok }
-        };
-
-        let reward_div = diff_obj.reward;
-        let max_hashrate = diff_obj.max_hashrate;
-        let min_hashrate = diff_obj.min_hashrate;
-        expected_share_time = diff_obj.expected_share_time;
-        let block_probability = diff_obj.block_chance;
+        let reward_div = diff_info.reward;
+        let max_hashrate = diff_info.max_hashrate;
+        let min_hashrate = diff_info.min_hashrate;
+        expected_share_time = diff_info.expected_share_time;
+        let block_probability = diff_info.block_chance;
 
         reward = 0f32;
         if !conn.miner_stat.reject_shares.is_empty() {
             msg.clear();
             msg.push_str("BAD,");
-            msg.push_str(&conn.miner_stat.reject_shares);
+            msg.push_str(conn.miner_stat.reject_shares.as_str());
             msg.push('\n');
             conn.write(&msg).await?;
 
             conn.miner_stat.reject_shares.clear();
             conn.miner_stat.rejected_shares += 1;
         } else if hashrate < min_hashrate as f32 {
-            conn.miner_stat.override_diff = CompactString::from(kolka::kolka::v2_reverse(&req_difficulty));
+            conn.miner_stat.override_diff = CompactString::from(kolka::kolka::v2_reverse(req_difficulty.as_str()));
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too high starting difficulty\n").await?;
             start_hashrate = -1f32;
             diff = kolka::kolka::get_diff(&conn.miner_stat.override_diff);
         } else if hashrate >= max_hashrate as f32 {
-            conn.miner_stat.override_diff = CompactString::from(kolka::kolka::v2(&req_difficulty));
+            conn.miner_stat.override_diff = CompactString::from(kolka::kolka::v2(req_difficulty.as_str()));
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too low starting difficulty\n").await?;
             start_hashrate = -1f32;
@@ -370,7 +401,7 @@ pub async fn handle(
             conn.miner_stat.accepted_shares += 1;
             if conn.miner_stat.accepted_shares > 10 {
                 // why is this a thing?
-                if diff <= kolka::kolka::get_diff("ESP8266NH") {
+                if diff <= ESP8266NH_DIFF_CACHE.load(Relaxed) {
                     if this_miner_chipid.is_empty() {
                         conn.miner_stat.rejected_shares += 1;
                     } else if data_len >= 5 && data[4] != this_miner_chipid.as_str() {
@@ -395,11 +426,12 @@ pub async fn handle(
                 }
             }
 
-            if (rng().random_range(0f32..1f32) * block_probability as f32).floor() == 1f32 {
+            // if (rand::rng().random_range(0f32..1f32) * block_probability as f32).floor() == 1f32 {
+            if rng().random_range(0u32..block_probability) == 0 {
                 reward += config.block_reward;
 
                 let block_infos = BlockInfos::new(
-                    SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+                    answer_received.duration_since(UNIX_EPOCH)?.as_secs(),
                     conn.miner_stat.username.to_string(),
                     reward,
                     "DUCO-S1".to_string(),
@@ -423,20 +455,33 @@ pub async fn handle(
                 .entry(conn.miner_stat.username.clone())
                 .or_insert(0f32) += reward;
 
-            conn.miner_stat.software = CompactString::from(
-                if data_len >= 3 {
-                    let cleaned_name = clean_name(&data[2]);
-                    match cleaned_name.as_str() {
-                        "" => "Unknown miner".to_string(),
-                        _ => cleaned_name,
-                    }
-                } else {
-                    "Unknown miner".to_string()
+            // conn.miner_stat.software = CompactString::from(
+            //     if data_len >= 3 {
+            //         let cleaned_name = clean_name(&data[2]);
+            //         match cleaned_name.as_str() {
+            //             "" => "Unknown miner".to_string(),
+            //             _ => cleaned_name,
+            //         }
+            //     } else {
+            //         "Unknown miner".to_string()
+            //     }
+            // );
+
+            conn.miner_stat.software.clear();
+
+            if data_len >= 3 {
+                clean_name_into(data[2], &mut conn.miner_stat.software);
+
+                if conn.miner_stat.software.is_empty() {
+                    conn.miner_stat.software.push_str("Unknown miner");
                 }
-            );
+            } else {
+                conn.miner_stat.software.push_str("Unknown miner");
+            }
 
             let wallet_id = if data_len >= 6 { &data[5] } else { "None" };
-            conn.miner_stat.wallet_id = CompactString::from(wallet_id.trim_end_matches("\n"));
+            conn.miner_stat.wallet_id.clear();
+            conn.miner_stat.wallet_id.push_str(wallet_id.trim_end_matches("\n"));
 
             let (rig_part, key_part) = if data_len >= 4 {
                 match data[3].split_once(':') {
@@ -446,15 +491,21 @@ pub async fn handle(
             } else {
                 ("", None)
             };
-            let rig_identifier = {
-                let cleaned = clean_name(rig_part);
-                match cleaned.as_str() {
-                    "" => "None".to_string(),
-                    _ => cleaned,
-                }
-            };
+            // let rig_identifier = {
+            //     let cleaned = clean_name(rig_part);
+            //     match cleaned.as_str() {
+            //         "" => "None".to_string(),
+            //         _ => cleaned,
+            //     }
+            // };
 
-            conn.miner_stat.id = CompactString::from(&rig_identifier);
+            conn.miner_stat.id.clear();
+            clean_name_into(rig_part, &mut conn.miner_stat.id);
+            if conn.miner_stat.id.is_empty() {
+                conn.miner_stat.id.push_str("None");
+            }
+
+            // conn.miner_stat.id = CompactString::from(&rig_identifier);
             conn.miner_stat.hashrate = if hashrate_is_estimated {
                 hashrate
             } else {
@@ -464,7 +515,10 @@ pub async fn handle(
 
             if let Some(key) = key_part {
                 // mining key backwards compatibility for old miners
-                conn.miner_stat.password = CompactString::from(BASE64_STANDARD.encode(key));
+                let encoded_len = BASE64_STANDARD.encode_slice(key.as_bytes(), &mut password_buf)?;
+                let encoded = std::str::from_utf8(&password_buf[..encoded_len])?;
+                conn.miner_stat.password.clear();
+                conn.miner_stat.password.push_str(encoded);
             }
 
 
@@ -476,7 +530,8 @@ pub async fn handle(
                 }
             }
 
-            conn.miner_stat.this_miner_chipid = this_miner_chipid.clone();
+            conn.miner_stat.this_miner_chipid.clear();
+            conn.miner_stat.this_miner_chipid.push_str(this_miner_chipid.as_str());
             conn.miner_stat.reward = reward;
 
             let miner_stat_slim = conn.miner_stat.convert_slim();
@@ -510,6 +565,17 @@ fn perc_diff(hashrate: f32, hashrate_calc: f32) -> f32 {
     (100f32 * ((hashrate - hashrate_calc) / ((hashrate + hashrate_calc) / 2f32)).abs()).floor()
 }
 
+fn set_req_difficulty(out: &mut CompactString, value: &str) -> bool {
+    if value.len() > 16 {
+        out.clear();
+        return false;
+    }
+
+    out.clear();
+    out.push_str(value);
+    true
+}
+
 fn get_user_workers(username: &str) -> f32 {
     USR_WORKERS_ALLOC
         .get(username)
@@ -528,39 +594,179 @@ fn check_workers(max: f32, config: &PoolConfig) -> bool {
     false
 }
 
-const ALLOWED_SPECIAL_IOT: [char; 7] = ['.', '(', ')', ':', '@', '-', ' '];
-fn clean_iot(input: &str) -> String {
-    input.replace(
-        |x: char| !x.is_ascii_alphanumeric() && !ALLOWED_SPECIAL_IOT.contains(&x),
-        "",
-    )
+const fn build_allowed() -> [bool; 128] {
+    let mut table = [false; 128];
+    table[b'.' as usize] = true;
+    table[b'(' as usize] = true;
+    table[b')' as usize] = true;
+    table[b'-' as usize] = true;
+    table[b' ' as usize] = true;
+    table
 }
 
-const ALLOWED_SPECIAL: [char; 5] = ['.', '(', ')', '-', ' '];
-fn clean_name(input: &str) -> String {
-    input.replace(
-        |x: char| !x.is_ascii_alphanumeric() && !ALLOWED_SPECIAL.contains(&x),
-        "",
-    )
+const fn build_allowed_iot() -> [bool; 128] {
+    let mut table = [false; 128];
+    table[b'.' as usize] = true;
+    table[b'(' as usize] = true;
+    table[b')' as usize] = true;
+    table[b':' as usize] = true;
+    table[b'@' as usize] = true;
+    table[b'-' as usize] = true;
+    table[b' ' as usize] = true;
+    table
+}
+
+const ALLOWED_TABLE: [bool; 128] = build_allowed();
+const ALLOWED_IOT_TABLE: [bool; 128] = build_allowed_iot();
+
+// const ALLOWED_SPECIAL_IOT: [char; 7] = ['.', '(', ')', ':', '@', '-', ' '];
+// fn clean_iot(input: &str) -> String {
+//     input.replace(
+//         |x: char| !x.is_ascii_alphanumeric() && !ALLOWED_SPECIAL_IOT.contains(&x),
+//         "",
+//     )
+// }
+
+// const ALLOWED_SPECIAL: [char; 5] = ['.', '(', ')', '-', ' '];
+
+// const fn build_allowed() -> [bool; 128] {
+//     let mut t = [false; 128];
+//     // alphanumeric handled separately; add special chars:
+//     t[b'.' as usize] = true;
+//     t[b'(' as usize] = true;
+//     t[b')' as usize] = true;
+//     t[b'-' as usize] = true;
+//     t[b' ' as usize] = true;
+//     t
+// }
+//
+// const fn build_iot_allowed() -> [bool; 128] {
+//     let mut t = [false; 128];
+//     // alphanumeric handled separately; add special chars:
+//     t[b'.' as usize] = true;
+//     t[b'(' as usize] = true;
+//     t[b')' as usize] = true;
+//     t[b':' as usize] = true;
+//     t[b'@' as usize] = true;
+//     t[b'-' as usize] = true;
+//     t[b' ' as usize] = true;
+//     t
+// }
+// static ALLOWED_TABLE: [bool; 128] = build_allowed();
+// static ALLOWED_IOT_TABLE: [bool; 128] = build_iot_allowed();
+// fn clean_name(input: &str) -> String {
+//     input.replace(
+//         |x: char| !x.is_ascii_alphanumeric() && !ALLOWED_SPECIAL.contains(&x),
+//         "",
+//     )
+// }
+
+fn clean_name_into(input: &str, out: &mut CompactString) {
+    out.clear();
+
+    for b in input.bytes() {
+        if b.is_ascii_alphanumeric() || (b < 128 && ALLOWED_TABLE[b as usize]) {
+            out.push(char::from(b));
+        }
+    }
+}
+
+fn clean_iot_into(input: &str, out: &mut CompactString) {
+    out.clear();
+
+    for b in input.bytes() {
+        if b.is_ascii_alphanumeric() || (b < 128 && ALLOWED_IOT_TABLE[b as usize]) {
+            out.push(char::from(b));
+        }
+    }
 }
 
 // split s by commas into dst, missing fields are ""
+// fn scan_fields<'a>(s: &'a str, dst: &mut [&'a str; 8]) -> usize {
+//     let mut n = 0;
+//     let mut rest = s;
+//     while n < dst.len() {
+//         match rest.find(',') {
+//             Some(i) => {
+//                 dst[n] = &rest[..i];
+//                 n += 1;
+//                 rest = &rest[i + 1..];
+//             }
+//             None => {
+//                 dst[n] = rest;
+//                 n += 1;
+//                 return n;
+//             }
+//         }
+//     }
+//     n
+// }
 fn scan_fields<'a>(s: &'a str, dst: &mut [&'a str; 8]) -> usize {
-    let mut n = 0;
-    let mut rest = s;
-    while n < dst.len() {
-        match rest.find(',') {
-            Some(i) => {
-                dst[n] = &rest[..i];
-                n += 1;
-                rest = &rest[i + 1..];
+    let bytes = s.as_bytes();
+
+    let mut start = 0;
+    let mut field = 0;
+
+    for i in 0..bytes.len() {
+        if bytes[i] == b',' {
+            dst[field] = &s[start..i];
+            field += 1;
+
+            if field == dst.len() {
+                return field;
             }
-            None => {
-                dst[n] = rest;
-                n += 1;
-                return n;
-            }
+
+            start = i + 1;
         }
     }
-    n
+
+    if field < dst.len() {
+        dst[field] = &s[start..];
+        field += 1;
+    }
+
+    field
+}
+
+fn resolve_reward_info(
+    pool_rewards: &DashMap<String, Difficulty>,
+    req_difficulty: &str,
+    override_difficulty: &str,
+) -> Option<Difficulty> {
+    if let Some(info) = pool_rewards.get(req_difficulty).map(|r| *r) {
+        return Some(info);
+    }
+
+    if !override_difficulty.is_empty() {
+        if let Some(info) = pool_rewards.get(override_difficulty).map(|r| *r) {
+            return Some(info);
+        }
+    }
+
+    pool_rewards.get("NET").map(|r| *r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scan_fields;
+
+    #[test]
+    fn scan_fields_handles_empty_and_trailing_fields() {
+        let mut out = [""; 8];
+        let n = scan_fields("a,,c,\n", &mut out);
+        assert_eq!(n, 4);
+        assert_eq!(out[0], "a");
+        assert_eq!(out[1], "");
+        assert_eq!(out[2], "c");
+        assert_eq!(out[3], "\n");
+    }
+
+    #[test]
+    fn scan_fields_caps_at_destination_len() {
+        let mut out = [""; 8];
+        let n = scan_fields("0,1,2,3,4,5,6,7,8,9", &mut out);
+        assert_eq!(n, 8);
+        assert_eq!(out[0], "0");
+        assert_eq!(out[7], "7");
+    }
 }

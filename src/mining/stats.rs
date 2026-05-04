@@ -46,6 +46,7 @@ pub struct MinerStat {
 
     // NEVER SERIALIZED:
     pub last_share_reset: u64,
+    pub total_share_times: f32, // adds all items from share_time_list
     pub share_times_list: VecDeque<f32>,
     pub reject_shares: CompactString,
     pub override_diff: CompactString,

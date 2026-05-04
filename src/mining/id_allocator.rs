@@ -63,7 +63,9 @@ impl WorkerAllocator {
         self.active_half_steps = self.active_half_steps.saturating_sub(step);
         let slot = (id * 2.0) as u32;
         let encoded = encode(slot, is_esp32);
-        let pos = self.free_slots.binary_search_by_key(&slot, |&e| slot_of(e))
+        let pos = self
+            .free_slots
+            .binary_search_by_key(&slot, |&e| slot_of(e))
             .unwrap_or_else(|p| p);
         self.free_slots.insert(pos, encoded);
         self.compact();
@@ -82,7 +84,9 @@ impl WorkerAllocator {
         self.free_slots.remove(0);
         // Put our current slot back (sorted insert)
         let encoded = encode(current_slot, is_esp32);
-        let pos = self.free_slots.binary_search_by_key(&current_slot, |&e| slot_of(e))
+        let pos = self
+            .free_slots
+            .binary_search_by_key(&current_slot, |&e| slot_of(e))
             .unwrap_or_else(|p| p);
         self.free_slots.insert(pos, encoded);
         self.compact();
@@ -110,5 +114,37 @@ impl WorkerAllocator {
 impl Default for WorkerAllocator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WorkerAllocator;
+
+    #[test]
+    fn recycles_lowest_slot_first() {
+        let mut alloc = WorkerAllocator::new();
+        let a = alloc.allocate(false);
+        let b = alloc.allocate(false);
+        let c = alloc.allocate(false);
+        assert_eq!((a, b, c), (1.0, 2.0, 3.0));
+
+        alloc.release(2.0, false);
+        alloc.release(1.0, false);
+
+        assert_eq!(alloc.allocate(false), 1.0);
+        assert_eq!(alloc.allocate(false), 2.0);
+    }
+
+    #[test]
+    fn mixed_steps_preserve_half_slots() {
+        let mut alloc = WorkerAllocator::new();
+        let pc = alloc.allocate(false);
+        let esp = alloc.allocate(true);
+        assert_eq!(pc, 1.0);
+        assert_eq!(esp, 1.5);
+
+        alloc.release(pc, false);
+        assert_eq!(alloc.try_recycle(esp, true), Some(1.0));
     }
 }

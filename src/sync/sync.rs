@@ -1,7 +1,7 @@
 use crate::cfg::config::PoolConfig;
 use crate::data::data::Bans;
 use crate::mining::{mining, stats};
-use crate::{data, CONFIG, CONNECTIONS, POOL_REWARDS};
+use crate::{data, kolka, CONFIG, CONNECTIONS, POOL_REWARDS};
 use compact_str::CompactString;
 use data::data::LoginInfos;
 use log::{debug, error, info, warn};
@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::process::exit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -20,7 +21,7 @@ use tokio::sync::Mutex;
 static SYNC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 //#[serde(skip_serializing_if = "Option::is_none")]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub struct Difficulty {
     pub difficulty: u64,
     pub reward: u32,
@@ -140,6 +141,9 @@ pub async fn resync_pool_rewards(config: &PoolConfig) -> Result<(), Box<dyn std:
     for (key, val) in pool_rewards {
         POOL_REWARDS.insert(key, val);
     }
+
+    mining::DUE_DIFF_CACHE.store(kolka::kolka::get_diff("DUE"), Relaxed);
+    mining::ESP8266NH_DIFF_CACHE.store(kolka::kolka::get_diff("ESP8266NH"), Relaxed);
 
     Ok(())
 }
@@ -283,8 +287,11 @@ pub async fn sync(
     let workers = multipart::Part::text(worker_content)
         .file_name(format!("workers_{}.json", config.pool_name));
 
-    // let balances = mining::BALANCES_TO_UPDATE.clone();
-    let balance_keys: Vec<CompactString> = mining::BALANCES_TO_UPDATE.iter().map(|e| e.key().clone()).collect();
+    // Serialize the live map directly to avoid cloning the full balance set.
+    let balance_keys: Vec<CompactString> = mining::BALANCES_TO_UPDATE
+        .iter()
+        .map(|entry| entry.key().clone())
+        .collect();
     let rewards_content = serde_json::to_string(&*mining::BALANCES_TO_UPDATE)?;
 
     std::fs::write(&reward_path, &rewards_content)?;
@@ -312,10 +319,9 @@ pub async fn sync(
                 let status = res.status();
                 if status.is_success() {
                     // remove all balances we've already synced
-                    // mining::BALANCES_TO_UPDATE.retain(|key, _| !balance_keys.contains(key));
-                    balance_keys.iter().for_each(|key| {
+                    for key in &balance_keys {
                         mining::BALANCES_TO_UPDATE.remove(key);
-                    });
+                    }
                     {
                         let mut block_lock = mining::GLOBAL_BLOCKS.lock().await;
                         block_lock.clear();

@@ -35,8 +35,6 @@ pub struct Connection {
     // pub username: String,
     pub id: Box<str>,
     pub miner_stat: mining::stats::MinerStat,
-    // Reusable buffer for reads — avoids re-allocating on every read_to_string call
-    read_buf: Vec<u8>,
 }
 
 impl Drop for Connection {
@@ -58,7 +56,6 @@ impl Connection {
             writer: write_half,
             id,
             miner_stat: MinerStat::new(addr.ip().to_string(), username),
-            read_buf: Vec::with_capacity(128),
         }
     }
 
