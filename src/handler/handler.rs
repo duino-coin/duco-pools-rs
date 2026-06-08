@@ -24,14 +24,15 @@ async fn ban_ip(ip: &str) -> Result<(), anyhow::Error> {
 pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::Error> {
     let config = CONFIG.get().unwrap();
     conn.write(&format!("{}\n", config.server_version)).await?;
+    let mut data = String::new();
 
     // this loop only handles one JOB requests, however, it is necessary so the user can first request the MOTD
     loop {
-        let mut data = String::new();
         conn.read_to_string(&mut data).await?;
-        let data_split = data.trim().split(",").collect::<Box<[&str]>>();
+        let mut data_split = [""; 8];
+        let data_len = mining::mining::scan_fields(data.trim(), &mut data_split);
 
-        if conn.miner_stat.ip.is_empty() || data_split.len() > 6
+        if conn.miner_stat.ip.is_empty() || data_len > 6
         // no clue what '!conn.remoteAddr' is supposed to do
         {
             conn.write("BAD,Incorrect data\n").await?;
@@ -46,9 +47,9 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
                 conn.write("BAD,User banned\n").await?;
                 return Ok(());
             }
-            if data_split.len() >= 2 {
+            if data_len >= 2 {
                 let username = data_split[1];
-                if ban.banned_usernames.contains(&username.to_string()) && conn.miner_stat.ip != "127.0.0.1" {
+                if ban.banned_usernames.contains(username) && conn.miner_stat.ip != "127.0.0.1" {
                     if !ban.banned_ips.contains(&conn.miner_stat.ip) {
                         ban_ip(&conn.miner_stat.ip).await?;
                         // ban.banned_ips.push(conn.ip.clone());
@@ -63,7 +64,7 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
         }
 
         if data_split[0] == "JOB" {
-            if data_split.len() == 1 {
+            if data_len == 1 {
                 conn.write("BAD,No username specified\n").await?;
                 return Ok(());
             } else {
@@ -72,7 +73,7 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
                 } else if conn.miner_stat.username != data_split[1] {
                     return Ok(());
                 }
-                mining::mining::handle(&mut conn, data_split, config, false).await?;
+                mining::mining::handle(&mut conn, data_split, data_len, config, false).await?;
                 break;
             }
         } else if data_split[0] == "MOTD" {

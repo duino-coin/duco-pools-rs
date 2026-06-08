@@ -28,7 +28,8 @@ fn slot_of(encoded: u32) -> u32 {
 pub struct WorkerAllocator {
     // High-water mark in half-steps. Next fresh slot = next_slot + step.
     next_slot: u32,
-    // Recycled slots (packed with step), sorted ascending by slot value.
+    // Recycled slots (packed with step), sorted descending by slot value.
+    // The lowest slot is at the end so allocation can use pop() instead of remove(0)
     free_slots: Vec<u32>,
     // Number of active half-steps (for max_workers check).
     active_half_steps: u32,
@@ -47,8 +48,7 @@ impl WorkerAllocator {
         let step = if is_esp32 { 1u32 } else { 2 };
         self.active_half_steps += step;
         // Grab the smallest recycled slot if one exists
-        let slot = if let Some(&encoded) = self.free_slots.first() {
-            self.free_slots.remove(0);
+        let slot = if let Some(encoded) = self.free_slots.pop() {
             slot_of(encoded)
         } else {
             // Advance the high-water mark
@@ -65,7 +65,7 @@ impl WorkerAllocator {
         let encoded = encode(slot, is_esp32);
         let pos = self
             .free_slots
-            .binary_search_by_key(&slot, |&e| slot_of(e))
+            .binary_search_by_key(&std::cmp::Reverse(slot), |&e| std::cmp::Reverse(slot_of(e)))
             .unwrap_or_else(|p| p);
         self.free_slots.insert(pos, encoded);
         self.compact();
@@ -76,17 +76,17 @@ impl WorkerAllocator {
     pub fn try_recycle(&mut self, current_id: f32, is_esp32: bool) -> Option<f32> {
         let current_slot = (current_id * 2.0) as u32;
         // Is there a free slot lower than ours?
-        let lowest_free = slot_of(*self.free_slots.first()?);
+        let lowest_free = slot_of(*self.free_slots.last()?);
         if lowest_free >= current_slot {
             return None; // nothing lower available
         }
         // Take the lower slot
-        self.free_slots.remove(0);
+        self.free_slots.pop();
         // Put our current slot back (sorted insert)
         let encoded = encode(current_slot, is_esp32);
         let pos = self
             .free_slots
-            .binary_search_by_key(&current_slot, |&e| slot_of(e))
+            .binary_search_by_key(&std::cmp::Reverse(current_slot), |&e| std::cmp::Reverse(slot_of(e)))
             .unwrap_or_else(|p| p);
         self.free_slots.insert(pos, encoded);
         self.compact();
@@ -94,10 +94,10 @@ impl WorkerAllocator {
     }
     // Shrink the high-water mark by popping free slots off the top.
     fn compact(&mut self) {
-        while let Some(&encoded) = self.free_slots.last() {
+        while let Some(&encoded) = self.free_slots.first() {
             let (slot, step) = decode(encoded);
             if slot == self.next_slot {
-                self.free_slots.pop();
+                self.free_slots.remove(0);
                 self.next_slot -= step;
             } else {
                 break;
@@ -146,5 +146,16 @@ mod tests {
 
         alloc.release(pc, false);
         assert_eq!(alloc.try_recycle(esp, true), Some(1.0));
+    }
+
+    #[test]
+    fn compact_keeps_fresh_allocations_low_after_releasing_highest_slot() {
+        let mut alloc = WorkerAllocator::new();
+        assert_eq!(alloc.allocate(false), 1.0);
+        assert_eq!(alloc.allocate(false), 2.0);
+        assert_eq!(alloc.allocate(false), 3.0);
+
+        alloc.release(3.0, false);
+        assert_eq!(alloc.allocate(false), 3.0);
     }
 }

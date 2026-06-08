@@ -43,11 +43,10 @@ pub static ESP8266NH_DIFF_CACHE: LazyLock<AtomicU32> = LazyLock::new(|| AtomicU3
 
 pub static DUE_DIFF_CACHE: LazyLock<AtomicU32> = LazyLock::new(|| AtomicU32::new(0));
 
-const PC_DIFF_TIERS: [&str; 4] = ["EXTREME", "NET", "MEDIUM", "LOW"];
-
 pub async fn handle(
     conn: &mut Connection,
-    initial_data: Box<[&str]>,
+    initial_data: [&str; 8],
+    initial_data_len: usize,
     config: &PoolConfig,
     using_avr: bool,
 ) -> Result<(), anyhow::Error> {
@@ -75,9 +74,8 @@ pub async fn handle(
     let mut data_len: usize;
     let mut read = String::with_capacity(32); // needed for first share..
 
-    data_len = initial_data.len().min(8);
+    data_len = initial_data_len.min(8);
     data[..data_len].copy_from_slice(&initial_data[..data_len]);
-    drop(initial_data);
 
     let mut job_str = String::with_capacity(32);
     let mut msg = String::with_capacity(23);
@@ -160,15 +158,6 @@ pub async fn handle(
             {
                 clean_iot_into(&data[4], &mut conn.miner_stat.iot_reading);
             }
-            // let cleaned_iot = clean_iot(&data[4]);
-
-            // if cleaned_iot.is_empty() {
-            //     conn.miner_stat.iot_reading = CompactString::default();
-            // } else if data[4].len() > 48 {
-            //     conn.miner_stat.iot_reading = CompactString::const_new("Error:data too long");
-            // } else {
-            //     conn.miner_stat.iot_reading = CompactString::from(data[4]);
-            // }
         }
 
         // let user_workers = get_user_workers(&conn.miner_stat.username);
@@ -194,15 +183,7 @@ pub async fn handle(
         if is_first_share {
             diff = diff_info.difficulty as u32;
         }
-
-        // id adjustment
-        // {
-        //     if let Some(mut alloc) = USR_WORKERS_ALLOC.get_mut(&conn.miner_stat.username) {
-        //         if let Some(new_id) = alloc.try_recycle(conn.miner_stat.amount_of_workers, conn.miner_stat.is_req_diff_esp32) {
-        //             conn.miner_stat.amount_of_workers = new_id;
-        //         }
-        //     }
-        // }
+        
 
         random = rand::rng().random_range(0u64..diff as u64 * 100u64) + 1;
 
@@ -358,7 +339,7 @@ pub async fn handle(
                 > 25f32)
             // if the hashrate has changed substantially or if the sharetime is substantially lower than targeted, adjust
         ))
-            && PC_DIFF_TIERS.contains(&req_difficulty.as_str())
+            && is_pc_diff_tier(req_difficulty.as_str())
         {
             start_hashrate = hashrate;
 
@@ -565,6 +546,10 @@ fn perc_diff(hashrate: f32, hashrate_calc: f32) -> f32 {
     (100f32 * ((hashrate - hashrate_calc) / ((hashrate + hashrate_calc) / 2f32)).abs()).floor()
 }
 
+fn is_pc_diff_tier(req_difficulty: &str) -> bool {
+    matches!(req_difficulty, "EXTREME" | "NET" | "MEDIUM" | "LOW")
+}
+
 fn set_req_difficulty(out: &mut CompactString, value: &str) -> bool {
     if value.len() > 16 {
         out.clear();
@@ -682,26 +667,7 @@ fn clean_iot_into(input: &str, out: &mut CompactString) {
 }
 
 // split s by commas into dst, missing fields are ""
-// fn scan_fields<'a>(s: &'a str, dst: &mut [&'a str; 8]) -> usize {
-//     let mut n = 0;
-//     let mut rest = s;
-//     while n < dst.len() {
-//         match rest.find(',') {
-//             Some(i) => {
-//                 dst[n] = &rest[..i];
-//                 n += 1;
-//                 rest = &rest[i + 1..];
-//             }
-//             None => {
-//                 dst[n] = rest;
-//                 n += 1;
-//                 return n;
-//             }
-//         }
-//     }
-//     n
-// }
-fn scan_fields<'a>(s: &'a str, dst: &mut [&'a str; 8]) -> usize {
+pub(crate) fn scan_fields<'a>(s: &'a str, dst: &mut [&'a str; 8]) -> usize {
     let bytes = s.as_bytes();
 
     let mut start = 0;
