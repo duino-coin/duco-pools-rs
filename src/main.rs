@@ -28,6 +28,23 @@ use tokio_util::sync::CancellationToken;
 
 pub static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
+struct ConnectionCounterGuard;
+
+impl ConnectionCounterGuard {
+    fn new() -> Self {
+        CONNECTIONS.fetch_add(1, Relaxed);
+        Self
+    }
+}
+
+impl Drop for ConnectionCounterGuard {
+    fn drop(&mut self) {
+        let _ = CONNECTIONS.fetch_update(Relaxed, Relaxed, |v| {
+            if v > 0 { Some(v - 1) } else { Some(0) }
+        });
+    }
+}
+
 // doesn't look nice, but it's fine because these live during the entire runtime anyway
 // and it's cleaner than cloning hundreds of arcs..
 pub static BANS: LazyLock<Mutex<Bans>> = LazyLock::new(|| Mutex::new(Bans::load_bans().unwrap()));
@@ -195,9 +212,8 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                 Ok((socket, addr)) => {
                     let _ = socket.set_nodelay(true);
                     let local_token = token_clone.clone();
-                    // add connection
-                    CONNECTIONS.fetch_add(1, Relaxed);
                     tracker.spawn(async move {
+                        let _connection_counter = ConnectionCounterGuard::new();
                         // returns the future once *ONE* of the tasks completes
                         // e.g. either the miner disconnects OR the token is cancelled
                         tokio::select! {
@@ -227,12 +243,6 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                                 // handler::handler::handle_close(&mut conn);
                                 // to drop the socket and (hopefully) close it
                                 drop(conn);
-                                // remove connection
-                                debug!("Pre-connection: {}", CONNECTIONS.load(Relaxed));
-                                let _ = CONNECTIONS.fetch_update(Relaxed, Relaxed, |v| {
-                                    if v > 0 { Some(v - 1) } else { Some(0) }
-                                });
-                                debug!("After-connection: {}", CONNECTIONS.load(Relaxed));
                             } => {
 
                             },

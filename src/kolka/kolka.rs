@@ -32,7 +32,8 @@ pub fn v1(
     amount_of_workers: f32,
     reward_div: u32,
 ) -> f32 {
-    let mut output = hashrate.log10() / reward_div as f32;
+    let mut output = hashrate.ln() / reward_div as f32;
+
     if difficulty > kolka.highest_pc_diff {
         // GPU, Extreme PC
         output = 2f32
@@ -116,7 +117,7 @@ pub fn v3(sharetime: f32, expected_sharetime: u16, hashrate: f32) -> u32 {
 }
 
 pub fn get_diff(req_diff: &str) -> u32 {
-    let diff = POOL_REWARDS.get(req_diff).unwrap().difficulty;
+    let diff = POOL_REWARDS.get(req_diff).expect(&format!("Failed to get {req_diff}")).difficulty;
     diff as u32
 }
 
