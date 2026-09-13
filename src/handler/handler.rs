@@ -5,6 +5,8 @@ use compact_str::CompactString;
 use log::{debug, warn};
 use std::process::Command;
 
+const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 //const CMD: &str = "csf -td ${ip}"; //csf
 //const CMD: &str = "iptables -A INPUT -s ${ip} -j DROP"; //iptables
 //const CMD: &str = "sudo ufw deny from ${ip} to any"; //ufw
@@ -78,6 +80,8 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
             }
         } else if data_split[0] == "MOTD" {
             conn.write(&config.motd).await?;
+        } else if data_split[0] == "DEBG_VERSION" {
+            conn.write(&CARGO_VERSION).await?;
         }
     }
 
