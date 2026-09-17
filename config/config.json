@@ -28,5 +28,8 @@
   "max_shares_per_minute": 80,
   "restart_script": "",
   "firewall_cmd": "",
-  "dashboard_key": "random_key"
+  "dashboard_key": "random_key",
+  "update_restart_script": "./config/update-restart.sh",
+  "auto_update": true,
+  "update_check_time_seconds": 86400
 }

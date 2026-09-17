@@ -24,6 +24,19 @@ fn slot_of(encoded: u32) -> u32 {
     encoded & SLOT_MASK
 }
 
+// Replaces the f32 ID stored in the connection
+//
+// The packed value remembers how this slot was originally created,
+// even when a different type of miner later occupies it
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub struct WorkerSlot(u32);
+
+impl WorkerSlot {
+    pub fn id(self) -> f32 {
+        slot_of(self.0) as f32 / 2.0
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkerAllocator {
     // High-water mark in half-steps. Next fresh slot = next_slot + step.
@@ -44,54 +57,118 @@ impl WorkerAllocator {
     }
     // Allocate the lowest available ID.
     // Returns the f32 ID (e.g. 1.0, 1.5, 2.0, ...).
-    pub fn allocate(&mut self, is_esp32: bool) -> f32 {
-        let step = if is_esp32 { 1u32 } else { 2 };
-        self.active_half_steps += step;
-        // Grab the smallest recycled slot if one exists
-        let slot = if let Some(encoded) = self.free_slots.pop() {
-            slot_of(encoded)
-        } else {
-            // Advance the high-water mark
-            self.next_slot += step;
-            self.next_slot
+    pub fn allocate(&mut self, is_esp32: bool) -> WorkerSlot {
+        let step = if is_esp32 { 1 } else { 2 };
+
+        let packed = match self.free_slots.pop() {
+            // Keep the original slot metadata.
+            Some(packed) => packed,
+
+            None => {
+                self.next_slot += step;
+
+                // Record the creation step for this new slot.
+                encode(self.next_slot, is_esp32)
+            }
         };
-        slot as f32 / 2.0
+
+        self.active_half_steps += step;
+        WorkerSlot(packed)
     }
     // Release an ID back into the pool.
-    pub fn release(&mut self, id: f32, is_esp32: bool) {
-        let step = if is_esp32 { 1u32 } else { 2 };
-        self.active_half_steps = self.active_half_steps.saturating_sub(step);
-        let slot = (id * 2.0) as u32;
-        let encoded = encode(slot, is_esp32);
-        let pos = self
-            .free_slots
-            .binary_search_by_key(&std::cmp::Reverse(slot), |&e| std::cmp::Reverse(slot_of(e)))
-            .unwrap_or_else(|p| p);
-        self.free_slots.insert(pos, encoded);
+    pub fn release(&mut self, slot: WorkerSlot, is_esp32: bool) {
+        // Worker count uses the CURRENT miner's type.
+        let worker_weight = if is_esp32 { 1 } else { 2 };
+        self.active_half_steps =
+            self.active_half_steps.saturating_sub(worker_weight);
+
+        // Compaction uses the slot's ORIGINAL creation step.
+        // Return its packed value unchanged.
+        self.insert_free(slot.0);
         self.compact();
     }
     // Swap the miner's current ID for the lowest available free ID,
     // if one is lower. Returns `Some(new_id)` on swap, `None` if
     // the miner already holds the best available ID.
-    pub fn try_recycle(&mut self, current_id: f32, is_esp32: bool) -> Option<f32> {
-        let current_slot = (current_id * 2.0) as u32;
-        // Is there a free slot lower than ours?
-        let lowest_free = slot_of(*self.free_slots.last()?);
-        if lowest_free >= current_slot {
-            return None; // nothing lower available
+    pub fn try_recycle(
+        &mut self,
+        current: WorkerSlot,
+    ) -> Option<WorkerSlot> {
+        let lowest_free = *self.free_slots.last()?;
+
+        if slot_of(lowest_free) >= slot_of(current.0) {
+            return None;
         }
-        // Take the lower slot
+
         self.free_slots.pop();
-        // Put our current slot back (sorted insert)
-        let encoded = encode(current_slot, is_esp32);
-        let pos = self
-            .free_slots
-            .binary_search_by_key(&std::cmp::Reverse(current_slot), |&e| std::cmp::Reverse(slot_of(e)))
-            .unwrap_or_else(|p| p);
-        self.free_slots.insert(pos, encoded);
+
+        // Return the old slot with its own original metadata.
+        self.insert_free(current.0);
         self.compact();
-        Some(lowest_free as f32 / 2.0)
+
+        // The miner now carries the replacement slot's metadata.
+        Some(WorkerSlot(lowest_free))
     }
+
+    fn insert_free(&mut self, packed: u32) {
+        let slot = slot_of(packed);
+
+        let position = self
+            .free_slots
+            .binary_search_by_key(
+                &std::cmp::Reverse(slot),
+                |&entry| std::cmp::Reverse(slot_of(entry)),
+            )
+            .unwrap_or_else(|position| position);
+
+        self.free_slots.insert(position, packed);
+    }
+    // pub fn allocate(&mut self, is_esp32: bool) -> f32 {
+    //     let step = if is_esp32 { 1u32 } else { 2 };
+    //     self.active_half_steps += step;
+    //     // Grab the smallest recycled slot if one exists
+    //     let slot = if let Some(encoded) = self.free_slots.pop() {
+    //         slot_of(encoded)
+    //     } else {
+    //         // Advance the high-water mark
+    //         self.next_slot += step;
+    //         self.next_slot
+    //     };
+    //     slot as f32 / 2.0
+    // }
+
+    // pub fn release(&mut self, id: f32, is_esp32: bool) {
+    //     let step = if is_esp32 { 1u32 } else { 2 };
+    //     self.active_half_steps = self.active_half_steps.saturating_sub(step);
+    //     let slot = (id * 2.0) as u32;
+    //     let encoded = encode(slot, is_esp32);
+    //     let pos = self
+    //         .free_slots
+    //         .binary_search_by_key(&std::cmp::Reverse(slot), |&e| std::cmp::Reverse(slot_of(e)))
+    //         .unwrap_or_else(|p| p);
+    //     self.free_slots.insert(pos, encoded);
+    //     self.compact();
+    // }
+
+    // pub fn try_recycle(&mut self, current_id: f32, is_esp32: bool) -> Option<f32> {
+    //     let current_slot = (current_id * 2.0) as u32;
+    //     // Is there a free slot lower than ours?
+    //     let lowest_free = slot_of(*self.free_slots.last()?);
+    //     if lowest_free >= current_slot {
+    //         return None; // nothing lower available
+    //     }
+    //     // Take the lower slot
+    //     self.free_slots.pop();
+    //     // Put our current slot back (sorted insert)
+    //     let encoded = encode(current_slot, is_esp32);
+    //     let pos = self
+    //         .free_slots
+    //         .binary_search_by_key(&std::cmp::Reverse(current_slot), |&e| std::cmp::Reverse(slot_of(e)))
+    //         .unwrap_or_else(|p| p);
+    //     self.free_slots.insert(pos, encoded);
+    //     self.compact();
+    //     Some(lowest_free as f32 / 2.0)
+    // }
     // Shrink the high-water mark by popping free slots off the top.
     fn compact(&mut self) {
         while let Some(&encoded) = self.free_slots.first() {
@@ -119,7 +196,7 @@ impl Default for WorkerAllocator {
 
 #[cfg(test)]
 mod tests {
-    use super::WorkerAllocator;
+    use super::{WorkerAllocator, WorkerSlot};
 
     #[test]
     fn recycles_lowest_slot_first() {
@@ -127,13 +204,13 @@ mod tests {
         let a = alloc.allocate(false);
         let b = alloc.allocate(false);
         let c = alloc.allocate(false);
-        assert_eq!((a, b, c), (1.0, 2.0, 3.0));
+        assert_eq!((a.id(), b.id(), c.id()), (1.0, 2.0, 3.0));
 
-        alloc.release(2.0, false);
-        alloc.release(1.0, false);
+        alloc.release(b, false);
+        alloc.release(a, false);
 
-        assert_eq!(alloc.allocate(false), 1.0);
-        assert_eq!(alloc.allocate(false), 2.0);
+        assert_eq!(alloc.allocate(false).id(), 1.0);
+        assert_eq!(alloc.allocate(false).id(), 2.0);
     }
 
     #[test]
@@ -141,21 +218,25 @@ mod tests {
         let mut alloc = WorkerAllocator::new();
         let pc = alloc.allocate(false);
         let esp = alloc.allocate(true);
-        assert_eq!(pc, 1.0);
-        assert_eq!(esp, 1.5);
+        assert_eq!(pc.id(), 1.0);
+        assert_eq!(esp.id(), 1.5);
 
         alloc.release(pc, false);
-        assert_eq!(alloc.try_recycle(esp, true), Some(1.0));
+        assert_eq!(alloc.try_recycle(esp).map(WorkerSlot::id), Some(1.0));
     }
 
     #[test]
     fn compact_keeps_fresh_allocations_low_after_releasing_highest_slot() {
         let mut alloc = WorkerAllocator::new();
-        assert_eq!(alloc.allocate(false), 1.0);
-        assert_eq!(alloc.allocate(false), 2.0);
-        assert_eq!(alloc.allocate(false), 3.0);
 
-        alloc.release(3.0, false);
-        assert_eq!(alloc.allocate(false), 3.0);
+        assert_eq!(alloc.allocate(false).id(), 1.0);
+        assert_eq!(alloc.allocate(false).id(), 2.0);
+
+        let highest = alloc.allocate(false);
+        assert_eq!(highest.id(), 3.0);
+
+        alloc.release(highest, false);
+
+        assert_eq!(alloc.allocate(false).id(), 3.0);
     }
 }

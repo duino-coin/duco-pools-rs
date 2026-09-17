@@ -4,6 +4,7 @@ mod handler;
 mod kolka;
 mod mining;
 mod sync;
+mod updater;
 mod web;
 
 use crate::cfg::config::PoolConfig;
@@ -39,16 +40,24 @@ impl ConnectionCounterGuard {
 
 impl Drop for ConnectionCounterGuard {
     fn drop(&mut self) {
-        let _ = CONNECTIONS.fetch_update(Relaxed, Relaxed, |v| {
-            if v > 0 { Some(v - 1) } else { Some(0) }
-        });
+        let _ =
+            CONNECTIONS.fetch_update(
+                Relaxed,
+                Relaxed,
+                |v| {
+                    if v > 0 {
+                        Some(v - 1)
+                    } else {
+                        Some(0)
+                    }
+                },
+            );
     }
 }
 
 // doesn't look nice, but it's fine because these live during the entire runtime anyway
 // and it's cleaner than cloning hundreds of arcs..
 pub static BANS: LazyLock<Mutex<Bans>> = LazyLock::new(|| Mutex::new(Bans::load_bans().unwrap()));
-// pub static POOL_REWARDS: OnceLock<HashMap<String, sync::sync::Difficulty>> = OnceLock::new();
 pub static POOL_REWARDS: LazyLock<DashMap<String, sync::sync::Difficulty>> =
     LazyLock::new(|| DashMap::new());
 
@@ -111,13 +120,47 @@ async fn main() {
     sync::sync::resync_pool_rewards(&config)
         .await
         .expect("failed to update pool rewards");
-    // sync::sync::update_pool_rewards(&config)
-    //     .await
-    //     .expect("failed to update pool rewards");
+
     #[cfg(not(debug_assertions))]
     sync::sync::login(&config).await.expect("failed to login");
+    let config = CONFIG.get_or_init(|| config);
+    let mut update_thread = None;
+    // TODO: test and then activate
+    if false && config.auto_update && !config.update_restart_script.is_empty() {
+        let update_shutdown = tx.clone();
+        update_thread = Some(tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(
+                config.update_check_time_seconds,
+            ))
+            .await;
 
-    CONFIG.get_or_init(|| config);
+            match updater::updater::fetch_latest_version().await {
+                Ok(Some(update)) => {
+                    match updater::updater::spawn_update_restart(
+                        &update,
+                        &config.update_restart_script,
+                    )
+                    .await
+                    {
+                        Ok(helper) => {
+                            info!(
+                                "Update {} is ready; shutting down before replacement",
+                                update.version
+                            );
+                            if update_shutdown.send("s".to_owned()).is_ok() {
+                                helper.detach();
+                            }
+                        }
+                        Err(err) => error!("Failed to prepare update restart: {err:#}"),
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    error!("Failed to download update: {err:#}");
+                }
+            };
+        }));
+    }
 
     let mut sys_clone = sys.clone();
     let sync_thread = tokio::spawn(async move {
@@ -163,12 +206,15 @@ async fn main() {
     ctrlc::set_handler(move || {
         tx.send("s".to_owned()).unwrap();
     })
-        .expect("Failed to handle ctrl-c");
+    .expect("Failed to handle ctrl-c");
 
     start_tcp(rx).await;
-    // when start_tcp yields, the server was ctrl-c'd
+    // Stop background work before the final sync/logout on any shutdown request.
     if restarter.is_some() {
         restarter.take().unwrap().abort();
+    }
+    if update_thread.is_some() {
+        update_thread.take().unwrap().abort();
     }
     sync_thread.abort();
     // last sync before shutdown

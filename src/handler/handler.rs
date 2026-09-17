@@ -92,23 +92,35 @@ pub fn handle_close(conn: &mut Connection) {
     debug!("{} Handling close", conn.id);
     mining::mining::MINER_STATS.remove(&*conn.id);
 
-    let should_remove = {
-        let mut alloc = match USR_WORKERS_ALLOC.get_mut(&conn.miner_stat.username) {
-            Some(a) => a,
-            None => return,
-        };
-        alloc.release(
-            conn.miner_stat.amount_of_workers,
-            conn.miner_stat.is_req_diff_esp32,
-        );
-        alloc.is_empty()
-    };
+    USR_WORKERS_ALLOC.remove_if_mut(
+        &conn.miner_stat.username,
+        |_, alloc| {
+            alloc.release(
+                // conn.miner_stat.amount_of_workers,
+                conn.miner_stat.worker_slot,
+                conn.miner_stat.is_req_diff_esp32,
+            );
+            alloc.is_empty()
+        },
+    );
+
+    // let should_remove = {
+    //     let mut alloc = match USR_WORKERS_ALLOC.get_mut(&conn.miner_stat.username) {
+    //         Some(a) => a,
+    //         None => return,
+    //     };
+    //     alloc.release(
+    //         conn.miner_stat.amount_of_workers,
+    //         conn.miner_stat.is_req_diff_esp32,
+    //     );
+    //     alloc.is_empty()
+    // };
     // drop the RefMut before removing, so we don't deadlock
 
-    if should_remove {
-        USR_WORKERS_ALLOC.remove(&conn.miner_stat.username);
-        debug!("Removed {}", conn.miner_stat.username);
-    }
+    // if should_remove {
+    //     USR_WORKERS_ALLOC.remove(&conn.miner_stat.username);
+    //     debug!("Removed {}", conn.miner_stat.username);
+    // }
 
     debug!("Handling after-close");
 }

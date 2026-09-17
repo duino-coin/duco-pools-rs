@@ -1,6 +1,6 @@
 [package]
 name = "duco-pool-rs"
-version = "0.1.7"
+version = "0.1.2"
 edition = "2021"
 
 [dependencies]
@@ -15,6 +15,7 @@ hex = "0.4.3"
 dashmap = { version = "6.1.0", features = ["serde"] }
 base64 = "0.22.1"
 sha1_smol = { version = "1.0.1", features = ["alloc", "std"] }
+sha2 = "0.11.0"
 itoa = "1.0.15"
 sysinfo = { git = "https://github.com/profpandaa/sysinfo-modified", rev = "54102d8" }
 ctrlc = { version = "3.5.0", features = ["termination"] }

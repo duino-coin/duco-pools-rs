@@ -1,6 +1,7 @@
 use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use crate::mining::id_allocator::WorkerSlot;
 
 // #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[derive(Debug, Default, Clone)]
@@ -43,6 +44,7 @@ pub struct MinerStat {
     pub ip: CompactString, // still annoying..
     // c
     pub amount_of_workers: f32, // it's actually the id for the current worker (read: nth worker)
+    pub worker_slot: WorkerSlot,
 
     // NEVER SERIALIZED:
     pub last_share_reset: u64,
@@ -132,7 +134,8 @@ impl MinerStatSlim
             ping: miner_stat.ping,
             reward: miner_stat.reward,
             ip: miner_stat.ip.clone(),
-            amount_of_workers: miner_stat.amount_of_workers,
+            // amount_of_workers: miner_stat.amount_of_workers,
+            amount_of_workers: miner_stat.worker_slot.id(),
         }
     }
 }

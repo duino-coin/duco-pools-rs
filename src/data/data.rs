@@ -1,4 +1,3 @@
-use crate::mining;
 use crate::mining::stats::MinerStat;
 use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
@@ -34,7 +33,7 @@ pub struct Connection {
     // pub ip: String,
     // pub username: String,
     pub id: Box<str>,
-    pub miner_stat: mining::stats::MinerStat,
+    pub miner_stat: MinerStat,
 }
 
 impl Drop for Connection {
@@ -72,6 +71,12 @@ impl Connection {
         &mut self,
         output: &mut String,
     ) -> Result<(), anyhow::Error> {
+        const MAX_FRAME_BYTES: usize = 1024;
+
+        // Reuse the String's allocation without copying
+        let mut bytes = std::mem::take(output).into_bytes();
+        bytes.clear();
+
         output.clear();
 
         tokio::time::timeout(TIMEOUT, async {
@@ -81,68 +86,62 @@ impl Connection {
                 let step_timeout = if first_read {
                     INNER_LONG_TIMEOUT
                 } else {
-                    Duration::from_millis(10)
+                    IDLE_TIMEOUT
                 };
+                let received =
+                    match tokio::time::timeout(step_timeout, self.reader.fill_buf()).await {
+                        Ok(Ok(received)) => received,
+                        Ok(Err(err)) => return Err(anyhow::Error::from(err)),
+                        Err(_) => break,
+                    };
 
-                match tokio::time::timeout(step_timeout, self.reader.fill_buf()).await {
-                    Ok(Ok(received)) => {
-                        if received.is_empty() {
-                            if output.is_empty() {
-                                return Err(ConnectionClosed.into());
-                            } else {
-                                break;
-                            }
-                        }
-
-                        let (slice, consumed, newline_found) =
-                            if let Some(pos) = memchr::memchr(b'\n', received) {
-                                let end =
-                                    if pos > 0 && received[pos - 1] == b'\r' {
-                                        pos - 1
-                                    } else {
-                                        pos
-                                    };
-
-                                (&received[..end], pos + 1, true)
-                            } else {
-                                (received, received.len(), false)
-                            };
-
-                        let s = std::str::from_utf8(slice).map_err(|_| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                "Invalid UTF-8 data",
-                            )
-                        })?;
-
-                        output.push_str(s);
-
-                        self.reader.consume(consumed);
-
-                        // newline found -> done
-                        if newline_found {
-                            break;
-                        }
-
-                        first_read = false;
-                    }
-
-                    Ok(Err(e)) => return Err(e.into()),
-
-                    Err(_) => {
-                        // idle timeout
-                        break;
-                    }
+                if received.is_empty() {
+                    break;
                 }
+
+                let newline = memchr::memchr(b'\n', received);
+                let consumed = newline.map_or(received.len(), |pos| pos + 1);
+
+                if consumed > MAX_FRAME_BYTES - bytes.len() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Message too long",
+                    )
+                        .into());
+                }
+
+                bytes.extend_from_slice(&received[..consumed]);
+                self.reader.consume(consumed);
+
+                if newline.is_some() {
+                    break;
+                }
+
+                first_read = false;
             }
 
             Ok::<(), anyhow::Error>(())
         })
             .await??;
 
-        if output.is_empty() {
+        if bytes.last() == Some(&b'\n') {
+            bytes.pop();
+            if bytes.last() == Some(&b'\r') {
+                bytes.pop();
+            }
+        }
+
+        if bytes.is_empty() {
             return Err(ConnectionClosed.into());
         }
+
+        // Validate once; reuse the byte buffer's allocation.
+        *output = String::from_utf8(bytes).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid UTF-8 data",
+            )
+        })?;
 
         Ok(())
     }

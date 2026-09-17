@@ -103,9 +103,11 @@ pub async fn handle(
             let mut alloc = USR_WORKERS_ALLOC.entry(conn.miner_stat.username.clone()).or_default();
             let kolka_id = alloc.allocate(conn.miner_stat.is_req_diff_esp32);
 
-            conn.miner_stat.amount_of_workers = kolka_id;
+            // conn.miner_stat.amount_of_workers = kolka_id;
+            conn.miner_stat.worker_slot = kolka_id;
 
-            debug!("{}, Assigned {}", conn.id, conn.miner_stat.amount_of_workers);
+            // debug!("{}, Assigned {}", conn.id, conn.miner_stat.amount_of_workers);
+            debug!("{}, Assigned {}", conn.id, conn.miner_stat.worker_slot.id());
         } else {
             data = [""; 8];
             conn.read_to_string(&mut read).await?;
@@ -165,7 +167,8 @@ pub async fn handle(
             .get_mut(&conn.miner_stat.username)
             .map(|mut alloc| {
                 let workers = alloc.active_workers();
-                let new_id = alloc.try_recycle(conn.miner_stat.amount_of_workers, conn.miner_stat.is_req_diff_esp32);
+                // let new_id = alloc.try_recycle(conn.miner_stat.amount_of_workers, conn.miner_stat.is_req_diff_esp32);
+                let new_id = alloc.try_recycle(conn.miner_stat.worker_slot);
                 (workers, new_id)
             })
             .unwrap_or((0.0, None));
@@ -174,7 +177,8 @@ pub async fn handle(
             conn.miner_stat.reject_shares = CompactString::const_new("Too many workers");
         }
         if let Some(id) = new_id {
-            conn.miner_stat.amount_of_workers = id;
+            // conn.miner_stat.amount_of_workers = id;
+            conn.miner_stat.worker_slot = id;
         }
 
         let diff_info =
@@ -246,7 +250,7 @@ pub async fn handle(
             reported_hashrate = 0f32;
         }
 
-        if reported_hashrate <= 0f32 && !wrong_reported_hashrate {
+        if (reported_hashrate <= 0f32 && !wrong_reported_hashrate) || reported_hashrate.is_nan() {
             conn.miner_stat.reject_shares = CompactString::const_new("Invalid data");
         }
 
@@ -392,7 +396,8 @@ pub async fn handle(
                             &kolka,
                             hashrate_calc,
                             diff,
-                            conn.miner_stat.amount_of_workers,
+                            // conn.miner_stat.amount_of_workers,
+                            conn.miner_stat.worker_slot.id(),
                             reward_div,
                         );
                     }
@@ -401,7 +406,8 @@ pub async fn handle(
                         &kolka,
                         hashrate_calc,
                         diff,
-                        conn.miner_stat.amount_of_workers,
+                        // conn.miner_stat.amount_of_workers,
+                        conn.miner_stat.worker_slot.id(),
                         reward_div,
                     );
                 }
@@ -427,6 +433,14 @@ pub async fn handle(
         } else {
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Incorrect result\n").await?;
+        }
+
+        {
+            let now_secs = UNIX_EPOCH.elapsed()?.as_secs();
+            if now_secs - conn.miner_stat.last_share_reset >= 60 {
+                conn.miner_stat.last_share_reset = now_secs;
+                conn.miner_stat.last_min_shares = 0;
+            }
         }
 
         if conn.miner_stat.accepted_shares > 0
@@ -502,15 +516,6 @@ pub async fn handle(
                 conn.miner_stat.password.push_str(encoded);
             }
 
-
-            {
-                let now_secs = UNIX_EPOCH.elapsed()?.as_secs();
-                if now_secs - conn.miner_stat.last_share_reset >= 60 {
-                    conn.miner_stat.last_share_reset = now_secs;
-                    conn.miner_stat.last_min_shares = 0;
-                }
-            }
-
             conn.miner_stat.this_miner_chipid.clear();
             conn.miner_stat.this_miner_chipid.push_str(this_miner_chipid.as_str());
             conn.miner_stat.reward = reward;
@@ -538,10 +543,6 @@ pub async fn handle(
         feedback_sent = SystemTime::now();
     }
 }
-
-fn avg_from_array(share_times_list: &VecDeque<f32>) -> f32 {
-    share_times_list.iter().sum::<f32>() / share_times_list.len() as f32
-}
 fn perc_diff(hashrate: f32, hashrate_calc: f32) -> f32 {
     (100f32 * ((hashrate - hashrate_calc) / ((hashrate + hashrate_calc) / 2f32)).abs()).floor()
 }
@@ -559,13 +560,6 @@ fn set_req_difficulty(out: &mut CompactString, value: &str) -> bool {
     out.clear();
     out.push_str(value);
     true
-}
-
-fn get_user_workers(username: &str) -> f32 {
-    USR_WORKERS_ALLOC
-        .get(username)
-        .map(|a| a.active_workers())
-        .unwrap_or(0.0)
 }
 
 fn check_workers(max: f32, config: &PoolConfig) -> bool {
@@ -603,48 +597,6 @@ const fn build_allowed_iot() -> [bool; 128] {
 
 const ALLOWED_TABLE: [bool; 128] = build_allowed();
 const ALLOWED_IOT_TABLE: [bool; 128] = build_allowed_iot();
-
-// const ALLOWED_SPECIAL_IOT: [char; 7] = ['.', '(', ')', ':', '@', '-', ' '];
-// fn clean_iot(input: &str) -> String {
-//     input.replace(
-//         |x: char| !x.is_ascii_alphanumeric() && !ALLOWED_SPECIAL_IOT.contains(&x),
-//         "",
-//     )
-// }
-
-// const ALLOWED_SPECIAL: [char; 5] = ['.', '(', ')', '-', ' '];
-
-// const fn build_allowed() -> [bool; 128] {
-//     let mut t = [false; 128];
-//     // alphanumeric handled separately; add special chars:
-//     t[b'.' as usize] = true;
-//     t[b'(' as usize] = true;
-//     t[b')' as usize] = true;
-//     t[b'-' as usize] = true;
-//     t[b' ' as usize] = true;
-//     t
-// }
-//
-// const fn build_iot_allowed() -> [bool; 128] {
-//     let mut t = [false; 128];
-//     // alphanumeric handled separately; add special chars:
-//     t[b'.' as usize] = true;
-//     t[b'(' as usize] = true;
-//     t[b')' as usize] = true;
-//     t[b':' as usize] = true;
-//     t[b'@' as usize] = true;
-//     t[b'-' as usize] = true;
-//     t[b' ' as usize] = true;
-//     t
-// }
-// static ALLOWED_TABLE: [bool; 128] = build_allowed();
-// static ALLOWED_IOT_TABLE: [bool; 128] = build_iot_allowed();
-// fn clean_name(input: &str) -> String {
-//     input.replace(
-//         |x: char| !x.is_ascii_alphanumeric() && !ALLOWED_SPECIAL.contains(&x),
-//         "",
-//     )
-// }
 
 fn clean_name_into(input: &str, out: &mut CompactString) {
     out.clear();

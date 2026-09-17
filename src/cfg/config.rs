@@ -58,6 +58,9 @@ pub struct PoolConfig {
     pub firewall_cmd: String,
     #[serde(default = "generate_key")]
     pub dashboard_key: String,
+    pub update_restart_script: String,
+    pub auto_update: bool,
+    pub update_check_time_seconds: u64
 }
 fn default_shares() -> u16 {
     80u16
@@ -103,6 +106,9 @@ impl Default for PoolConfig {
             restart_script: "".to_string(),
             firewall_cmd: "".to_string(),
             dashboard_key: generate_key(),
+            update_restart_script: "".to_string(),
+            auto_update: false,
+            update_check_time_seconds: 0,
         }
     }
 }

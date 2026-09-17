@@ -245,7 +245,6 @@ pub async fn sync(
 
     let mem_usage =
         (sys.free_like_used_memory() as f32 / sys.total_memory() as f32 * 1e4).round() / 100.0; // rounding to two decimals
-    mining::GLOBAL_SHARES_INCREASE.store(0, Ordering::Relaxed);
 
     let worker_path = format!(
         "{}/workers_{}.json",
@@ -332,6 +331,8 @@ pub async fn sync(
                     info!("Successfully synced {}", SYNC_COUNT.load(Ordering::Relaxed));
                     std::fs::remove_file(&reward_path)?; // so we don't accidentally sync the same thing twice
                     std::fs::remove_file(&worker_path)?;
+
+                    mining::GLOBAL_SHARES_INCREASE.store(0, Ordering::Relaxed);
                 } else {
                     warn!(
                     "Failed to sync {}: {}",

@@ -1,0 +1,478 @@
+use anyhow::{bail, Context};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::str::FromStr;
+use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, Command};
+
+// TODO: change to prod url
+// const API_URL: &str = "https://api.github.com/repos/duino-coin/libducohash/releases/latest";
+const API_URL: &str =
+    "https://api.github.com/repos/profpandaa/compatible-libducohash/releases/latest";
+const BUILD_TARGET: &str = env!("BUILD_TARGET");
+const fn parse_version_component(value: &str) -> u32 {
+    match u32::from_str_radix(value, 10) {
+        Ok(number) => number,
+        Err(_) => panic!("invalid Cargo version component"),
+    }
+}
+pub const VERSION_MAJOR: u32 = parse_version_component(env!("CARGO_PKG_VERSION_MAJOR"));
+
+pub const VERSION_MINOR: u32 = parse_version_component(env!("CARGO_PKG_VERSION_MINOR"));
+
+pub const VERSION_PATCH: u32 = parse_version_component(env!("CARGO_PKG_VERSION_PATCH"));
+
+const _: () = assert!(
+    VERSION_MINOR < 100 && VERSION_PATCH < 100,
+    "minor and patch must be below 100"
+);
+
+const fn create_version_code(major: u32, minor: u32, patch: u32) -> u32 {
+    major * 10_000 + minor * 100 + patch
+}
+
+pub const VERSION_CODE: u32 = create_version_code(VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH);
+// VERSION_MAJOR * 10_000 + VERSION_MINOR * 100 + VERSION_PATCH;
+
+fn parse_tag(tag: &str) -> anyhow::Result<u32> {
+    let tag_split = tag.split('.').collect::<Vec<&str>>();
+    let major = if tag_split.len() >= 1 {
+        u32::from_str(tag_split[0])?
+    } else {
+        0
+    };
+    let minor = if tag_split.len() >= 2 {
+        u32::from_str(tag_split[1])?
+    } else {
+        0
+    };
+    let patch = if tag_split.len() >= 3 {
+        u32::from_str(tag_split[2])?
+    } else {
+        0
+    };
+
+    Ok(create_version_code(major, minor, patch))
+}
+
+pub struct DownloadedUpdate {
+    pub version: String,
+    executable: PathBuf,
+    path: PathBuf,
+}
+
+pub struct RestartHelper {
+    child: Option<Child>,
+}
+
+impl Drop for RestartHelper {
+    fn drop(&mut self) {
+        if let Some(child) = &mut self.child {
+            let _ = child.start_kill();
+        }
+    }
+}
+
+impl RestartHelper {
+    pub fn detach(mut self) {
+        let mut child = self.child.take().unwrap();
+        // catch early failures while the pool is alive (no way of saving at this point tho..)
+        tokio::spawn(async move {
+            match child.wait().await {
+                Ok(status) if status.success() => {}
+                Ok(status) => {
+                    log::error!("Update helper exited with {status}; see update-restart.log")
+                }
+                Err(err) => log::error!("Failed to wait for update helper: {err}"),
+            }
+        });
+    }
+}
+
+fn update_path(executable: &Path) -> anyhow::Result<PathBuf> {
+    let mut name = executable
+        .file_stem()
+        .context("Executable has no filename")?
+        .to_os_string();
+    name.push("-update");
+    if let Some(extension) = executable.extension() {
+        name.push(".");
+        name.push(extension);
+    }
+    Ok(executable.with_file_name(name))
+}
+
+fn restart_script(configured: &str, working_dir: &Path) -> anyhow::Result<PathBuf> {
+    let script = Path::new(configured);
+
+    let path = working_dir.join(script);
+    let metadata = std::fs::metadata(&path)
+        .with_context(|| format!("Cannot find update script {}", path.display()))?;
+    if !metadata.is_file() {
+        bail!("Update script is not a file: {}", path.display());
+    }
+
+    Ok(path)
+}
+
+pub async fn spawn_update_restart(
+    update: &DownloadedUpdate,
+    configured_script: &str,
+) -> anyhow::Result<RestartHelper> {
+    spawn_update_restart_in(update, configured_script, &std::env::current_dir()?).await
+}
+
+async fn spawn_update_restart_in(
+    update: &DownloadedUpdate,
+    configured_script: &str,
+    working_dir: &Path,
+) -> anyhow::Result<RestartHelper> {
+    let script = restart_script(configured_script, working_dir)?;
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(working_dir.join("update-restart.log"))?;
+
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = Command::new("powershell.exe");
+        command
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "RemoteSigned",
+                "-File",
+            ])
+            .arg(&script);
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        command
+    };
+    #[cfg(unix)]
+    let mut command = {
+        let mut command = Command::new("bash");
+        command.arg(&script).process_group(0);
+        command
+    };
+
+    let child = command
+        .current_dir(&working_dir)
+        .env("UPDATE_PARENT_PID", std::process::id().to_string())
+        .env("UPDATE_SOURCE", &update.path)
+        .env("UPDATE_EXECUTABLE", &update.executable)
+        .env("UPDATE_WORKING_DIR", &working_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(log))
+        .kill_on_drop(false)
+        .spawn()
+        .context("Failed to launch update helper")?;
+
+    let mut helper = RestartHelper { child: Some(child) };
+    let child = helper.child.as_mut().unwrap();
+    let stdout = child.stdout.take().context("Update helper has no stdout")?;
+    let mut reader = BufReader::new(stdout.take(128));
+    let mut ready = String::new();
+    tokio::time::timeout(Duration::from_secs(15), reader.read_line(&mut ready))
+        .await
+        .context("Update helper readiness timed out; see update-restart.log")??;
+    if ready.trim_end() != "UPDATE_READY" {
+        bail!("Update helper did not acknowledge readiness ({ready:?}); see update-restart.log");
+    }
+    if let Some(status) = child.try_wait()? {
+        bail!("Update helper exited before shutdown with {status}; see update-restart.log");
+    }
+    Ok(helper)
+}
+
+fn verify_digest(bytes: &[u8], digest: Option<&str>) -> anyhow::Result<()> {
+    let digest = digest.context("Release asset has no digest")?;
+    let (algorithm, expected_hex) = digest
+        .split_once(':')
+        .context("Malformed asset digest: expected sha256:<hex>")?;
+    if algorithm != "sha256" {
+        bail!("Unsupported asset digest algorithm: {algorithm}");
+    }
+
+    let mut expected = [0u8; 32];
+    hex::decode_to_slice(expected_hex, &mut expected)
+        .context("Invalid SHA-256 digest: expected 64 hexadecimal characters")?;
+    let actual = Sha256::digest(bytes);
+    if actual[..] != expected {
+        bail!(
+            "Update SHA-256 digest mismatch: expected {expected_hex}, calculated {}",
+            hex::encode(actual)
+        );
+    }
+    Ok(())
+}
+
+pub async fn fetch_latest_version() -> anyhow::Result<Option<DownloadedUpdate>> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get(API_URL)
+        .header(
+            "User-Agent",
+            concat!("duco-pool-rs/", env!("CARGO_PKG_VERSION")),
+        )
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Root>()
+        .await?;
+    let tag_version = parse_tag(&response.tag_name.replace("v", ""))?;
+
+    if tag_version > VERSION_CODE {
+        for asset in response.assets {
+            if asset.name.to_lowercase().contains(BUILD_TARGET) {
+                let bytes = client
+                    .get(asset.browser_download_url)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .bytes()
+                    .await?;
+                if bytes.is_empty() {
+                    bail!("Downloaded update is empty");
+                }
+                
+                verify_digest(&bytes, asset.digest.as_deref()).with_context(|| {
+                    format!("Digest verification failed for asset {}", asset.name)
+                })?;
+                let executable = std::env::current_exe()?;
+                let path = update_path(&executable)?;
+                let mut file = tokio::fs::File::create(&path).await?;
+                file.write_all(&bytes).await?;
+                file.flush().await?;
+                file.sync_all().await?;
+                drop(file);
+                return Ok(Some(DownloadedUpdate {
+                    version: response.tag_name,
+                    executable,
+                    path,
+                }));
+            }
+        }
+    }
+    Ok(None)
+}
+
+#[derive(Serialize, Deserialize)]
+struct Asset {
+    pub url: String,
+    pub id: i64,
+    pub name: String,
+    pub label: Option<String>,
+    pub uploader: Author,
+    pub content_type: String,
+    pub state: String,
+    pub size: i64,
+    pub digest: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub browser_download_url: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Author {
+    pub login: String,
+    pub id: i64,
+    pub node_id: String,
+    pub html_url: String,
+    pub organizations_url: String,
+    #[serde(rename = "type")]
+    pub r#type: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Root {
+    pub url: String,
+    pub assets_url: String,
+    pub upload_url: String,
+    pub html_url: String,
+    pub id: i64,
+    pub author: Author,
+    pub node_id: String,
+    pub tag_name: String,
+    pub target_commitish: String, // branch
+    pub name: String,
+    pub draft: bool,
+    pub prerelease: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    pub published_at: String,
+    pub assets: Vec<Asset>,
+}
+
+// written by GPT-6
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
+
+    const TEST_SCRIPT: &str = if cfg!(windows) {
+        "config/update-restart.ps1"
+    } else {
+        "config/update-restart.sh"
+    };
+
+    const ABC_DIGEST: &str =
+        "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    #[test]
+    fn digest_accepts_known_sha256_and_uppercase_hex() {
+        verify_digest(b"abc", Some(ABC_DIGEST)).unwrap();
+        let uppercase = format!(
+            "sha256:{}",
+            ABC_DIGEST.strip_prefix("sha256:").unwrap().to_uppercase()
+        );
+        verify_digest(b"abc", Some(&uppercase)).unwrap();
+    }
+
+    #[test]
+    fn digest_hashes_raw_binary_bytes() {
+        verify_digest(
+            b"\x00\xff\x80duco\x00",
+            Some("sha256:8debd935adad84ee40200a35769f16d1c55598b955a6787103559eb4d71a769e"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn digest_rejects_changed_content() {
+        let err = verify_digest(b"abd", Some(ABC_DIGEST)).unwrap_err();
+        assert!(err.to_string().contains("digest mismatch"));
+    }
+
+    #[test]
+    fn digest_rejects_missing_digest() {
+        let err = verify_digest(b"abc", None).unwrap_err();
+        assert!(err.to_string().contains("no digest"));
+    }
+
+    #[test]
+    fn digest_rejects_unsupported_algorithm() {
+        let digest = ABC_DIGEST.replacen("sha256", "sha512", 1);
+        let err = verify_digest(b"abc", Some(&digest)).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Unsupported asset digest algorithm"));
+    }
+
+    #[test]
+    fn digest_rejects_malformed_values() {
+        for digest in [
+            String::new(),
+            "sha256".into(),
+            "sha256:".into(),
+            format!("sha256:{}", "a".repeat(63)),
+            format!("sha256:{}", "a".repeat(65)),
+            format!("sha256:{}", "g".repeat(64)),
+            format!("{ABC_DIGEST}:extra"),
+            format!("{ABC_DIGEST} "),
+        ] {
+            assert!(
+                verify_digest(b"abc", Some(&digest)).is_err(),
+                "Accepted {digest:?}"
+            );
+        }
+    }
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let id = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "duco updater {} {id} {}",
+                std::process::id(),
+                NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn fixture() -> (TestDirectory, DownloadedUpdate) {
+        let dir = TestDirectory::new();
+        fs::create_dir(dir.0.join("config")).unwrap();
+        let script = if cfg!(windows) {
+            "update-restart.ps1"
+        } else {
+            "update-restart.sh"
+        };
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("config")
+                .join(script),
+            dir.0.join("config").join(script),
+        )
+        .unwrap();
+        let executable = dir.0.join(if cfg!(windows) { "pool.exe" } else { "pool" });
+        let path = update_path(&executable).unwrap();
+        fs::write(&executable, b"old executable").unwrap();
+        fs::write(&path, b"new executable").unwrap();
+        (
+            dir,
+            DownloadedUpdate {
+                version: "test".into(),
+                executable,
+                path,
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn bundled_helper_waits_without_replacing_or_stopping_parent() {
+        let (dir, update) = fixture();
+        let mut helper = spawn_update_restart_in(&update, TEST_SCRIPT, &dir.0)
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "{err:#}: {}",
+                    String::from_utf8_lossy(
+                        &fs::read(dir.0.join("update-restart.log")).unwrap_or_default()
+                    )
+                );
+            });
+        let child = helper.child.as_mut().unwrap();
+        assert!(child.try_wait().unwrap().is_none());
+        assert_eq!(fs::read(&update.executable).unwrap(), b"old executable");
+        assert_eq!(fs::read(&update.path).unwrap(), b"new executable");
+        // The test process is the parent; explicitly reap the helper before cleanup.
+        child.kill().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn missing_download_never_acknowledges_readiness() {
+        let (dir, update) = fixture();
+        fs::remove_file(&update.path).unwrap();
+        let result = spawn_update_restart_in(&update, TEST_SCRIPT, &dir.0).await;
+        assert!(result.is_err());
+        assert_eq!(fs::read(&update.executable).unwrap(), b"old executable");
+    }
+
+    #[tokio::test]
+    async fn missing_script_leaves_executable_untouched() {
+        let (dir, update) = fixture();
+        let result = spawn_update_restart_in(&update, "missing-script", &dir.0).await;
+        assert!(result.is_err());
+        assert_eq!(fs::read(&update.executable).unwrap(), b"old executable");
+    }
+}
