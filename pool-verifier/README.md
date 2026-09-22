@@ -58,9 +58,9 @@ Artifacts are stored in `runs/benchmark-<timestamp>-<pid>/`. `benchmark.json` co
 
 These are end-to-end loopback measurements, including client validation and OS scheduling; they are not a guarantee of maximum deployed capacity. Keep other machine load and power settings consistent. Settings, platform, logical CPU count, Rust/Cargo versions, local Cargo configuration and measurement-harness changes must match the baseline. Compare only on the same machine. Throughput changes are reported without an arbitrary performance pass/fail threshold; exit 0 means measurement/comparison succeeded, not that performance improved. The suite cannot be mixed with functional suites, `--case`, `--slow`, or `--mutation`.
 
-## Coverage and current findings
+## Coverage
 
-[COVERAGE.md](COVERAGE.md) describes each behavior, its oracle, associated scenarios, and remaining limits. [coverage.json](coverage.json) is the machine-readable inventory; a verifier unit test ensures every functional scenario appears and all inventory IDs exist. **Asserted means a correctness check exists, not that the pool passes it.** [FINDINGS.md](FINDINGS.md) records reproducible failures and separates historical results.
+[COVERAGE.md](COVERAGE.md) describes each behavior, its oracle, associated scenarios, and remaining limits. [coverage.json](coverage.json) is the machine-readable inventory; a verifier unit test ensures every functional scenario appears and all inventory IDs exist. **Asserted means a correctness check exists, not that the pool passes it.**
 
 Coverage includes:
 
