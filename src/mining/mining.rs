@@ -4,28 +4,31 @@ use crate::mining::id_allocator::WorkerAllocator;
 use crate::mining::stats::{BlockInfos, MinerStatSlim};
 use crate::sync::sync::Difficulty;
 use crate::{cfg, kolka, KOLKA, POOL_REWARDS};
+use arc_swap::ArcSwap;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use compact_str::CompactString;
 use dashmap::DashMap;
 use log::{debug, info};
-use rand::{rng, Rng};
+use rand::{rng, RngExt};
 use sha1_smol::Sha1;
 use std::collections::VecDeque;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::{Arc, LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use arc_swap::ArcSwap;
 use tokio::sync::Mutex;
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
 
-pub static USR_WORKERS_ALLOC: LazyLock<DashMap<CompactString, WorkerAllocator>> = LazyLock::new(|| DashMap::new());
+pub static USR_WORKERS_ALLOC: LazyLock<DashMap<CompactString, WorkerAllocator>> =
+    LazyLock::new(|| DashMap::new());
 
-pub static BALANCES_TO_UPDATE: LazyLock<DashMap<CompactString, f32>> = LazyLock::new(|| DashMap::new());
+pub static BALANCES_TO_UPDATE: LazyLock<DashMap<CompactString, f32>> =
+    LazyLock::new(|| DashMap::new());
 
-pub static MINER_STATS: LazyLock<DashMap<Box<str>, MinerStatSlim>> = LazyLock::new(|| DashMap::new());
+pub static MINER_STATS: LazyLock<DashMap<Box<str>, MinerStatSlim>> =
+    LazyLock::new(|| DashMap::new());
 
 static LAST_BLOCK_HASH: LazyLock<ArcSwap<String>> = LazyLock::new(|| {
     let config = cfg::config::load_config().expect("failed to load config (static)");
@@ -80,6 +83,8 @@ pub async fn handle(
     let mut job_str = String::with_capacity(32);
     let mut msg = String::with_capacity(23);
 
+    let mut share_accepted = false;
+
     loop {
         if is_first_share {
             req_difficulty.clear();
@@ -100,7 +105,9 @@ pub async fn handle(
             if req_difficulty.as_str() == "ESP32" {
                 conn.miner_stat.is_req_diff_esp32 = true;
             }
-            let mut alloc = USR_WORKERS_ALLOC.entry(conn.miner_stat.username.clone()).or_default();
+            let mut alloc = USR_WORKERS_ALLOC
+                .entry(conn.miner_stat.username.clone())
+                .or_default();
             let kolka_id = alloc.allocate(conn.miner_stat.is_req_diff_esp32);
 
             // conn.miner_stat.amount_of_workers = kolka_id;
@@ -120,7 +127,8 @@ pub async fn handle(
             req_difficulty.clear();
 
             if !conn.miner_stat.override_diff.is_empty() {
-                if !set_req_difficulty(&mut req_difficulty, conn.miner_stat.override_diff.as_str()) {
+                if !set_req_difficulty(&mut req_difficulty, conn.miner_stat.override_diff.as_str())
+                {
                     req_difficulty.push_str("NET");
                 }
             } else if using_avr {
@@ -142,7 +150,8 @@ pub async fn handle(
         }
 
         if data_len >= 4 {
-            let encoded_len = BASE64_STANDARD.encode_slice(data[3].as_bytes(), &mut password_buf)?;
+            let encoded_len =
+                BASE64_STANDARD.encode_slice(data[3].as_bytes(), &mut password_buf)?;
             let encoded = std::str::from_utf8(&password_buf[..encoded_len])?;
             conn.miner_stat.password.clear();
             conn.miner_stat.password.push_str(encoded);
@@ -152,12 +161,9 @@ pub async fn handle(
 
         // IoT reading stuff
         if data_len >= 5 {
-            if data[4].len() > 48
-            {
+            if data[4].len() > 48 {
                 conn.miner_stat.iot_reading = CompactString::const_new("Error:data too long");
-            }
-            else
-            {
+            } else {
                 clean_iot_into(&data[4], &mut conn.miner_stat.iot_reading);
             }
         }
@@ -181,13 +187,15 @@ pub async fn handle(
             conn.miner_stat.worker_slot = id;
         }
 
-        let diff_info =
-            resolve_reward_info(pool_rewards, req_difficulty.as_str(), conn.miner_stat.override_diff.as_str())
-                .ok_or_else(|| anyhow::anyhow!("failed to resolve difficulty info"))?;
+        let diff_info = resolve_reward_info(
+            pool_rewards,
+            req_difficulty.as_str(),
+            conn.miner_stat.override_diff.as_str(),
+        )
+        .ok_or_else(|| anyhow::anyhow!("failed to resolve difficulty info"))?;
         if is_first_share {
             diff = diff_info.difficulty as u32;
         }
-        
 
         random = rand::rng().random_range(0u64..diff as u64 * 100u64) + 1;
 
@@ -228,12 +236,14 @@ pub async fn handle(
 
         // 1.5x to account that the average will be half the target (I don't know what this means, I copied the original comment)
         let val = conn.miner_stat.share_time * 1.5;
-        conn.miner_stat
-            .share_times_list
-            .push_back(val);
+        conn.miner_stat.share_times_list.push_back(val);
         conn.miner_stat.total_share_times += val;
         if conn.miner_stat.share_times_list.len() > 50 {
-            conn.miner_stat.total_share_times -= conn.miner_stat.share_times_list.pop_front().unwrap_or_else(|| 0f32);
+            conn.miner_stat.total_share_times -= conn
+                .miner_stat
+                .share_times_list
+                .pop_front()
+                .unwrap_or_else(|| 0f32);
         }
 
         let mut wrong_reported_hashrate = false;
@@ -250,7 +260,10 @@ pub async fn handle(
             reported_hashrate = 0f32;
         }
 
-        if (reported_hashrate <= 0f32 && !wrong_reported_hashrate) || reported_hashrate.is_nan() {
+        if (reported_hashrate <= 0f32 && !wrong_reported_hashrate)
+            || reported_hashrate.is_nan()
+            || reported_hashrate.is_infinite()
+        {
             conn.miner_stat.reject_shares = CompactString::const_new("Invalid data");
         }
 
@@ -288,6 +301,13 @@ pub async fn handle(
                 }
             };
         }
+        {
+            let now_secs = UNIX_EPOCH.elapsed()?.as_secs();
+            if now_secs - conn.miner_stat.last_share_reset >= 60 {
+                conn.miner_stat.last_share_reset = now_secs;
+                conn.miner_stat.last_min_shares = 0;
+            }
+        }
         #[cfg(not(feature = "bench"))]
         // if the pool was built with the bench feature enabled, we discard this codeblock
         {
@@ -295,7 +315,6 @@ pub async fn handle(
                 conn.miner_stat.reject_shares = CompactString::const_new("Too low difficulty");
             }
         }
-
 
         hashrate_is_estimated = false;
         if reported_hashrate <= 0f32 {
@@ -323,7 +342,10 @@ pub async fn handle(
         }
 
         // we don't care whether they overreport their hashrate
-        if conn.miner_stat.share_time >= 1.5 && hashrate_perc_diff_for_calc > 15f32 && hashrate < hashrate_calc {
+        if conn.miner_stat.share_time >= 1.5
+            && hashrate_perc_diff_for_calc > 15f32
+            && hashrate < hashrate_calc
+        {
             // the difference is sometimes (currently) inexplicably high, therefore we rarely want to reject shares for it..
             if hashrate_perc_diff_for_calc >= 50f32 && false {
                 // disabled for now..
@@ -332,17 +354,18 @@ pub async fn handle(
             hashrate = hashrate_calc;
         }
 
-        let avg_sharetime = conn.miner_stat.total_share_times / conn.miner_stat.share_times_list.len() as f32;
+        let avg_sharetime =
+            conn.miner_stat.total_share_times / conn.miner_stat.share_times_list.len() as f32;
         let actual_expected_share_time =
             random * expected_share_time as u64 / (diff as u64 * 100 + 1);
         if (conn.miner_stat.accepted_shares == 4
             || (
-            conn.miner_stat.accepted_shares > 4
-                && (perc_diff(hashrate, start_hashrate) > 15f32
-                || (1f32 - (avg_sharetime / actual_expected_share_time as f32)) * 100f32
-                > 25f32)
-            // if the hashrate has changed substantially or if the sharetime is substantially lower than targeted, adjust
-        ))
+                conn.miner_stat.accepted_shares > 4
+                    && (perc_diff(hashrate, start_hashrate) > 15f32
+                        || (1f32 - (avg_sharetime / actual_expected_share_time as f32)) * 100f32
+                            > 25f32)
+                // if the hashrate has changed substantially or if the sharetime is substantially lower than targeted, adjust
+            ))
             && is_pc_diff_tier(req_difficulty.as_str())
         {
             start_hashrate = hashrate;
@@ -360,6 +383,7 @@ pub async fn handle(
         expected_share_time = diff_info.expected_share_time;
         let block_probability = diff_info.block_chance;
 
+        share_accepted = false;
         reward = 0f32;
         if !conn.miner_stat.reject_shares.is_empty() {
             msg.clear();
@@ -371,13 +395,15 @@ pub async fn handle(
             conn.miner_stat.reject_shares.clear();
             conn.miner_stat.rejected_shares += 1;
         } else if hashrate < min_hashrate as f32 {
-            conn.miner_stat.override_diff = CompactString::from(kolka::kolka::v2_reverse(req_difficulty.as_str()));
+            conn.miner_stat.override_diff =
+                CompactString::from(kolka::kolka::v2_reverse(req_difficulty.as_str()));
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too high starting difficulty\n").await?;
             start_hashrate = -1f32;
             diff = kolka::kolka::get_diff(&conn.miner_stat.override_diff);
         } else if hashrate >= max_hashrate as f32 {
-            conn.miner_stat.override_diff = CompactString::from(kolka::kolka::v2(req_difficulty.as_str()));
+            conn.miner_stat.override_diff =
+                CompactString::from(kolka::kolka::v2(req_difficulty.as_str()));
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too low starting difficulty\n").await?;
             start_hashrate = -1f32;
@@ -427,41 +453,35 @@ pub async fn handle(
                 GLOBAL_BLOCKS.lock().await.push(block_infos);
                 conn.write("BLOCK\n").await?;
                 info!("Block found by {}", conn.miner_stat.username);
+                share_accepted = true;
             } else {
                 conn.write("GOOD\n").await?;
+                share_accepted = true;
             }
         } else {
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Incorrect result\n").await?;
         }
 
-        {
-            let now_secs = UNIX_EPOCH.elapsed()?.as_secs();
-            if now_secs - conn.miner_stat.last_share_reset >= 60 {
-                conn.miner_stat.last_share_reset = now_secs;
-                conn.miner_stat.last_min_shares = 0;
-            }
-        }
-
-        if conn.miner_stat.accepted_shares > 0
-            && conn.miner_stat.accepted_shares % config.update_miners_stats_every as u64 == 0
-        {
+        if share_accepted {
             *BALANCES_TO_UPDATE
                 .entry(conn.miner_stat.username.clone())
                 .or_insert(0f32) += reward;
 
-            // conn.miner_stat.software = CompactString::from(
-            //     if data_len >= 3 {
-            //         let cleaned_name = clean_name(&data[2]);
-            //         match cleaned_name.as_str() {
-            //             "" => "Unknown miner".to_string(),
-            //             _ => cleaned_name,
-            //         }
-            //     } else {
-            //         "Unknown miner".to_string()
-            //     }
-            // );
-
+            GLOBAL_SHARES_INCREASE.fetch_add(
+                // config.update_miners_stats_every as u64,
+                1u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            GLOBAL_SHARES_TOTAL.fetch_add(
+                // config.update_miners_stats_every as u64,
+                1u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+        if conn.miner_stat.accepted_shares > 0
+            && conn.miner_stat.accepted_shares % config.update_miners_stats_every as u64 == 0
+        {
             conn.miner_stat.software.clear();
 
             if data_len >= 3 {
@@ -476,7 +496,9 @@ pub async fn handle(
 
             let wallet_id = if data_len >= 6 { &data[5] } else { "None" };
             conn.miner_stat.wallet_id.clear();
-            conn.miner_stat.wallet_id.push_str(wallet_id.trim_end_matches("\n"));
+            conn.miner_stat
+                .wallet_id
+                .push_str(wallet_id.trim_end_matches("\n"));
 
             let (rig_part, key_part) = if data_len >= 4 {
                 match data[3].split_once(':') {
@@ -486,13 +508,6 @@ pub async fn handle(
             } else {
                 ("", None)
             };
-            // let rig_identifier = {
-            //     let cleaned = clean_name(rig_part);
-            //     match cleaned.as_str() {
-            //         "" => "None".to_string(),
-            //         _ => cleaned,
-            //     }
-            // };
 
             conn.miner_stat.id.clear();
             clean_name_into(rig_part, &mut conn.miner_stat.id);
@@ -500,7 +515,6 @@ pub async fn handle(
                 conn.miner_stat.id.push_str("None");
             }
 
-            // conn.miner_stat.id = CompactString::from(&rig_identifier);
             conn.miner_stat.hashrate = if hashrate_is_estimated {
                 hashrate
             } else {
@@ -510,32 +524,29 @@ pub async fn handle(
 
             if let Some(key) = key_part {
                 // mining key backwards compatibility for old miners
-                let encoded_len = BASE64_STANDARD.encode_slice(key.as_bytes(), &mut password_buf)?;
+                let encoded_len =
+                    BASE64_STANDARD.encode_slice(key.as_bytes(), &mut password_buf)?;
                 let encoded = std::str::from_utf8(&password_buf[..encoded_len])?;
                 conn.miner_stat.password.clear();
                 conn.miner_stat.password.push_str(encoded);
             }
 
             conn.miner_stat.this_miner_chipid.clear();
-            conn.miner_stat.this_miner_chipid.push_str(this_miner_chipid.as_str());
+            conn.miner_stat
+                .this_miner_chipid
+                .push_str(this_miner_chipid.as_str());
             conn.miner_stat.reward = reward;
 
             let miner_stat_slim = conn.miner_stat.convert_slim();
 
             match MINER_STATS.get_mut(&*conn.id) {
                 Some(mut e) => *e = miner_stat_slim,
-                None => { MINER_STATS.insert(conn.id.clone(), miner_stat_slim); }
+                None => {
+                    MINER_STATS.insert(conn.id.clone(), miner_stat_slim);
+                }
             }
 
             LAST_BLOCK_HASH.store(Arc::new(new_hash_str.to_string()));
-            GLOBAL_SHARES_INCREASE.fetch_add(
-                config.update_miners_stats_every as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            GLOBAL_SHARES_TOTAL.fetch_add(
-                config.update_miners_stats_every as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
         }
 
         is_first_share = false;

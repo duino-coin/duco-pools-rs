@@ -26,12 +26,8 @@ impl Error for ConnectionClosed {}
 
 #[derive(Debug)]
 pub struct Connection {
-    // pub socket: TcpStream,
-    reader: BufReader<OwnedReadHalf>, // persistent — buffer survives between reads
+    reader: BufReader<OwnedReadHalf>,
     writer: OwnedWriteHalf,
-    // pub addr: SocketAddr,
-    // pub ip: String,
-    // pub username: String,
     pub id: Box<str>,
     pub miner_stat: MinerStat,
 }
@@ -47,10 +43,6 @@ impl Connection {
     pub fn new(socket: TcpStream, addr: SocketAddr, username: String, id: Box<str>) -> Self {
         let (read_half, write_half) = socket.into_split();
         Connection {
-            // socket,
-            // addr,
-            // ip: addr.ip().to_string(),
-            // username,
             reader: BufReader::with_capacity(256, read_half),
             writer: write_half,
             id,
@@ -62,15 +54,13 @@ impl Connection {
         tokio::time::timeout(TIMEOUT, async {
             self.writer.write_all(content.as_bytes()).await?;
             Ok::<(), anyhow::Error>(())
-        }).await??;
+        })
+        .await??;
         Ok(())
     }
 
     // GPT 5.3
-    pub async fn read_to_string(
-        &mut self,
-        output: &mut String,
-    ) -> Result<(), anyhow::Error> {
+    pub async fn read_to_string(&mut self, output: &mut String) -> Result<(), anyhow::Error> {
         const MAX_FRAME_BYTES: usize = 1024;
 
         // Reuse the String's allocation without copying
@@ -107,7 +97,7 @@ impl Connection {
                         std::io::ErrorKind::InvalidData,
                         "Message too long",
                     )
-                        .into());
+                    .into());
                 }
 
                 bytes.extend_from_slice(&received[..consumed]);
@@ -122,7 +112,7 @@ impl Connection {
 
             Ok::<(), anyhow::Error>(())
         })
-            .await??;
+        .await??;
 
         if bytes.last() == Some(&b'\n') {
             bytes.pop();
@@ -137,15 +127,11 @@ impl Connection {
 
         // Validate once; reuse the byte buffer's allocation.
         *output = String::from_utf8(bytes).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Invalid UTF-8 data",
-            )
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid UTF-8 data")
         })?;
 
         Ok(())
     }
-
 }
 
 #[derive(Deserialize, Serialize, Debug)]

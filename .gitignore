@@ -8,3 +8,7 @@
 /dashboard
 /duino-coin-pools-js/
 .idea
+/pool-verifier/runs
+/pool-verifier/work
+/pool-verifier/target
+/pool-verifier/benchmarks

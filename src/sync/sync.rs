@@ -1,17 +1,21 @@
 use crate::cfg::config::PoolConfig;
 use crate::data::data::Bans;
 use crate::mining::{mining, stats};
-use crate::{data, kolka, CONFIG, CONNECTIONS, POOL_REWARDS};
+use crate::{data, kolka, BANS, CONFIG, CONNECTIONS, POOL_REWARDS};
 use compact_str::CompactString;
+use dashmap::DashMap;
 use data::data::LoginInfos;
 use log::{debug, error, info, warn};
 use reqwest::multipart;
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{HashMap, HashSet};
 use std::process::exit;
+#[cfg(any(not(feature = "dummy_sync"), test))]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -19,6 +23,49 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 static SYNC_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+// Keep the uploaded values alongside the keys already needed for acknowledgement.
+struct RewardSnapshot(Vec<(CompactString, f32)>);
+
+impl RewardSnapshot {
+    fn capture(balances: &DashMap<CompactString, f32>) -> Self {
+        Self(
+            balances
+                .iter()
+                .map(|entry| (entry.key().clone(), *entry.value()))
+                .collect(),
+        )
+    }
+}
+
+impl Serialize for RewardSnapshot {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, value) in &self.0 {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+
+#[cfg(any(not(feature = "dummy_sync"), test))]
+fn acknowledge_uploaded_work(
+    rewards: &RewardSnapshot,
+    balances: &DashMap<CompactString, f32>,
+    blocks: &mut Vec<stats::BlockInfos>,
+    big_blocks: usize,
+    pending_shares: &AtomicU64,
+    block_increase: u64,
+) {
+    for (key, uploaded) in &rewards.0 {
+        balances.remove_if_mut(key, |_, pending| {
+            *pending -= *uploaded;
+            *pending == 0.0
+        });
+    }
+    blocks.drain(..big_blocks);
+    pending_shares.fetch_sub(block_increase, Relaxed);
+}
 
 //#[serde(skip_serializing_if = "Option::is_none")]
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
@@ -156,15 +203,19 @@ async fn update_pool_rewards(config: &PoolConfig) -> Result<String, Box<dyn std:
     std::fs::write("./config/poolRewards.json", &response_data)?;
     info!("Successfully updated pool rewards");
 
-    let mut bans = Bans::load_bans().expect("failed to load config bans.json");
+    // let mut bans = Bans::load_bans().expect("failed to load config bans.json");
 
     let response_data_bans = reqwest::get(format!("{}/bans.json", config.server_sync_url))
         .await?
         .json::<HashSet<String>>()
         .await?;
-    bans.banned_usernames = response_data_bans;
+    // bans.banned_usernames = response_data_bans;
 
-    bans.save_bans().expect("failed to save config bans.json");
+    // bans.save_bans().expect("failed to save config bans.json");
+    let mut ban_lock = BANS.lock().await;
+    ban_lock.banned_usernames = response_data_bans;
+
+    ban_lock.save_bans()?;
     info!("Synced bans.");
 
     Ok(response_data)
@@ -268,7 +319,8 @@ pub async fn sync(
     let request_url = format!(
         "https://{}/pool_sync/?host={}&port={}&version={}&identifier={}&name={}\
     &blockIncrease={}&bigBlocks={}&cpu={}&ram={}&connections={}",
-        "server.duinocoin.com", //TODO: temp fix
+        // "server.duinocoin.com", //TODO: temp fix
+        config.server_ip,
         ip,
         config.port,
         config.pool_version,
@@ -286,12 +338,8 @@ pub async fn sync(
     let workers = multipart::Part::text(worker_content)
         .file_name(format!("workers_{}.json", config.pool_name));
 
-    // Serialize the live map directly to avoid cloning the full balance set.
-    let balance_keys: Vec<CompactString> = mining::BALANCES_TO_UPDATE
-        .iter()
-        .map(|entry| entry.key().clone())
-        .collect();
-    let rewards_content = serde_json::to_string(&*mining::BALANCES_TO_UPDATE)?;
+    let rewards_snapshot = RewardSnapshot::capture(&mining::BALANCES_TO_UPDATE);
+    let rewards_content = serde_json::to_string(&rewards_snapshot)?;
 
     std::fs::write(&reward_path, &rewards_content)?;
 
@@ -317,28 +365,28 @@ pub async fn sync(
             Ok(res) => {
                 let status = res.status();
                 if status.is_success() {
-                    // remove all balances we've already synced
-                    for key in &balance_keys {
-                        mining::BALANCES_TO_UPDATE.remove(key);
-                    }
                     {
                         let mut block_lock = mining::GLOBAL_BLOCKS.lock().await;
-                        block_lock.clear();
+                        acknowledge_uploaded_work(
+                            &rewards_snapshot,
+                            &mining::BALANCES_TO_UPDATE,
+                            &mut block_lock,
+                            big_blocks,
+                            &mining::GLOBAL_SHARES_INCREASE,
+                            block_increase,
+                        );
                         block_lock.shrink_to_fit();
                     }
-                    // drop(balances);
                     mining::BALANCES_TO_UPDATE.shrink_to_fit();
                     info!("Successfully synced {}", SYNC_COUNT.load(Ordering::Relaxed));
                     std::fs::remove_file(&reward_path)?; // so we don't accidentally sync the same thing twice
                     std::fs::remove_file(&worker_path)?;
-
-                    mining::GLOBAL_SHARES_INCREASE.store(0, Ordering::Relaxed);
                 } else {
                     warn!(
-                    "Failed to sync {}: {}",
-                    SYNC_COUNT.load(Ordering::Relaxed),
-                    res.text().await?
-                );
+                        "Failed to sync {}: {}",
+                        SYNC_COUNT.load(Ordering::Relaxed),
+                        res.text().await?
+                    );
                 }
             }
             Err(err) => {
@@ -349,8 +397,95 @@ pub async fn sync(
     }
     mining::USR_WORKERS_ALLOC.shrink_to_fit();
     mining::MINER_STATS.shrink_to_fit();
-    // mining::USR_WORKERS.shrink_to_fit();
-    // mining::WORKERS.shrink_to_fit();
 
     Ok(ip)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn block(id: u64) -> stats::BlockInfos {
+        stats::BlockInfos::new(
+            id,
+            format!("miner{id}"),
+            id as f32,
+            "DUCO-S1".to_owned(),
+            format!("hash{id}"),
+        )
+    }
+
+    #[test]
+    fn snapshot_serializes_captured_values_even_after_live_updates() {
+        let balances = DashMap::new();
+        let username = CompactString::from("alice\"\\username-long-enough-to-use-the-heap");
+        balances.insert(username.clone(), 1.25);
+        let snapshot = RewardSnapshot::capture(&balances);
+
+        *balances.get_mut(&username).unwrap() += 0.5;
+        balances.insert(CompactString::from("bob"), 2.0);
+
+        let encoded = serde_json::to_string(&snapshot).unwrap();
+        let decoded: HashMap<String, f32> = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[username.as_str()], 1.25);
+        assert_eq!(
+            serde_json::to_string(&RewardSnapshot::capture(&DashMap::new())).unwrap(),
+            "{}"
+        );
+    }
+
+    #[test]
+    fn acknowledgement_preserves_new_work_and_block_order() {
+        let balances = DashMap::new();
+        balances.insert(CompactString::from("alice"), 1.25);
+        balances.insert(CompactString::from("fully-sent"), 2.0);
+        balances.insert(CompactString::from("zero"), 0.0);
+        balances.insert(CompactString::from("tiny"), 0.0);
+        let snapshot = RewardSnapshot::capture(&balances);
+        let mut blocks = vec![block(1), block(2)];
+        let pending_shares = AtomicU64::new(2);
+        let uploaded_blocks = blocks.len();
+        let uploaded_shares = pending_shares.load(Relaxed);
+
+        *balances.get_mut("alice").unwrap() += 0.5;
+        *balances.get_mut("alice").unwrap() += 0.125;
+        *balances.get_mut("tiny").unwrap() += f32::EPSILON / 2.0;
+        balances.insert(CompactString::from("bob"), 3.0);
+        blocks.extend([block(3), block(4)]);
+        pending_shares.fetch_add(3, Relaxed);
+        let expected_blocks = serde_json::to_value(&blocks[uploaded_blocks..]).unwrap();
+
+        acknowledge_uploaded_work(
+            &snapshot,
+            &balances,
+            &mut blocks,
+            uploaded_blocks,
+            &pending_shares,
+            uploaded_shares,
+        );
+
+        assert_eq!(
+            serde_json::to_value(&balances).unwrap(),
+            json!({"alice": 0.625, "bob": 3.0, "tiny": f32::EPSILON / 2.0})
+        );
+        assert_eq!(serde_json::to_value(&blocks).unwrap(), expected_blocks);
+        assert_eq!(pending_shares.load(Relaxed), 3);
+
+        // The retained work is acknowledged exactly once by the next successful sync.
+        let next = RewardSnapshot::capture(&balances);
+        let remaining_blocks = blocks.len();
+        acknowledge_uploaded_work(
+            &next,
+            &balances,
+            &mut blocks,
+            remaining_blocks,
+            &pending_shares,
+            3,
+        );
+        assert!(balances.is_empty());
+        assert!(blocks.is_empty());
+        assert_eq!(pending_shares.load(Relaxed), 0);
+    }
 }

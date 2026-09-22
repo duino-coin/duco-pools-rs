@@ -14,7 +14,7 @@ use dashmap::DashMap;
 use env_logger::Target;
 use log::{debug, error, info, LevelFilter};
 use mimalloc::MiMalloc;
-use rand::{Rng, RngCore};
+use rand::{Rng, RngExt};
 use std::net::SocketAddr;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};

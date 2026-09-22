@@ -1,0 +1,133 @@
+# Runtime coverage inventory
+
+asserted means an explicit oracle exists, not necessarily that it passes; see run reports for results.
+
+Every scoped behavior below is classified. This is an assertion inventory, not a measured line/branch-coverage percentage. Each executable functional scenario is mapped by a unit-tested registry. Multiple values and operation sequences may be checked inside one scenario.
+
+The separate opt-in `benchmark` suite measures accepted, rejected and mixed traffic using the pool's `bench` feature against a recorded local baseline. Its six workloads and cost-weighted metrics are documented in [README.md](README.md#benchmarks-and-measured-baseline); they do not expand the production correctness claims below.
+
+## Connections, cleanup and allocation lifetime
+
+**asserted** - Greeting, exact active counts/weights, empty maps after graceful close, RST, early disconnect, overlapping churn, and fresh IDs after reconnect.
+
+Scenarios: `connections/greeting-motd-idle`, `connections/disconnect-before-job`, `connections/disconnect-before-share`, `connections/active-disconnect`, `connections/abrupt-reset`, `connections/reconnect-cycles`, `connections/concurrent-churn`, `kolka/overlapping-churn`.
+
+## Real read deadlines
+
+**asserted** - Idle connection and allocated unanswered job remain open at least 85 seconds and close within 100 seconds, releasing state.
+
+Scenarios: `connections/idle-timeout`, `connections/active-job-timeout`.
+
+## Framing and input rejection
+
+**partial** - Independent SHA-1 solver; feedback/recovery; LF/CRLF/legacy and coalesced/fragmented frames; 1023/1024/1025 byte boundaries; empty/invalid UTF-8; initial field limits and nonce overflow. Arbitrarily delayed fragments are not specified by the legacy idle-framing protocol.
+
+Scenarios: `protocol/good-bad-recovery`, `protocol/malformed-answer`, `protocol/missing-username`, `protocol/framing`, `protocol/coalesced-frames`, `protocol/oversized-frame`, `protocol/invalid-utf8`, `protocol/fragmented-frames`, `protocol/frame-boundaries`, `protocol/empty-frame`, `protocol/field-count-limits`, `protocol/nonce-overflow`, `protocol/motd-version`.
+
+## Share and reward conservation
+
+**asserted** - Intervals 1/2/5, rejected shares across publication boundaries, per-share reward sum, partial disconnect/shutdown, warmup and chip eligibility. Reporting frequency must not discard earned work.
+
+Scenarios: `counters/accepted-shares`, `counters/rejected-share-accounting`, `counters/reward-warmup`, `counters/chip-id-required`, `counters/chip-id-change`, `counters/interval-two-counts`, `counters/interval-five-counts`, `counters/interval-two-rewards`, `counters/interval-five-rewards`, `counters/partial-disconnect`, `counters/partial-shutdown`, `counters/publication-rejection-boundaries`.
+
+## Reward formula and block contents
+
+**asserted** - Independent formula vectors across all four threshold branches, distinct decay/divisor constants and fractional workers; actual mining reward inputs; forced blocks, hash chain, finder, algorithm, amount and epoch-second timestamps.
+
+Scenarios: `protocol/forced-block`, `internal/reward-vectors`, `counters/reward-formula-mining`, `protocol/hash-chain-block-details`.
+
+## Difficulty mapping and adaptation
+
+**asserted** - All transition mappings and initial tier difficulties; fallback/override resolution; deviation threshold/minimum vectors; adjustment after four accepts and a 50-sample rolling sum.
+
+Scenarios: `lifecycle/difficulty-fallback`, `lifecycle/difficulty-upshift`, `lifecycle/difficulty-downshift`, `internal/tier-transitions`, `internal/adaptive-vectors`, `internal/fallback-and-sanitizers`, `lifecycle/adaptive-mining-window`, `lifecycle/all-tier-initial-jobs`.
+
+## Hashrate validation and estimation
+
+**asserted** - Zero/negative/nonfinite rejection, valid recovery, missing/malformed estimation and modified-hashrate feedback.
+
+Scenarios: `protocol/invalid-hashrates`, `protocol/estimated-hashrates`, `protocol/modified-hashrate`.
+
+## Miner metadata and serialization
+
+**asserted** - Name/IoT sanitization, defaults, 48-byte IoT and 96-byte key limits, legacy keys, dashboard field types and numeric values.
+
+Scenarios: `protocol/metadata-sanitization`, `protocol/metadata-defaults`, `protocol/iot-boundaries`, `protocol/password-boundaries`, `protocol/legacy-key`, `lifecycle/dashboard-schema`.
+
+## Worker limits and allocator model
+
+**asserted** - PC/ESP weights, worker-limit rejection/recovery, both cross-type recycling directions, user isolation, and 16000 seeded operations against an independent ordered-map model.
+
+Scenarios: `counters/worker-limit`, `counters/weighted-worker-limit`, `kolka/pc-compaction`, `kolka/esp-compaction`, `kolka/mixed-reuse`, `kolka/user-isolation`, `internal/seeded-allocator`, `kolka/reverse-mixed-reuse`, `kolka/worker-limit-recovery`.
+
+## Sync snapshots, retry and staging
+
+**asserted** - Multipart fields/metadata, failure retention, success subtraction, concurrent new-user work, cleanup failures, transport disconnect/timeouts, staging writes, retry and total preservation.
+
+Scenarios: `sync/payload-and-clearing`, `sync/failed-upload-retry`, `sync/disconnected-worker`, `sync/inflight-shares`, `sync/inflight-rewards`, `sync/inflight-blocks`, `sync/inflight-failed-retry`, `sync/cleanup-missing-rewards`, `sync/cleanup-missing-workers`, `sync/transport-disconnect-retry`, `sync/transport-timeout-retry`, `sync/staging-workers-write-failure`, `sync/staging-rewards-write-failure`.
+
+## IP discovery and fallback
+
+**asserted** - Startup failure without IP, cached-IP sync fallback, failed initial sync with no cache followed by valid retry.
+
+Scenarios: `lifecycle/startup-ip-disconnect`, `sync/ip-fallback`, `sync/ip-no-cache`.
+
+## Configuration and dashboard authentication
+
+**asserted** - Default creation, field defaults, generated key shape/uniqueness, roundtrip, malformed/missing fields, guessed port persisted and used for login, disabled dashboard and 20/21-byte authentication boundary.
+
+Scenarios: `lifecycle/startup-and-auth`, `internal/config-defaults-roundtrip`, `lifecycle/dashboard-disabled`, `lifecycle/dashboard-key-boundary`, `lifecycle/guessed-port`, `lifecycle/startup-invalid-config`, `lifecycle/startup-missing-field`.
+
+## Startup network failures
+
+**asserted** - Invalid reward/ban bodies and missing mandatory tier fail within a deadline with matching diagnostics; master rejection/disconnect/invalid UTF-8 fail and bounded delayed greeting succeeds.
+
+Scenarios: `lifecycle/startup-invalid-rewards`, `lifecycle/startup-missing-tier`, `lifecycle/startup-invalid-bans`, `lifecycle/startup-master-reject`, `lifecycle/startup-master-disconnect`, `lifecycle/startup-master-invalid-utf8`, `lifecycle/startup-master-delay`.
+
+## Bans and refresh operation
+
+**asserted** - Persist/load/corrupt-file fallback, pre-existing and newly saved IP bans, localhost exemption, direct production refresh updates ban enforcement, reward difficulty and caches.
+
+Scenarios: `lifecycle/banned-user`, `internal/bans-persistence`, `lifecycle/preexisting-ip-ban`, `lifecycle/ban-reconnect`, `lifecycle/localhost-exemption`, `lifecycle/refreshed-bans`, `lifecycle/refreshed-rewards`.
+
+## Shutdown with active work
+
+**partial** - Final sync, logout and miner disconnect; held upload is cancelled and final snapshot conserves pending work. Remote exactly-once delivery after ambiguous acknowledgement is not guaranteed.
+
+Scenarios: `lifecycle/shutdown-final-sync`, `sync/shutdown-held-upload`.
+
+## Rate window
+
+**asserted** - Configured limit rejects excess shares and first valid share after real 61-second expiry is accepted.
+
+Scenarios: `lifecycle/share-rate-limit`, `lifecycle/rate-window-reset`.
+
+## Hourly scheduler timing
+
+**unverified** - Refresh operation is directly invoked in the disposable copy; the real one-hour scheduler wait is not exercised.
+
+## OS resource and I/O exhaustion
+
+**unverified** - Accept failures, write-side 90-second backpressure, file-descriptor exhaustion, clock rollback and kernel/process crashes are not deterministically injected.
+
+## Malformed numerical configuration
+
+**partial** - Malformed JSON/missing fields are covered; zero/overflow difficulty, reward divisor, sync/stats intervals and every nonsensical numeric combination are not fully classified.
+
+## Dashboard routing variants
+
+**partial** - Authentication and schema are asserted; every HTTP method, encoded query variant and route rejection combination is not enumerated.
+
+## Deployment and inactive branches
+
+**excluded** - Updater/restart helpers, real firewall effects, ngrok, unreachable AVR binary-nonce mode and bench/dummy_sync configurations are outside this runtime audit.
+
+## Capacity and portability
+
+**excluded** - Sustained load, memory/resource performance, and Linux/macOS execution are not established by Windows functional results.
+
+## Interpretation
+
+Known failing assertions remain classified as asserted: the test exists and identifies a defect. A PASS in one scenario is not evidence for behavior explicitly marked partial or unverified. Retained observations help diagnose results but do not by themselves establish coverage.
+
+Read-only copy adapters and injected test templates are in the verifier; production APIs and sources stay unchanged. The hourly refresh operation is tested directly, not by altering the one-hour scheduler.

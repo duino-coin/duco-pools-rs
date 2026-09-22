@@ -1,0 +1,257 @@
+{
+  "meaning": "asserted means an explicit oracle exists, not necessarily that it passes; see run reports for results",
+  "behaviors": [
+    {
+      "behavior": "Connections, cleanup and allocation lifetime",
+      "coverage": "asserted",
+      "assertion": "Greeting, exact active counts/weights, empty maps after graceful close, RST, early disconnect, overlapping churn, and fresh IDs after reconnect.",
+      "cases": [
+        "connections/greeting-motd-idle",
+        "connections/disconnect-before-job",
+        "connections/disconnect-before-share",
+        "connections/active-disconnect",
+        "connections/abrupt-reset",
+        "connections/reconnect-cycles",
+        "connections/concurrent-churn",
+        "kolka/overlapping-churn"
+      ]
+    },
+    {
+      "behavior": "Real read deadlines",
+      "coverage": "asserted",
+      "assertion": "Idle connection and allocated unanswered job remain open at least 85 seconds and close within 100 seconds, releasing state.",
+      "cases": [
+        "connections/idle-timeout",
+        "connections/active-job-timeout"
+      ]
+    },
+    {
+      "behavior": "Framing and input rejection",
+      "coverage": "partial",
+      "assertion": "Independent SHA-1 solver; feedback/recovery; LF/CRLF/legacy and coalesced/fragmented frames; 1023/1024/1025 byte boundaries; empty/invalid UTF-8; initial field limits and nonce overflow. Arbitrarily delayed fragments are not specified by the legacy idle-framing protocol.",
+      "cases": [
+        "protocol/good-bad-recovery",
+        "protocol/malformed-answer",
+        "protocol/missing-username",
+        "protocol/framing",
+        "protocol/coalesced-frames",
+        "protocol/oversized-frame",
+        "protocol/invalid-utf8",
+        "protocol/fragmented-frames",
+        "protocol/frame-boundaries",
+        "protocol/empty-frame",
+        "protocol/field-count-limits",
+        "protocol/nonce-overflow",
+        "protocol/motd-version"
+      ]
+    },
+    {
+      "behavior": "Share and reward conservation",
+      "coverage": "asserted",
+      "assertion": "Intervals 1/2/5, rejected shares across publication boundaries, per-share reward sum, partial disconnect/shutdown, warmup and chip eligibility. Reporting frequency must not discard earned work.",
+      "cases": [
+        "counters/accepted-shares",
+        "counters/rejected-share-accounting",
+        "counters/reward-warmup",
+        "counters/chip-id-required",
+        "counters/chip-id-change",
+        "counters/interval-two-rewards",
+        "counters/interval-five-rewards",
+        "counters/partial-disconnect",
+        "counters/partial-shutdown",
+        "counters/publication-rejection-boundaries"
+      ]
+    },
+    {
+      "behavior": "Reward formula and block contents",
+      "coverage": "asserted",
+      "assertion": "Independent formula vectors across all four threshold branches, distinct decay/divisor constants and fractional workers; actual mining reward inputs; forced blocks, hash chain, finder, algorithm, amount and epoch-second timestamps.",
+      "cases": [
+        "protocol/forced-block",
+        "internal/reward-vectors",
+        "counters/reward-formula-mining",
+        "protocol/hash-chain-block-details"
+      ]
+    },
+    {
+      "behavior": "Difficulty mapping and adaptation",
+      "coverage": "asserted",
+      "assertion": "All transition mappings and initial tier difficulties; fallback/override resolution; deviation threshold/minimum vectors; adjustment after four accepts and a 50-sample rolling sum.",
+      "cases": [
+        "lifecycle/difficulty-fallback",
+        "lifecycle/difficulty-upshift",
+        "lifecycle/difficulty-downshift",
+        "internal/tier-transitions",
+        "internal/adaptive-vectors",
+        "internal/fallback-and-sanitizers",
+        "lifecycle/adaptive-mining-window",
+        "lifecycle/all-tier-initial-jobs"
+      ]
+    },
+    {
+      "behavior": "Hashrate validation and estimation",
+      "coverage": "asserted",
+      "assertion": "Zero/negative/nonfinite rejection, valid recovery, missing/malformed estimation and modified-hashrate feedback.",
+      "cases": [
+        "protocol/invalid-hashrates",
+        "protocol/estimated-hashrates",
+        "protocol/modified-hashrate"
+      ]
+    },
+    {
+      "behavior": "Miner metadata and serialization",
+      "coverage": "asserted",
+      "assertion": "Name/IoT sanitization, defaults, 48-byte IoT and 96-byte key limits, legacy keys, dashboard field types and numeric values.",
+      "cases": [
+        "protocol/metadata-sanitization",
+        "protocol/metadata-defaults",
+        "protocol/iot-boundaries",
+        "protocol/password-boundaries",
+        "protocol/legacy-key",
+        "lifecycle/dashboard-schema"
+      ]
+    },
+    {
+      "behavior": "Worker limits and allocator model",
+      "coverage": "asserted",
+      "assertion": "PC/ESP weights, worker-limit rejection/recovery, both cross-type recycling directions, user isolation, and 16000 seeded operations against an independent ordered-map model.",
+      "cases": [
+        "counters/worker-limit",
+        "counters/weighted-worker-limit",
+        "kolka/pc-compaction",
+        "kolka/esp-compaction",
+        "kolka/mixed-reuse",
+        "kolka/user-isolation",
+        "internal/seeded-allocator",
+        "kolka/reverse-mixed-reuse",
+        "kolka/worker-limit-recovery"
+      ]
+    },
+    {
+      "behavior": "Sync snapshots, retry and staging",
+      "coverage": "asserted",
+      "assertion": "Multipart fields/metadata, failure retention, success subtraction, concurrent new-user work, cleanup failures, transport disconnect/timeouts, staging writes, retry and total preservation.",
+      "cases": [
+        "sync/payload-and-clearing",
+        "sync/failed-upload-retry",
+        "sync/disconnected-worker",
+        "sync/inflight-shares",
+        "sync/inflight-rewards",
+        "sync/inflight-blocks",
+        "sync/inflight-failed-retry",
+        "sync/cleanup-missing-rewards",
+        "sync/cleanup-missing-workers",
+        "sync/transport-disconnect-retry",
+        "sync/transport-timeout-retry",
+        "sync/staging-workers-write-failure",
+        "sync/staging-rewards-write-failure"
+      ]
+    },
+    {
+      "behavior": "IP discovery and fallback",
+      "coverage": "asserted",
+      "assertion": "Startup failure without IP, cached-IP sync fallback, failed initial sync with no cache followed by valid retry.",
+      "cases": [
+        "lifecycle/startup-ip-disconnect",
+        "sync/ip-fallback",
+        "sync/ip-no-cache"
+      ]
+    },
+    {
+      "behavior": "Configuration and dashboard authentication",
+      "coverage": "asserted",
+      "assertion": "Default creation, field defaults, generated key shape/uniqueness, roundtrip, malformed/missing fields, guessed port persisted and used for login, disabled dashboard and 20/21-byte authentication boundary.",
+      "cases": [
+        "lifecycle/startup-and-auth",
+        "internal/config-defaults-roundtrip",
+        "lifecycle/dashboard-disabled",
+        "lifecycle/dashboard-key-boundary",
+        "lifecycle/guessed-port",
+        "lifecycle/startup-invalid-config",
+        "lifecycle/startup-missing-field"
+      ]
+    },
+    {
+      "behavior": "Startup network failures",
+      "coverage": "asserted",
+      "assertion": "Invalid reward/ban bodies and missing mandatory tier fail within a deadline with matching diagnostics; master rejection/disconnect/invalid UTF-8 fail and bounded delayed greeting succeeds.",
+      "cases": [
+        "lifecycle/startup-invalid-rewards",
+        "lifecycle/startup-missing-tier",
+        "lifecycle/startup-invalid-bans",
+        "lifecycle/startup-master-reject",
+        "lifecycle/startup-master-disconnect",
+        "lifecycle/startup-master-invalid-utf8",
+        "lifecycle/startup-master-delay"
+      ]
+    },
+    {
+      "behavior": "Bans and refresh operation",
+      "coverage": "asserted",
+      "assertion": "Persist/load/corrupt-file fallback, pre-existing and newly saved IP bans, localhost exemption, direct production refresh updates ban enforcement, reward difficulty and caches.",
+      "cases": [
+        "lifecycle/banned-user",
+        "internal/bans-persistence",
+        "lifecycle/preexisting-ip-ban",
+        "lifecycle/ban-reconnect",
+        "lifecycle/localhost-exemption",
+        "lifecycle/refreshed-bans",
+        "lifecycle/refreshed-rewards"
+      ]
+    },
+    {
+      "behavior": "Shutdown with active work",
+      "coverage": "partial",
+      "assertion": "Final sync, logout and miner disconnect; held upload is cancelled and final snapshot conserves pending work. Remote exactly-once delivery after ambiguous acknowledgement is not guaranteed.",
+      "cases": [
+        "lifecycle/shutdown-final-sync",
+        "sync/shutdown-held-upload"
+      ]
+    },
+    {
+      "behavior": "Rate window",
+      "coverage": "asserted",
+      "assertion": "Configured limit rejects excess shares and first valid share after real 61-second expiry is accepted.",
+      "cases": [
+        "lifecycle/share-rate-limit",
+        "lifecycle/rate-window-reset"
+      ]
+    },
+    {
+      "behavior": "Hourly scheduler timing",
+      "coverage": "unverified",
+      "assertion": "Refresh operation is directly invoked in the disposable copy; the real one-hour scheduler wait is not exercised.",
+      "cases": []
+    },
+    {
+      "behavior": "OS resource and I/O exhaustion",
+      "coverage": "unverified",
+      "assertion": "Accept failures, write-side 90-second backpressure, file-descriptor exhaustion, clock rollback and kernel/process crashes are not deterministically injected.",
+      "cases": []
+    },
+    {
+      "behavior": "Malformed numerical configuration",
+      "coverage": "partial",
+      "assertion": "Malformed JSON/missing fields are covered; zero/overflow difficulty, reward divisor, sync/stats intervals and every nonsensical numeric combination are not fully classified.",
+      "cases": []
+    },
+    {
+      "behavior": "Dashboard routing variants",
+      "coverage": "partial",
+      "assertion": "Authentication and schema are asserted; every HTTP method, encoded query variant and route rejection combination is not enumerated.",
+      "cases": []
+    },
+    {
+      "behavior": "Deployment and inactive branches",
+      "coverage": "excluded",
+      "assertion": "Updater/restart helpers, real firewall effects, ngrok, unreachable AVR binary-nonce mode and bench/dummy_sync configurations are outside this runtime audit.",
+      "cases": []
+    },
+    {
+      "behavior": "Capacity and portability",
+      "coverage": "excluded",
+      "assertion": "Sustained load, memory/resource performance, and Linux/macOS execution are not established by Windows functional results.",
+      "cases": []
+    }
+  ]
+}

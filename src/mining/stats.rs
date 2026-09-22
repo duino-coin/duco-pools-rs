@@ -1,7 +1,7 @@
+use crate::mining::id_allocator::WorkerSlot;
 use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use crate::mining::id_allocator::WorkerSlot;
 
 // #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[derive(Debug, Default, Clone)]
@@ -55,18 +55,15 @@ pub struct MinerStat {
     pub is_req_diff_esp32: bool, // because "ESP32" only adds 0.5..
 }
 
-impl MinerStat
-{
-    pub fn new(ip: String, username: String) -> MinerStat
-    {
+impl MinerStat {
+    pub fn new(ip: String, username: String) -> MinerStat {
         let mut default = MinerStat::default();
         default.ip = CompactString::from(ip);
         default.username = CompactString::from(username);
         default
     }
 
-    pub fn convert_slim(&self) -> MinerStatSlim
-    {
+    pub fn convert_slim(&self) -> MinerStatSlim {
         MinerStatSlim::new(self)
     }
 }
@@ -111,10 +108,8 @@ pub struct MinerStatSlim {
     pub amount_of_workers: f32, // it's actually the id for the current worker (read: nth worker)
 }
 
-impl MinerStatSlim
-{
-    pub fn new(miner_stat: &MinerStat) -> MinerStatSlim
-    {
+impl MinerStatSlim {
+    pub fn new(miner_stat: &MinerStat) -> MinerStatSlim {
         MinerStatSlim {
             username: miner_stat.username.clone(),
             hashrate: miner_stat.hashrate,
@@ -169,7 +164,6 @@ impl<'a> serde::Serialize for StatsWithContext<'a> {
         map.end()
     }
 }
-
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct BlockInfos {

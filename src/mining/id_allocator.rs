@@ -13,11 +13,18 @@ const ESP32_BIT: u32 = 1 << 31;
 const SLOT_MASK: u32 = !ESP32_BIT;
 
 fn encode(slot: u32, is_esp32: bool) -> u32 {
-    if is_esp32 { slot | ESP32_BIT } else { slot }
+    if is_esp32 {
+        slot | ESP32_BIT
+    } else {
+        slot
+    }
 }
 
 fn decode(encoded: u32) -> (u32, u32) {
-    (encoded & SLOT_MASK, if encoded & ESP32_BIT != 0 { 1 } else { 2 })
+    (
+        encoded & SLOT_MASK,
+        if encoded & ESP32_BIT != 0 { 1 } else { 2 },
+    )
 }
 
 fn slot_of(encoded: u32) -> u32 {
@@ -79,8 +86,7 @@ impl WorkerAllocator {
     pub fn release(&mut self, slot: WorkerSlot, is_esp32: bool) {
         // Worker count uses the CURRENT miner's type.
         let worker_weight = if is_esp32 { 1 } else { 2 };
-        self.active_half_steps =
-            self.active_half_steps.saturating_sub(worker_weight);
+        self.active_half_steps = self.active_half_steps.saturating_sub(worker_weight);
 
         // Compaction uses the slot's ORIGINAL creation step.
         // Return its packed value unchanged.
@@ -90,10 +96,7 @@ impl WorkerAllocator {
     // Swap the miner's current ID for the lowest available free ID,
     // if one is lower. Returns `Some(new_id)` on swap, `None` if
     // the miner already holds the best available ID.
-    pub fn try_recycle(
-        &mut self,
-        current: WorkerSlot,
-    ) -> Option<WorkerSlot> {
+    pub fn try_recycle(&mut self, current: WorkerSlot) -> Option<WorkerSlot> {
         let lowest_free = *self.free_slots.last()?;
 
         if slot_of(lowest_free) >= slot_of(current.0) {
@@ -115,10 +118,9 @@ impl WorkerAllocator {
 
         let position = self
             .free_slots
-            .binary_search_by_key(
-                &std::cmp::Reverse(slot),
-                |&entry| std::cmp::Reverse(slot_of(entry)),
-            )
+            .binary_search_by_key(&std::cmp::Reverse(slot), |&entry| {
+                std::cmp::Reverse(slot_of(entry))
+            })
             .unwrap_or_else(|position| position);
 
         self.free_slots.insert(position, packed);

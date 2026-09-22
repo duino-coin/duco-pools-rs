@@ -238,7 +238,7 @@ pub async fn fetch_latest_version() -> anyhow::Result<Option<DownloadedUpdate>> 
                 if bytes.is_empty() {
                     bail!("Downloaded update is empty");
                 }
-                
+
                 verify_digest(&bytes, asset.digest.as_deref()).with_context(|| {
                     format!("Digest verification failed for asset {}", asset.name)
                 })?;

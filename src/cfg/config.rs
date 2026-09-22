@@ -60,7 +60,7 @@ pub struct PoolConfig {
     pub dashboard_key: String,
     pub update_restart_script: String,
     pub auto_update: bool,
-    pub update_check_time_seconds: u64
+    pub update_check_time_seconds: u64,
 }
 fn default_shares() -> u16 {
     80u16

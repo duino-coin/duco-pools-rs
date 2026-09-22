@@ -40,10 +40,12 @@ pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<(
             async move {
                 if dash_enabled {
                     if let Some(provided_key) = params.get("key") {
-                    // if provided_key == &dash_key_clone {
+                        // if provided_key == &dash_key_clone {
                         if ct_eq(provided_key, &dash_key_clone) {
-                            let workers_json = serde_json::to_value(&*mining::mining::USR_WORKERS_ALLOC).unwrap();
-                            let stats_json = serde_json::to_value(&*mining::mining::MINER_STATS).unwrap();
+                            let workers_json =
+                                serde_json::to_value(&*mining::mining::USR_WORKERS_ALLOC).unwrap();
+                            let stats_json =
+                                serde_json::to_value(&*mining::mining::MINER_STATS).unwrap();
                             let connections = CONNECTIONS.load(Relaxed);
                             let combined = serde_json::json!({
                                 "workers": workers_json,
@@ -70,6 +72,11 @@ pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<(
 
 // constant time equals check, prevents timing-based brute forcing
 fn ct_eq(a: &str, b: &str) -> bool {
-    if a.len() != b.len() { return false; }
-    a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    if a.len() != b.len() {
+        return false;
+    }
+    a.bytes()
+        .zip(b.bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }

@@ -92,17 +92,14 @@ pub fn handle_close(conn: &mut Connection) {
     debug!("{} Handling close", conn.id);
     mining::mining::MINER_STATS.remove(&*conn.id);
 
-    USR_WORKERS_ALLOC.remove_if_mut(
-        &conn.miner_stat.username,
-        |_, alloc| {
-            alloc.release(
-                // conn.miner_stat.amount_of_workers,
-                conn.miner_stat.worker_slot,
-                conn.miner_stat.is_req_diff_esp32,
-            );
-            alloc.is_empty()
-        },
-    );
+    USR_WORKERS_ALLOC.remove_if_mut(&conn.miner_stat.username, |_, alloc| {
+        alloc.release(
+            // conn.miner_stat.amount_of_workers,
+            conn.miner_stat.worker_slot,
+            conn.miner_stat.is_req_diff_esp32,
+        );
+        alloc.is_empty()
+    });
 
     // let should_remove = {
     //     let mut alloc = match USR_WORKERS_ALLOC.get_mut(&conn.miner_stat.username) {
