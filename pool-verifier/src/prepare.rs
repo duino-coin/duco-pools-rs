@@ -243,35 +243,27 @@ fn build_copy(
     if !benchmark {
         let web_path = stage.join("src/web/web.rs");
         let mut web = fs::read_to_string(&web_path)?.replace("\r\n", "\n");
-        replace_once(
-            &mut web,
-            "\"connections\": connections,",
-            r#""connections": connections,
-                                "verify": {
-                                    "due_cache": mining::mining::DUE_DIFF_CACHE.load(Relaxed),
-                                    "esp_cache": mining::mining::ESP8266NH_DIFF_CACHE.load(Relaxed),
-                                    "shares_total": mining::mining::GLOBAL_SHARES_TOTAL.load(Relaxed),
-                                    "shares_pending": mining::mining::GLOBAL_SHARES_INCREASE.load(Relaxed),
-                                    "balances": serde_json::to_value(&*mining::mining::BALANCES_TO_UPDATE).unwrap(),
-                                    "blocks": mining::mining::GLOBAL_BLOCKS.lock().await.len(),
-                                    "block_info": serde_json::to_value(&*mining::mining::GLOBAL_BLOCKS.lock().await).unwrap(),
-                                    "observations": serde_json::to_value(&*mining::mining::VERIFY_OBSERVATIONS).unwrap(),
-                                    "last_hash": mining::mining::LAST_BLOCK_HASH.load().as_str(),
-                                },"#,
-            "read-only state probe",
-        )?;
         // Take one block snapshot before building the JSON. Locking separately for
         // `len` and serialization could expose two different moments in one response.
-        replace_once(&mut web, "                            let combined = serde_json::json!({", "                            let verify_blocks = mining::mining::GLOBAL_BLOCKS.lock().await.clone();\n                            let combined = serde_json::json!({", "block snapshot")?;
-        web = web
-            .replace(
-                "mining::mining::GLOBAL_BLOCKS.lock().await.len()",
-                "verify_blocks.len()",
-            )
-            .replace(
-                "&*mining::mining::GLOBAL_BLOCKS.lock().await",
-                "&verify_blocks",
-            );
+        replace_once(
+            &mut web,
+            "                            return Ok(warp::reply::json(&data_res));",
+            r#"                            let verify_blocks = mining::mining::GLOBAL_BLOCKS.lock().await.clone();
+                            let mut combined = serde_json::to_value(&data_res).unwrap();
+                            combined["verify"] = serde_json::json!({
+                                "due_cache": mining::mining::DUE_DIFF_CACHE.load(Relaxed),
+                                "esp_cache": mining::mining::ESP8266NH_DIFF_CACHE.load(Relaxed),
+                                "shares_total": mining::mining::VERIFY_SHARES_TOTAL.load(Relaxed),
+                                "shares_pending": mining::mining::GLOBAL_SHARES_INCREASE.load(Relaxed),
+                                "balances": serde_json::to_value(&*mining::mining::BALANCES_TO_UPDATE).unwrap(),
+                                "blocks": verify_blocks.len(),
+                                "block_info": serde_json::to_value(&verify_blocks).unwrap(),
+                                "observations": serde_json::to_value(&*mining::mining::VERIFY_OBSERVATIONS).unwrap(),
+                                "last_hash": mining::mining::LAST_BLOCK_HASH.load().as_str(),
+                            });
+                            return Ok(warp::reply::json(&combined));"#,
+            "read-only state probe",
+        )?;
         fs::write(web_path, web)?;
         let stats_path = stage.join("src/mining/stats.rs");
         let mut stats = fs::read_to_string(&stats_path)?.replace("\r\n", "\n");
@@ -292,7 +284,18 @@ fn build_copy(
         )?;
         // One latest observation per connection is enough for assertions and bounds
         // the instrumentation's memory use during churn scenarios.
-        mining.push_str("\npub static VERIFY_OBSERVATIONS: LazyLock<DashMap<Box<str>, serde_json::Value>> = LazyLock::new(DashMap::new);\n");
+        // Keyed like MINER_STATS; ConnId serializes as the same 16-hex-digit key.
+        mining.push_str("\npub static VERIFY_OBSERVATIONS: LazyLock<DashMap<ConnId, serde_json::Value>> = LazyLock::new(DashMap::new);\n");
+        // The pool has no lifetime share total; count accepted shares next to the
+        // pending counter so `shares_total` keeps its meaning (never decremented).
+        mining.push_str("\npub static VERIFY_SHARES_TOTAL: AtomicU64 = AtomicU64::new(0);\n");
+        let pending_increment = "            GLOBAL_SHARES_INCREASE.fetch_add(\n                // config.update_miners_stats_every as u64,\n                1u64,\n                std::sync::atomic::Ordering::Relaxed,\n            );\n";
+        replace_once(
+            &mut mining,
+            pending_increment,
+            &format!("{pending_increment}            VERIFY_SHARES_TOTAL.fetch_add(1, Relaxed);\n"),
+            "accepted share total",
+        )?;
         replace_once(
             &mut mining,
             "        is_first_share = false;",

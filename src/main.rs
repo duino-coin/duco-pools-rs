@@ -8,8 +8,9 @@ mod updater;
 mod web;
 
 use crate::cfg::config::PoolConfig;
-use crate::data::data::{Bans, Connection};
+use crate::data::data::{Bans, ConnId, Connection};
 use crate::kolka::kolka::Kolka;
+use compact_str::CompactString;
 use dashmap::DashMap;
 use env_logger::Target;
 use log::{debug, error, info, LevelFilter};
@@ -249,7 +250,6 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
         .expect("failed to parse host:port");
     let web_handle = web::web::start_webserver(addr, config.dashboard_key.clone()).await;
 
-    let tracker = tokio_util::task::TaskTracker::new();
     let token = CancellationToken::new();
     let token_clone = token.clone();
     let tcp = tokio::spawn(async move {
@@ -258,16 +258,14 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                 Ok((socket, addr)) => {
                     let _ = socket.set_nodelay(true);
                     let local_token = token_clone.clone();
-                    tracker.spawn(async move {
+                    tokio::spawn(async move {
                         let _connection_counter = ConnectionCounterGuard::new();
                         // returns the future once *ONE* of the tasks completes
                         // e.g. either the miner disconnects OR the token is cancelled
                         tokio::select! {
                             () = async move {
-                                let mut bytes = [0; 8];
-                                rand::rng().fill_bytes(&mut bytes);
-                                let id: Box<str> = hex::encode(&bytes).into_boxed_str();
-                                let mut conn = Connection::new(socket, addr, String::new(), id);
+                                let id = ConnId(rand::rng().next_u64());
+                                let mut conn = Connection::new(socket, addr, CompactString::default(), id);
                                 match handler::handler::handle_connection(
                                     &mut conn
                                 )

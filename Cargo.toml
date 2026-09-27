@@ -1,6 +1,6 @@
 [package]
 name = "duco-pool-rs"
-version = "0.1.2"
+version = "0.1.8"
 edition = "2021"
 
 [dependencies]
@@ -28,6 +28,7 @@ compact_str = { version = "0.10.0", features = ["serde"] }
 tokio-util = { version = "0.7.19", features = ["rt"] }
 arc-swap = "1.9.2"
 memchr = "2.8.3"
+socket2 = "0.6.5"
 
 [profile.profiling]
 inherits = "release"

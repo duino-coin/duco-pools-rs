@@ -66,7 +66,7 @@ pub fn v1(
     output
 }
 
-pub fn v2(difficulty: &str) -> String {
+pub fn v2(difficulty: &str) -> &str {
     match difficulty {
         "AVR" => "MEGA",
         "MEGA" => "ARM",
@@ -80,10 +80,9 @@ pub fn v2(difficulty: &str) -> String {
         "NET" => "EXTREME",
         _ => difficulty,
     }
-    .to_string()
 }
 
-pub fn v2_reverse(difficulty: &str) -> String {
+pub fn v2_reverse(difficulty: &str) -> &str {
     match difficulty {
         "AVR" => "AVR",
         "MEGA" => "AVR",
@@ -97,7 +96,6 @@ pub fn v2_reverse(difficulty: &str) -> String {
         "EXTREME" => "NET",
         _ => difficulty,
     }
-    .to_string()
 }
 pub fn v3(sharetime: f32, expected_sharetime: u16, hashrate: f32) -> u32 {
     let mut new_diff_temp = ((hashrate / 100f32).floor() * expected_sharetime as f32).round();
@@ -119,7 +117,7 @@ pub fn v3(sharetime: f32, expected_sharetime: u16, hashrate: f32) -> u32 {
 pub fn get_diff(req_diff: &str) -> u32 {
     let diff = POOL_REWARDS
         .get(req_diff)
-        .expect(&format!("Failed to get {req_diff}"))
+        .unwrap_or_else(|| panic!("Failed to get {req_diff}"))
         .difficulty;
     diff as u32
 }

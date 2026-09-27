@@ -1,17 +1,15 @@
 use crate::mining::stats::MinerStat;
-use compact_str::CompactString;
-use serde::{Deserialize, Serialize};
+use compact_str::{CompactString, ToCompactString};
+use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashSet;
 use std::error::Error;
-use std::net::SocketAddr;
+use std::net::{Shutdown, SocketAddr};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
+use tokio::time::Instant;
 
-const TIMEOUT_IN_SECS: u64 = 90;
-const TIMEOUT: Duration = Duration::from_secs(TIMEOUT_IN_SECS); // it's 90s in the js pools
-const INNER_LONG_TIMEOUT: Duration = Duration::from_secs(TIMEOUT_IN_SECS + 5);
+const TIMEOUT: Duration = Duration::from_secs(90); // it's 90s in the js pools
 const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
 #[derive(Debug, Clone)]
 pub struct ConnectionClosed;
@@ -24,11 +22,31 @@ impl std::fmt::Display for ConnectionClosed {
 
 impl Error for ConnectionClosed {}
 
+// Connection id, kept as a number and only rendered as 16 lowercase hex chars
+// (dashboard/sync keys, logs)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConnId(pub u64);
+
+impl std::fmt::Display for ConnId {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:016x}", self.0)
+    }
+}
+
+impl Serialize for ConnId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut buf = [0u8; 16];
+        hex::encode_to_slice(self.0.to_be_bytes(), &mut buf).unwrap();
+        // hex output is always valid utf-8
+        serializer.serialize_str(std::str::from_utf8(&buf).unwrap())
+    }
+}
+
 #[derive(Debug)]
 pub struct Connection {
-    reader: BufReader<OwnedReadHalf>,
-    writer: OwnedWriteHalf,
-    pub id: Box<str>,
+    // unsplit: reads and writes are sequential, and BufReader passes writes through
+    stream: BufReader<TcpStream>,
+    pub id: ConnId,
     pub miner_stat: MinerStat,
 }
 
@@ -36,23 +54,28 @@ impl Drop for Connection {
     fn drop(&mut self) {
         // Guaranteed cleanup on connection drop (normal or panic)
         crate::handler::handler::handle_close(self);
+        // same as dropping the old OwnedWriteHalf: send FIN before the socket is closed
+        let _ = socket2::SockRef::from(self.stream.get_ref()).shutdown(Shutdown::Write);
     }
 }
 
 impl Connection {
-    pub fn new(socket: TcpStream, addr: SocketAddr, username: String, id: Box<str>) -> Self {
-        let (read_half, write_half) = socket.into_split();
+    pub fn new(
+        socket: TcpStream,
+        addr: SocketAddr,
+        username: CompactString,
+        id: ConnId,
+    ) -> Self {
         Connection {
-            reader: BufReader::with_capacity(256, read_half),
-            writer: write_half,
+            stream: BufReader::with_capacity(256, socket),
             id,
-            miner_stat: MinerStat::new(addr.ip().to_string(), username),
+            miner_stat: MinerStat::new(addr.ip().to_compact_string(), username),
         }
     }
 
     pub async fn write(&mut self, content: &str) -> Result<(), anyhow::Error> {
         tokio::time::timeout(TIMEOUT, async {
-            self.writer.write_all(content.as_bytes()).await?;
+            self.stream.write_all(content.as_bytes()).await?;
             Ok::<(), anyhow::Error>(())
         })
         .await??;
@@ -69,50 +92,51 @@ impl Connection {
 
         output.clear();
 
-        tokio::time::timeout(TIMEOUT, async {
-            let mut first_read = true;
+        // One timer per wait: the first read waits for the whole deadline, later reads
+        // (rest of a partial line) wait IDLE_TIMEOUT but never past the deadline
+        let deadline = Instant::now() + TIMEOUT;
+        let mut first_read = true;
 
-            loop {
-                let step_timeout = if first_read {
-                    INNER_LONG_TIMEOUT
-                } else {
-                    IDLE_TIMEOUT
+        loop {
+            let step_deadline = if first_read {
+                deadline
+            } else {
+                deadline.min(Instant::now() + IDLE_TIMEOUT)
+            };
+            let received =
+                match tokio::time::timeout_at(step_deadline, self.stream.fill_buf()).await {
+                    Ok(Ok(received)) => received,
+                    Ok(Err(err)) => return Err(anyhow::Error::from(err)),
+                    // the overall deadline passed
+                    Err(elapsed) if step_deadline == deadline => return Err(elapsed.into()),
+                    // idle gap within a partial line
+                    Err(_) => break,
                 };
-                let received =
-                    match tokio::time::timeout(step_timeout, self.reader.fill_buf()).await {
-                        Ok(Ok(received)) => received,
-                        Ok(Err(err)) => return Err(anyhow::Error::from(err)),
-                        Err(_) => break,
-                    };
 
-                if received.is_empty() {
-                    break;
-                }
-
-                let newline = memchr::memchr(b'\n', received);
-                let consumed = newline.map_or(received.len(), |pos| pos + 1);
-
-                if consumed > MAX_FRAME_BYTES - bytes.len() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Message too long",
-                    )
-                    .into());
-                }
-
-                bytes.extend_from_slice(&received[..consumed]);
-                self.reader.consume(consumed);
-
-                if newline.is_some() {
-                    break;
-                }
-
-                first_read = false;
+            if received.is_empty() {
+                break;
             }
 
-            Ok::<(), anyhow::Error>(())
-        })
-        .await??;
+            let newline = memchr::memchr(b'\n', received);
+            let consumed = newline.map_or(received.len(), |pos| pos + 1);
+
+            if consumed > MAX_FRAME_BYTES - bytes.len() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Message too long",
+                )
+                .into());
+            }
+
+            bytes.extend_from_slice(&received[..consumed]);
+            self.stream.consume(consumed);
+
+            if newline.is_some() {
+                break;
+            }
+
+            first_read = false;
+        }
 
         if bytes.last() == Some(&b'\n') {
             bytes.pop();
@@ -160,7 +184,7 @@ impl LoginInfos {
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Bans {
     #[serde(rename = "bannedUsernames")]
-    pub banned_usernames: HashSet<String>,
+    pub banned_usernames: HashSet<CompactString>,
     #[serde(rename = "bannedIPs")]
     pub banned_ips: HashSet<CompactString>,
 }

@@ -4,8 +4,12 @@ use crate::{mining, BANS, CONFIG};
 use compact_str::CompactString;
 use log::{debug, warn};
 use std::process::Command;
+use std::sync::OnceLock;
 
 const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+// "<server_version>\n", built once instead of on every connection
+static GREETING: OnceLock<String> = OnceLock::new();
 
 //const CMD: &str = "csf -td ${ip}"; //csf
 //const CMD: &str = "iptables -A INPUT -s ${ip} -j DROP"; //iptables
@@ -25,63 +29,78 @@ async fn ban_ip(ip: &str) -> Result<(), anyhow::Error> {
 
 pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::Error> {
     let config = CONFIG.get().unwrap();
-    conn.write(&format!("{}\n", config.server_version)).await?;
+    let greeting = GREETING.get_or_init(|| format!("{}\n", config.server_version));
+    conn.write(greeting).await?;
     let mut data = String::new();
 
     // this loop only handles one JOB requests, however, it is necessary so the user can first request the MOTD
     loop {
         conn.read_to_string(&mut data).await?;
-        let mut data_split = [""; 8];
-        let data_len = mining::mining::scan_fields(data.trim(), &mut data_split);
+        // the split fields are scoped so they aren't kept in the future while mining,
+        // mining::handle scans the line again itself
+        let is_job = {
+            let mut data_split = [""; 8];
+            let data_len = mining::mining::scan_fields(data.trim(), &mut data_split);
 
-        if conn.miner_stat.ip.is_empty() || data_len > 6
-        // no clue what '!conn.remoteAddr' is supposed to do
-        {
-            conn.write("BAD,Incorrect data\n").await?;
-            return Ok(());
-        }
-
-        // check for bans
-        // block so we lose the lock on the mutex
-        {
-            let mut ban = BANS.lock().await;
-            if ban.banned_ips.contains(&conn.miner_stat.ip) && conn.miner_stat.ip != "127.0.0.1" {
-                conn.write("BAD,User banned\n").await?;
+            if conn.miner_stat.ip.is_empty() || data_len > 6
+            // no clue what '!conn.remoteAddr' is supposed to do
+            {
+                conn.write("BAD,Incorrect data\n").await?;
                 return Ok(());
             }
-            if data_len >= 2 {
-                let username = data_split[1];
-                if ban.banned_usernames.contains(username) && conn.miner_stat.ip != "127.0.0.1" {
-                    if !ban.banned_ips.contains(&conn.miner_stat.ip) {
-                        ban_ip(&conn.miner_stat.ip).await?;
-                        // ban.banned_ips.push(conn.ip.clone());
-                        ban.banned_ips.insert(conn.miner_stat.ip.clone());
-                        ban.save_bans().expect("failed to save config bans.json");
-                    }
 
+            // check for bans
+            // block so we lose the lock on the mutex
+            {
+                let mut ban = BANS.lock().await;
+                if ban.banned_ips.contains(&conn.miner_stat.ip)
+                    && conn.miner_stat.ip != "127.0.0.1"
+                {
                     conn.write("BAD,User banned\n").await?;
                     return Ok(());
                 }
-            }
-        }
+                if data_len >= 2 {
+                    let username = data_split[1];
+                    if ban.banned_usernames.contains(username) && conn.miner_stat.ip != "127.0.0.1"
+                    {
+                        if !ban.banned_ips.contains(&conn.miner_stat.ip) {
+                            ban_ip(&conn.miner_stat.ip).await?;
+                            // ban.banned_ips.push(conn.ip.clone());
+                            ban.banned_ips.insert(conn.miner_stat.ip.clone());
+                            ban.save_bans().expect("failed to save config bans.json");
+                        }
 
-        if data_split[0] == "JOB" {
-            if data_len == 1 {
-                conn.write("BAD,No username specified\n").await?;
-                return Ok(());
-            } else {
+                        conn.write("BAD,User banned\n").await?;
+                        return Ok(());
+                    }
+                }
+            }
+
+            if data_split[0] == "JOB" {
+                if data_len == 1 {
+                    conn.write("BAD,No username specified\n").await?;
+                    return Ok(());
+                }
                 if conn.miner_stat.username.is_empty() {
-                    conn.miner_stat.username = CompactString::from(data_split[1].to_string());
+                    conn.miner_stat.username = CompactString::from(data_split[1]);
                 } else if conn.miner_stat.username != data_split[1] {
                     return Ok(());
                 }
-                mining::mining::handle(&mut conn, data_split, data_len, config, false).await?;
-                break;
+                true
+            } else {
+                if data_split[0] == "MOTD" {
+                    conn.write(&config.motd).await?;
+                } else if data_split[0] == "DEBG_VERSION" {
+                    conn.write(&CARGO_VERSION).await?;
+                }
+                false
             }
-        } else if data_split[0] == "MOTD" {
-            conn.write(&config.motd).await?;
-        } else if data_split[0] == "DEBG_VERSION" {
-            conn.write(&CARGO_VERSION).await?;
+        };
+
+        if is_job {
+            // hand the line over, its buffer is reused for the rest of the session
+            mining::mining::handle(&mut conn, std::mem::take(&mut data), config, false).await?;
+            break;
         }
     }
 
@@ -90,7 +109,7 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
 
 pub fn handle_close(conn: &mut Connection) {
     debug!("{} Handling close", conn.id);
-    mining::mining::MINER_STATS.remove(&*conn.id);
+    mining::mining::MINER_STATS.remove(&conn.id);
 
     USR_WORKERS_ALLOC.remove_if_mut(&conn.miner_stat.username, |_, alloc| {
         alloc.release(

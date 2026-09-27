@@ -188,7 +188,13 @@ async fn spawn_update_restart_in(
     Ok(helper)
 }
 
+#[cfg(test)]
 fn verify_digest(bytes: &[u8], digest: Option<&str>) -> anyhow::Result<()> {
+    check_digest(&Sha256::digest(bytes), digest)
+}
+
+// `actual` is the SHA-256 of the downloaded bytes
+fn check_digest(actual: &[u8], digest: Option<&str>) -> anyhow::Result<()> {
     let digest = digest.context("Release asset has no digest")?;
     let (algorithm, expected_hex) = digest
         .split_once(':')
@@ -200,13 +206,36 @@ fn verify_digest(bytes: &[u8], digest: Option<&str>) -> anyhow::Result<()> {
     let mut expected = [0u8; 32];
     hex::decode_to_slice(expected_hex, &mut expected)
         .context("Invalid SHA-256 digest: expected 64 hexadecimal characters")?;
-    let actual = Sha256::digest(bytes);
     if actual[..] != expected {
         bail!(
             "Update SHA-256 digest mismatch: expected {expected_hex}, calculated {}",
             hex::encode(actual)
         );
     }
+    Ok(())
+}
+
+// writes the body to `staging` while hashing it; same checks and order as before
+// (empty download, then digest)
+async fn stage_download(
+    mut response: reqwest::Response,
+    staging: &Path,
+    digest: Option<&str>,
+) -> anyhow::Result<()> {
+    let mut file = tokio::fs::File::create(staging).await?;
+    let mut hasher = Sha256::new();
+    let mut len = 0usize;
+    while let Some(chunk) = response.chunk().await? {
+        hasher.update(&chunk);
+        len += chunk.len();
+        file.write_all(&chunk).await?;
+    }
+    if len == 0 {
+        bail!("Downloaded update is empty");
+    }
+    check_digest(&hasher.finalize(), digest)?;
+    file.flush().await?;
+    file.sync_all().await?;
     Ok(())
 }
 
@@ -228,27 +257,26 @@ pub async fn fetch_latest_version() -> anyhow::Result<Option<DownloadedUpdate>> 
     if tag_version > VERSION_CODE {
         for asset in response.assets {
             if asset.name.to_lowercase().contains(BUILD_TARGET) {
-                let bytes = client
+                let download = client
                     .get(asset.browser_download_url)
                     .send()
                     .await?
-                    .error_for_status()?
-                    .bytes()
-                    .await?;
-                if bytes.is_empty() {
-                    bail!("Downloaded update is empty");
-                }
-
-                verify_digest(&bytes, asset.digest.as_deref()).with_context(|| {
-                    format!("Digest verification failed for asset {}", asset.name)
-                })?;
+                    .error_for_status()?;
                 let executable = std::env::current_exe()?;
                 let path = update_path(&executable)?;
-                let mut file = tokio::fs::File::create(&path).await?;
-                file.write_all(&bytes).await?;
-                file.flush().await?;
-                file.sync_all().await?;
-                drop(file);
+                // streamed into a staging file (never the whole binary in memory), only moved
+                // to `path` after the checks pass, so a partial or bad download is never installable
+                let mut staging = path.clone().into_os_string();
+                staging.push(".part");
+                let staging = PathBuf::from(staging);
+                let staged = stage_download(download, &staging, asset.digest.as_deref()).await;
+                if let Err(err) = staged {
+                    let _ = tokio::fs::remove_file(&staging).await;
+                    return Err(err).with_context(|| {
+                        format!("Downloading or verifying asset {} failed", asset.name)
+                    });
+                }
+                tokio::fs::rename(&staging, &path).await?;
                 return Ok(Some(DownloadedUpdate {
                     version: response.tag_name,
                     executable,

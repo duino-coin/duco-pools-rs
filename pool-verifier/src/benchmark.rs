@@ -905,7 +905,7 @@ mod tests {
                 ..Settings::default()
             },
             Settings {
-                shares: 60_000,
+                shares: 501_000,
                 ..Settings::default()
             },
             Settings {

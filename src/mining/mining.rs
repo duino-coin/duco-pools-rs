@@ -1,9 +1,9 @@
 use crate::cfg::config::PoolConfig;
-use crate::data::data::Connection;
+use crate::data::data::{ConnId, Connection};
 use crate::mining::id_allocator::WorkerAllocator;
 use crate::mining::stats::{BlockInfos, MinerStatSlim};
 use crate::sync::sync::Difficulty;
-use crate::{cfg, kolka, KOLKA, POOL_REWARDS};
+use crate::{kolka, CONFIG, KOLKA, POOL_REWARDS};
 use arc_swap::ArcSwap;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -12,7 +12,6 @@ use dashmap::DashMap;
 use log::{debug, info};
 use rand::{rng, RngExt};
 use sha1_smol::Sha1;
-use std::collections::VecDeque;
 use std::str::FromStr;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicU32, AtomicU64};
@@ -27,38 +26,38 @@ pub static USR_WORKERS_ALLOC: LazyLock<DashMap<CompactString, WorkerAllocator>> 
 pub static BALANCES_TO_UPDATE: LazyLock<DashMap<CompactString, f32>> =
     LazyLock::new(|| DashMap::new());
 
-pub static MINER_STATS: LazyLock<DashMap<Box<str>, MinerStatSlim>> =
+pub static MINER_STATS: LazyLock<DashMap<ConnId, MinerStatSlim>> =
     LazyLock::new(|| DashMap::new());
 
 static LAST_BLOCK_HASH: LazyLock<ArcSwap<String>> = LazyLock::new(|| {
-    let config = cfg::config::load_config().expect("failed to load config (static)");
-    ArcSwap::from_pointee(config.initial_blockhash)
+    let config = CONFIG.get().expect("config not initialised");
+    ArcSwap::from_pointee(config.initial_blockhash.clone())
 });
 
 pub static GLOBAL_BLOCKS: LazyLock<Mutex<Vec<BlockInfos>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
-pub static GLOBAL_SHARES_INCREASE: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
+pub static GLOBAL_SHARES_INCREASE: AtomicU64 = AtomicU64::new(0);
 
-pub static GLOBAL_SHARES_TOTAL: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
+pub static ESP8266NH_DIFF_CACHE: AtomicU32 = AtomicU32::new(0);
 
-pub static ESP8266NH_DIFF_CACHE: LazyLock<AtomicU32> = LazyLock::new(|| AtomicU32::new(0));
+pub static DUE_DIFF_CACHE: AtomicU32 = AtomicU32::new(0);
 
-pub static DUE_DIFF_CACHE: LazyLock<AtomicU32> = LazyLock::new(|| AtomicU32::new(0));
+// longest password (or legacy mining key) accepted, its base64 form fits PASSWORD_B64_BYTES
+const MAX_PASSWORD_BYTES: usize = 96;
+const PASSWORD_B64_BYTES: usize = MAX_PASSWORD_BYTES.div_ceil(3) * 4;
 
+// every local that lives across an .await is stored in the connection's future,
+// so scratch buffers are kept in the sync blocks/functions that use them
 pub async fn handle(
     conn: &mut Connection,
-    initial_data: [&str; 8],
-    initial_data_len: usize,
+    mut read: String, // holds the first JOB request, then reused for every job/answer line
     config: &PoolConfig,
     using_avr: bool,
 ) -> Result<(), anyhow::Error> {
     let mut random;
-    let mut hasher = Sha1::new();
     let mut hex_buf = [0u8; 40]; // stack-allocated, reused every iteration
-    let mut password_buf = [0u8; 128];
     let mut req_difficulty = CompactString::with_capacity(16);
-    let mut this_miner_chipid = CompactString::default();
     let mut expected_share_time = 0;
     let mut feedback_sent = SystemTime::now();
     let mut start_hashrate = -1f32;
@@ -72,20 +71,17 @@ pub async fn handle(
 
     let kolka = KOLKA.get().unwrap();
     let pool_rewards = &POOL_REWARDS;
-    let mut buffer = itoa::Buffer::new(); // used to convert nums to str a little faster
     let mut data: [&str; 8] = [""; 8];
     let mut data_len: usize;
-    let mut read = String::with_capacity(32); // needed for first share..
 
-    data_len = initial_data_len.min(8);
-    data[..data_len].copy_from_slice(&initial_data[..data_len]);
-
-    let mut job_str = String::with_capacity(32);
-    let mut msg = String::with_capacity(23);
+    // the handler already validated this line; scan it the same way (trimmed)
+    data_len = scan_fields(read.trim(), &mut data);
 
     let mut share_accepted = false;
 
     loop {
+        // set when the requested tier was already looked up for this share
+        let mut prefetched_info = None;
         if is_first_share {
             req_difficulty.clear();
             if data_len < 3 || data[2].is_empty() {
@@ -142,7 +138,8 @@ pub async fn handle(
                     }
                 }
 
-                if pool_rewards.get(req_difficulty.as_str()).is_none() {
+                prefetched_info = pool_rewards.get(req_difficulty.as_str()).map(|r| *r);
+                if prefetched_info.is_none() {
                     req_difficulty.clear();
                     req_difficulty.push_str("NET");
                 }
@@ -150,11 +147,9 @@ pub async fn handle(
         }
 
         if data_len >= 4 {
-            let encoded_len =
-                BASE64_STANDARD.encode_slice(data[3].as_bytes(), &mut password_buf)?;
-            let encoded = std::str::from_utf8(&password_buf[..encoded_len])?;
-            conn.miner_stat.password.clear();
-            conn.miner_stat.password.push_str(encoded);
+            if !encode_password(data[3], &mut conn.miner_stat.password) {
+                return reject_password(conn).await;
+            }
         } else {
             conn.miner_stat.password.clear();
         }
@@ -180,19 +175,22 @@ pub async fn handle(
             .unwrap_or((0.0, None));
 
         if check_workers(user_workers, &config) {
-            conn.miner_stat.reject_shares = CompactString::const_new("Too many workers");
+            conn.miner_stat.reject_shares = Some("BAD,Too many workers\n");
         }
         if let Some(id) = new_id {
             // conn.miner_stat.amount_of_workers = id;
             conn.miner_stat.worker_slot = id;
         }
 
-        let diff_info = resolve_reward_info(
-            pool_rewards,
-            req_difficulty.as_str(),
-            conn.miner_stat.override_diff.as_str(),
-        )
-        .ok_or_else(|| anyhow::anyhow!("failed to resolve difficulty info"))?;
+        let diff_info = match prefetched_info {
+            Some(info) => info,
+            None => resolve_reward_info(
+                pool_rewards,
+                req_difficulty.as_str(),
+                conn.miner_stat.override_diff.as_str(),
+            )
+            .ok_or_else(|| anyhow::anyhow!("failed to resolve difficulty info"))?,
+        };
         if is_first_share {
             diff = diff_info.difficulty as u32;
         }
@@ -204,26 +202,32 @@ pub async fn handle(
             random = 1;
         }
 
-        let last_block_hash = LAST_BLOCK_HASH.load(); // Arc<String>
-        hasher.reset();
-        hasher.update(last_block_hash.as_bytes());
-        hasher.update(buffer.format(random).as_bytes());
+        // the request fields aren't needed anymore, so `read` is free for the job line
+        data = [""; 8];
+        {
+            // scoped so the guard (and the hash version it pins) isn't held across awaits
+            let last_block_hash = LAST_BLOCK_HASH.load();
+            let mut hasher = Sha1::new();
 
-        let raw = hasher.digest().bytes();
-        hex::encode_to_slice(raw, &mut hex_buf).unwrap();
+            hasher.update(last_block_hash.as_bytes());
+            hasher.update(itoa::Buffer::new().format(random).as_bytes());
+
+            let raw = hasher.digest().bytes();
+            hex::encode_to_slice(raw, &mut hex_buf).unwrap();
+
+
+            read.clear();
+            read.push_str(last_block_hash.as_str());
+        }
         let new_hash_str = std::str::from_utf8(&hex_buf)?;
-
-        job_str.clear();
-        job_str.push_str(last_block_hash.as_str());
-        job_str.push(',');
-        job_str.push_str(new_hash_str);
-        job_str.push(',');
-        job_str.push_str(buffer.format(diff));
-        job_str.push('\n');
-        conn.write(&job_str).await?;
+        read.push(',');
+        read.push_str(new_hash_str);
+        read.push(',');
+        read.push_str(itoa::Buffer::new().format(diff));
+        read.push('\n');
+        conn.write(&read).await?;
 
         let job_sent = SystemTime::now();
-        data = [""; 8];
         conn.read_to_string(&mut read).await?;
 
         data_len = scan_fields(&read, &mut data);
@@ -236,14 +240,9 @@ pub async fn handle(
 
         // 1.5x to account that the average will be half the target (I don't know what this means, I copied the original comment)
         let val = conn.miner_stat.share_time * 1.5;
-        conn.miner_stat.share_times_list.push_back(val);
         conn.miner_stat.total_share_times += val;
-        if conn.miner_stat.share_times_list.len() > 50 {
-            conn.miner_stat.total_share_times -= conn
-                .miner_stat
-                .share_times_list
-                .pop_front()
-                .unwrap_or_else(|| 0f32);
+        if let Some(oldest) = conn.miner_stat.share_times_list.push(val) {
+            conn.miner_stat.total_share_times -= oldest;
         }
 
         let mut wrong_reported_hashrate = false;
@@ -264,7 +263,7 @@ pub async fn handle(
             || reported_hashrate.is_nan()
             || reported_hashrate.is_infinite()
         {
-            conn.miner_stat.reject_shares = CompactString::const_new("Invalid data");
+            conn.miner_stat.reject_shares = Some("BAD,Invalid data\n");
         }
 
         {
@@ -312,7 +311,7 @@ pub async fn handle(
         // if the pool was built with the bench feature enabled, we discard this codeblock
         {
             if conn.miner_stat.last_min_shares > config.max_shares_per_minute {
-                conn.miner_stat.reject_shares = CompactString::const_new("Too low difficulty");
+                conn.miner_stat.reject_shares = Some("BAD,Too low difficulty\n");
             }
         }
 
@@ -325,9 +324,9 @@ pub async fn handle(
         }
 
         if is_first_share {
-            this_miner_chipid.clear();
+            conn.miner_stat.this_miner_chipid.clear();
             if data_len >= 5 {
-                this_miner_chipid.push_str(data[4]);
+                conn.miner_stat.this_miner_chipid.push_str(data[4]);
             }
         }
 
@@ -338,7 +337,7 @@ pub async fn handle(
             && hashrate_perc_diff_for_calc > 15f32
             && conn.miner_stat.share_time >= 1.5
         {
-            conn.miner_stat.reject_shares = CompactString::const_new("Modified hashrate");
+            conn.miner_stat.reject_shares = Some("BAD,Modified hashrate\n");
         }
 
         // we don't care whether they overreport their hashrate
@@ -349,7 +348,7 @@ pub async fn handle(
             // the difference is sometimes (currently) inexplicably high, therefore we rarely want to reject shares for it..
             if hashrate_perc_diff_for_calc >= 50f32 && false {
                 // disabled for now..
-                conn.miner_stat.reject_shares = CompactString::const_new("Modified hashrate");
+                conn.miner_stat.reject_shares = Some("BAD,Modified hashrate\n");
             }
             hashrate = hashrate_calc;
         }
@@ -385,14 +384,9 @@ pub async fn handle(
 
         share_accepted = false;
         reward = 0f32;
-        if !conn.miner_stat.reject_shares.is_empty() {
-            msg.clear();
-            msg.push_str("BAD,");
-            msg.push_str(conn.miner_stat.reject_shares.as_str());
-            msg.push('\n');
-            conn.write(&msg).await?;
+        if let Some(response) = conn.miner_stat.reject_shares.take() {
+            conn.write(response).await?;
 
-            conn.miner_stat.reject_shares.clear();
             conn.miner_stat.rejected_shares += 1;
         } else if hashrate < min_hashrate as f32 {
             conn.miner_stat.override_diff =
@@ -413,9 +407,10 @@ pub async fn handle(
             if conn.miner_stat.accepted_shares > 10 {
                 // why is this a thing?
                 if diff <= ESP8266NH_DIFF_CACHE.load(Relaxed) {
-                    if this_miner_chipid.is_empty() {
+                    if conn.miner_stat.this_miner_chipid.is_empty() {
                         conn.miner_stat.rejected_shares += 1;
-                    } else if data_len >= 5 && data[4] != this_miner_chipid.as_str() {
+                    } else if data_len >= 5 && data[4] != conn.miner_stat.this_miner_chipid.as_str()
+                    {
                         conn.miner_stat.rejected_shares += 1;
                     } else {
                         reward = kolka::kolka::v1(
@@ -445,9 +440,9 @@ pub async fn handle(
 
                 let block_infos = BlockInfos::new(
                     answer_received.duration_since(UNIX_EPOCH)?.as_secs(),
-                    conn.miner_stat.username.to_string(),
+                    conn.miner_stat.username.clone(),
                     reward,
-                    "DUCO-S1".to_string(),
+                    CompactString::const_new("DUCO-S1"),
                     new_hash_str.to_string(),
                 );
                 GLOBAL_BLOCKS.lock().await.push(block_infos);
@@ -464,16 +459,17 @@ pub async fn handle(
         }
 
         if share_accepted {
-            *BALANCES_TO_UPDATE
-                .entry(conn.miner_stat.username.clone())
-                .or_insert(0f32) += reward;
+            // only clone the username key when the entry doesn't exist yet
+            match BALANCES_TO_UPDATE.get_mut(&conn.miner_stat.username) {
+                Some(mut balance) => *balance += reward,
+                None => {
+                    *BALANCES_TO_UPDATE
+                        .entry(conn.miner_stat.username.clone())
+                        .or_insert(0f32) += reward
+                }
+            }
 
             GLOBAL_SHARES_INCREASE.fetch_add(
-                // config.update_miners_stats_every as u64,
-                1u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            GLOBAL_SHARES_TOTAL.fetch_add(
                 // config.update_miners_stats_every as u64,
                 1u64,
                 std::sync::atomic::Ordering::Relaxed,
@@ -482,24 +478,6 @@ pub async fn handle(
         if conn.miner_stat.accepted_shares > 0
             && conn.miner_stat.accepted_shares % config.update_miners_stats_every as u64 == 0
         {
-            conn.miner_stat.software.clear();
-
-            if data_len >= 3 {
-                clean_name_into(data[2], &mut conn.miner_stat.software);
-
-                if conn.miner_stat.software.is_empty() {
-                    conn.miner_stat.software.push_str("Unknown miner");
-                }
-            } else {
-                conn.miner_stat.software.push_str("Unknown miner");
-            }
-
-            let wallet_id = if data_len >= 6 { &data[5] } else { "None" };
-            conn.miner_stat.wallet_id.clear();
-            conn.miner_stat
-                .wallet_id
-                .push_str(wallet_id.trim_end_matches("\n"));
-
             let (rig_part, key_part) = if data_len >= 4 {
                 match data[3].split_once(':') {
                     Some((r, k)) => (r, Some(k)),
@@ -509,40 +487,37 @@ pub async fn handle(
                 ("", None)
             };
 
-            conn.miner_stat.id.clear();
-            clean_name_into(rig_part, &mut conn.miner_stat.id);
-            if conn.miner_stat.id.is_empty() {
-                conn.miner_stat.id.push_str("None");
-            }
-
-            conn.miner_stat.hashrate = if hashrate_is_estimated {
-                hashrate
-            } else {
-                reported_hashrate
-            };
-            conn.miner_stat.difficulty = diff;
-
+            // the only fallible step, done before the published entry is touched
             if let Some(key) = key_part {
                 // mining key backwards compatibility for old miners
-                let encoded_len =
-                    BASE64_STANDARD.encode_slice(key.as_bytes(), &mut password_buf)?;
-                let encoded = std::str::from_utf8(&password_buf[..encoded_len])?;
-                conn.miner_stat.password.clear();
-                conn.miner_stat.password.push_str(encoded);
+                if !encode_password(key, &mut conn.miner_stat.password) {
+                    return reject_password(conn).await;
+                }
             }
 
-            conn.miner_stat.this_miner_chipid.clear();
-            conn.miner_stat
-                .this_miner_chipid
-                .push_str(this_miner_chipid.as_str());
-            conn.miner_stat.reward = reward;
+            let published = Published {
+                software: if data_len >= 3 { Some(data[2]) } else { None },
+                rig: rig_part,
+                wallet_id: if data_len >= 6 { data[5] } else { "None" },
+                hashrate: if hashrate_is_estimated {
+                    hashrate
+                } else {
+                    reported_hashrate
+                },
+                difficulty: diff,
+                reward,
+            };
 
-            let miner_stat_slim = conn.miner_stat.convert_slim();
-
-            match MINER_STATS.get_mut(&*conn.id) {
-                Some(mut e) => *e = miner_stat_slim,
+            // one guard for all fields; nothing below fails or awaits
+            match MINER_STATS.get_mut(&conn.id) {
+                Some(mut e) => {
+                    e.update_from(&conn.miner_stat);
+                    published.write_into(&mut e);
+                }
                 None => {
-                    MINER_STATS.insert(conn.id.clone(), miner_stat_slim);
+                    let mut stat = conn.miner_stat.convert_slim();
+                    published.write_into(&mut stat);
+                    MINER_STATS.insert(conn.id, stat);
                 }
             }
 
@@ -554,6 +529,70 @@ pub async fn handle(
         feedback_sent = SystemTime::now();
     }
 }
+
+// fields that only exist for the published stats, written straight into the MINER_STATS entry
+struct Published<'a> {
+    software: Option<&'a str>, // raw field, None if the answer had no software field
+    rig: &'a str,              // raw rig part (before the legacy ':key')
+    wallet_id: &'a str,
+    hashrate: f32,
+    difficulty: u32,
+    reward: f32,
+}
+
+impl Published<'_> {
+    fn write_into(&self, stat: &mut MinerStatSlim) {
+        match self.software {
+            Some(software) => {
+                clean_name_into(software, &mut stat.software);
+                if stat.software.is_empty() {
+                    stat.software.push_str("Unknown miner");
+                }
+            }
+            None => {
+                stat.software.clear();
+                stat.software.push_str("Unknown miner");
+            }
+        }
+
+        stat.wallet_id.clear();
+        stat.wallet_id
+            .push_str(self.wallet_id.trim_end_matches("\n"));
+
+        clean_name_into(self.rig, &mut stat.id);
+        if stat.id.is_empty() {
+            stat.id.push_str("None");
+        }
+
+        stat.hashrate = self.hashrate;
+        stat.difficulty = self.difficulty;
+        stat.reward = self.reward;
+    }
+}
+
+// false (and `out` untouched) if `raw` is longer than MAX_PASSWORD_BYTES
+fn encode_password(raw: &str, out: &mut CompactString) -> bool {
+    if raw.len() > MAX_PASSWORD_BYTES {
+        return false;
+    }
+    let mut buf = [0u8; PASSWORD_B64_BYTES];
+    // can't fail, the length was checked above
+    let len = BASE64_STANDARD
+        .encode_slice(raw.as_bytes(), &mut buf)
+        .unwrap();
+    out.clear();
+    // base64 output is always valid utf-8
+    out.push_str(std::str::from_utf8(&buf[..len]).unwrap());
+    true
+}
+
+// explicit rejection instead of silently dropping the connection
+async fn reject_password(conn: &mut Connection) -> Result<(), anyhow::Error> {
+    conn.write("BAD,Password too long\n").await?;
+    // used so we can handle closes centrally
+    Err(anyhow::Error::from_boxed(Box::from("Shutting down.")))
+}
+
 fn perc_diff(hashrate: f32, hashrate_calc: f32) -> f32 {
     (100f32 * ((hashrate - hashrate_calc) / ((hashrate + hashrate_calc) / 2f32)).abs()).floor()
 }

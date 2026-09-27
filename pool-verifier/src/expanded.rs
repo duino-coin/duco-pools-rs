@@ -628,6 +628,39 @@ pub async fn run(case: &Case, h: &mut Harness) -> Result<()> {
                     );
                     m.close().await?;
                 } else {
+                    // Over-long passwords get an explicit rejection before the disconnect.
+                    let line = m.line().await?;
+                    anyhow::ensure!(
+                        line == "BAD,Password too long",
+                        "password rejection: {line:?}"
+                    );
+                    m.expect_closed(WAIT).await?;
+                }
+                h.empty().await?;
+            }
+            // The legacy `rig:key` key has the same limit. It is only encoded when stats
+            // are published, after the share feedback has already been sent.
+            for size in [96, 97] {
+                let rig = format!("rig:{}", "b".repeat(size));
+                let mut m = h.miner("alice", "AVR", &rig).await?;
+                let job = m.job().await?;
+                accepted(&m.answer(&job, true).await?)?;
+                if size == 96 {
+                    // `stat` finds the entry by its published rig id, the part before ':'
+                    let s = h
+                        .wait_state("legacy key encoded", |s| stat(s, "rig").is_some())
+                        .await?;
+                    anyhow::ensure!(
+                        stat(&s, "rig").unwrap()["pw"] == "YmJi".repeat(32),
+                        "legacy key base64 boundary"
+                    );
+                    m.close().await?;
+                } else {
+                    let line = m.line().await?;
+                    anyhow::ensure!(
+                        line == "BAD,Password too long",
+                        "legacy key rejection: {line:?}"
+                    );
                     m.expect_closed(WAIT).await?;
                 }
                 h.empty().await?;

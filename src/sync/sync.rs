@@ -15,7 +15,7 @@ use std::process::exit;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -23,6 +23,25 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 static SYNC_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+// shrinking write-locks every shard of the maps, so only do it every n syncs (~5 min by default)
+const SHRINK_EVERY_N_SYNCS: usize = 20;
+
+// one client for all requests, so the TLS setup is only built once. Idle pooling is disabled
+// so every request still opens its own connection, like the per-request clients did before
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .build()
+        .expect("failed to build http client")
+});
+
+// writes the file on the blocking pool and hands the buffer back, so it doesn't have to be copied
+async fn write_file(path: String, content: Vec<u8>) -> std::io::Result<Vec<u8>> {
+    tokio::task::spawn_blocking(move || std::fs::write(&path, &content).map(|_| content))
+        .await
+        .map_err(std::io::Error::other)?
+}
 
 // Keep the uploaded values alongside the keys already needed for acknowledgement.
 struct RewardSnapshot(Vec<(CompactString, f32)>);
@@ -35,6 +54,11 @@ impl RewardSnapshot {
                 .map(|entry| (entry.key().clone(), *entry.value()))
                 .collect(),
         )
+    }
+
+    // never more than the serialized size: `"<name>":0.0` per entry, plus commas and braces
+    fn min_json_len(&self) -> usize {
+        2 + self.0.iter().map(|(key, _)| key.len() + 6).sum::<usize>()
     }
 }
 
@@ -82,10 +106,12 @@ pub struct Difficulty {
 
 pub async fn get_pool_ip(config: &&PoolConfig) -> Result<String, Box<dyn std::error::Error>> {
     debug!("Getting ip..");
-    let client = reqwest::Client::builder()
+    let client = &*HTTP_CLIENT;
+    let request = client.get("https://api.ipify.org/");
+    let response = request
         .timeout(Duration::from_secs(config.timeout as u64))
-        .build()?;
-    let response = client.get("https://api.ipify.org/").send().await?;
+        .send()
+        .await?;
 
     let text = response.text().await?;
     Ok(text)
@@ -196,7 +222,9 @@ pub async fn resync_pool_rewards(config: &PoolConfig) -> Result<(), Box<dyn std:
 }
 
 async fn update_pool_rewards(config: &PoolConfig) -> Result<String, Box<dyn std::error::Error>> {
-    let response_data = reqwest::get(format!("{}/poolrewards.json", config.server_sync_url))
+    let response_data = HTTP_CLIENT
+        .get(format!("{}/poolrewards.json", config.server_sync_url))
+        .send()
         .await?
         .text()
         .await?;
@@ -205,9 +233,11 @@ async fn update_pool_rewards(config: &PoolConfig) -> Result<String, Box<dyn std:
 
     // let mut bans = Bans::load_bans().expect("failed to load config bans.json");
 
-    let response_data_bans = reqwest::get(format!("{}/bans.json", config.server_sync_url))
+    let response_data_bans = HTTP_CLIENT
+        .get(format!("{}/bans.json", config.server_sync_url))
+        .send()
         .await?
-        .json::<HashSet<String>>()
+        .json::<HashSet<CompactString>>()
         .await?;
     // bans.banned_usernames = response_data_bans;
 
@@ -303,13 +333,16 @@ pub async fn sync(
     );
 
     // we inject the pool_name AND the algorithm, because they're the same for every miner
-    let worker_content = serde_json::to_string(&stats::StatsWithContext {
+    let workers_ctx = stats::StatsWithContext {
         stats: &mining::MINER_STATS,
         pool_name: &config.pool_name,
-    })?;
+    };
+    // pre-sized with a lower bound: fewer reallocations, never more capacity than needed
+    let mut worker_content = Vec::with_capacity(workers_ctx.min_json_len());
+    serde_json::to_writer(&mut worker_content, &workers_ctx)?;
     // drop(stats);
 
-    std::fs::write(&worker_path, &worker_content)?;
+    let worker_content = write_file(worker_path.clone(), worker_content).await?;
 
     let reward_path = format!(
         "{}/rewards_{}.json",
@@ -334,27 +367,29 @@ pub async fn sync(
     );
     let form = reqwest::multipart::Form::new();
 
-    debug!("Workers: {worker_content}");
-    let workers = multipart::Part::text(worker_content)
+    debug!("Workers: {}", String::from_utf8_lossy(&worker_content));
+    let workers = multipart::Part::bytes(worker_content)
         .file_name(format!("workers_{}.json", config.pool_name));
 
     let rewards_snapshot = RewardSnapshot::capture(&mining::BALANCES_TO_UPDATE);
-    let rewards_content = serde_json::to_string(&rewards_snapshot)?;
+    let mut rewards_content = Vec::with_capacity(rewards_snapshot.min_json_len());
+    serde_json::to_writer(&mut rewards_content, &rewards_snapshot)?;
 
-    std::fs::write(&reward_path, &rewards_content)?;
+    let rewards_content = write_file(reward_path.clone(), rewards_content).await?;
 
-    debug!("Rewards: {rewards_content}");
-    let rewards = multipart::Part::text(rewards_content)
+    debug!("Rewards: {}", String::from_utf8_lossy(&rewards_content));
+    let rewards = multipart::Part::bytes(rewards_content)
         .file_name(format!("rewards_{}.json", config.pool_name));
 
     // Add the custom part to our form...
     let form = form.part("rewards", rewards).part("workers", workers);
 
-    SYNC_COUNT.fetch_add(1, Ordering::Relaxed);
+    let sync_count = SYNC_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let shrink_maps = sync_count % SHRINK_EVERY_N_SYNCS == 0;
     debug!("Syncing to {request_url}");
     #[cfg(not(feature = "dummy_sync"))]
     {
-        let client = reqwest::Client::new();
+        let client = &*HTTP_CLIENT;
         match client
             .post(request_url)
             .multipart(form)
@@ -377,10 +412,12 @@ pub async fn sync(
                         );
                         block_lock.shrink_to_fit();
                     }
-                    mining::BALANCES_TO_UPDATE.shrink_to_fit();
+                    if shrink_maps {
+                        mining::BALANCES_TO_UPDATE.shrink_to_fit();
+                    }
                     info!("Successfully synced {}", SYNC_COUNT.load(Ordering::Relaxed));
-                    std::fs::remove_file(&reward_path)?; // so we don't accidentally sync the same thing twice
-                    std::fs::remove_file(&worker_path)?;
+                    tokio::fs::remove_file(&reward_path).await?; // so we don't accidentally sync the same thing twice
+                    tokio::fs::remove_file(&worker_path).await?;
                 } else {
                     warn!(
                         "Failed to sync {}: {}",
@@ -395,8 +432,10 @@ pub async fn sync(
             }
         };
     }
-    mining::USR_WORKERS_ALLOC.shrink_to_fit();
-    mining::MINER_STATS.shrink_to_fit();
+    if shrink_maps {
+        mining::USR_WORKERS_ALLOC.shrink_to_fit();
+        mining::MINER_STATS.shrink_to_fit();
+    }
 
     Ok(ip)
 }
@@ -409,9 +448,9 @@ mod tests {
     fn block(id: u64) -> stats::BlockInfos {
         stats::BlockInfos::new(
             id,
-            format!("miner{id}"),
+            format!("miner{id}").into(),
             id as f32,
-            "DUCO-S1".to_owned(),
+            "DUCO-S1".into(),
             format!("hash{id}"),
         )
     }
@@ -427,6 +466,7 @@ mod tests {
         balances.insert(CompactString::from("bob"), 2.0);
 
         let encoded = serde_json::to_string(&snapshot).unwrap();
+        assert!(snapshot.min_json_len() <= encoded.len());
         let decoded: HashMap<String, f32> = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded.len(), 1);
         assert_eq!(decoded[username.as_str()], 1.25);

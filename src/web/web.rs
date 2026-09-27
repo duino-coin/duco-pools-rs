@@ -1,8 +1,14 @@
+use crate::data::data::ConnId;
+use crate::mining::id_allocator::WorkerAllocator;
+use crate::mining::stats::MinerStatSlim;
 use crate::{mining, CONNECTIONS};
+use compact_str::CompactString;
+use dashmap::DashMap;
 use log::info;
 use serde::Serialize;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::Arc;
 use tokio::task::JoinHandle;
 use warp::Filter;
 
@@ -12,11 +18,13 @@ struct HttpRes {
     success: bool,
 }
 
-// #[derive(Serialize)]
-// struct DataRes {
-//     workers: DashMap<String, mining::id_allocator::WorkerAllocator>,
-//     miner_stats: DashMap<String, MinerStat>
-// }
+// serialized straight from the maps, without building an intermediate serde_json::Value
+#[derive(Serialize)]
+struct DataRes<'a> {
+    connections: usize,
+    miner_stats: &'a DashMap<ConnId, MinerStatSlim>, // keys serialize as 16 hex chars
+    workers: &'a DashMap<CompactString, WorkerAllocator>,
+}
 
 pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<()> {
     let ping = warp::path("ping")
@@ -31,30 +39,24 @@ pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<(
         });
 
     let dash_enabled = dash_key.len() > 20;
+    let dash_key: Arc<str> = Arc::from(dash_key);
     let data = warp::path("data")
         // .and(warp::get())
         .and(warp::query::<std::collections::HashMap<String, String>>())
         .and(warp::path::end())
         .and_then(move |params: std::collections::HashMap<String, String>| {
-            let dash_key_clone = dash_key.to_string();
+            let dash_key_clone = dash_key.clone();
             async move {
                 if dash_enabled {
                     if let Some(provided_key) = params.get("key") {
                         // if provided_key == &dash_key_clone {
                         if ct_eq(provided_key, &dash_key_clone) {
-                            let workers_json =
-                                serde_json::to_value(&*mining::mining::USR_WORKERS_ALLOC).unwrap();
-                            let stats_json =
-                                serde_json::to_value(&*mining::mining::MINER_STATS).unwrap();
-                            let connections = CONNECTIONS.load(Relaxed);
-                            let combined = serde_json::json!({
-                                "workers": workers_json,
-                                "miner_stats": stats_json,
-                                "connections": connections,
-                            });
-                            return Ok(warp::reply::json(&combined));
-                            // let data_res = DataRes { workers: mining::mining::USR_WORKERS_ALLOC.clone(), miner_stats: mining::mining::MINER_STATS.clone() };
-                            // return Ok(warp::reply::json(&data_res));
+                            let data_res = DataRes {
+                                connections: CONNECTIONS.load(Relaxed),
+                                miner_stats: &mining::mining::MINER_STATS,
+                                workers: &mining::mining::USR_WORKERS_ALLOC,
+                            };
+                            return Ok(warp::reply::json(&data_res));
                         }
                     }
                 }
