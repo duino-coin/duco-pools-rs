@@ -11,12 +11,12 @@ use compact_str::CompactString;
 use dashmap::DashMap;
 use log::{debug, info};
 use rand::{rng, RngExt};
-use sha1_smol::Sha1;
 use std::str::FromStr;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::{Arc, LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use sha1::Digest;
 use tokio::sync::Mutex;
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
 
@@ -207,14 +207,11 @@ pub async fn handle(
         {
             // scoped so the guard (and the hash version it pins) isn't held across awaits
             let last_block_hash = LAST_BLOCK_HASH.load();
-            let mut hasher = Sha1::new();
+            let mut hasher = sha1::Sha1::new_with_prefix(last_block_hash.as_bytes());
 
-            hasher.update(last_block_hash.as_bytes());
             hasher.update(itoa::Buffer::new().format(random).as_bytes());
 
-            let raw = hasher.digest().bytes();
-            hex::encode_to_slice(raw, &mut hex_buf).unwrap();
-
+            hex::encode_to_slice(hasher.finalize(), &mut hex_buf)?;
 
             read.clear();
             read.push_str(last_block_hash.as_str());
