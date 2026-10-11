@@ -23,3 +23,8 @@ entirely local and therefore isolated.
 # TODO
 
 - implement ngrok (tbd)
+
+# License
+Copyright © 2026 [profpandaa](https://github.com/profpandaa) from the Duino-Coin team.
+
+This project is [AGPL-3.0](https://github.com/duino-coin/duco-pools-rs/blob/main/LICENSE) licensed.

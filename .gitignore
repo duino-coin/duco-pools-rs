@@ -12,3 +12,5 @@
 /pool-verifier/work
 /pool-verifier/target
 /pool-verifier/benchmarks
+/pgo/instrumented
+/pgo/raw
