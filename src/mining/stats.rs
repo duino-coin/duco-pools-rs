@@ -98,10 +98,11 @@ pub struct MinerStat {
 
 impl MinerStat {
     pub fn new(ip: CompactString, username: CompactString) -> MinerStat {
-        let mut default = MinerStat::default();
-        default.ip = ip;
-        default.username = username;
-        default
+        MinerStat {
+            ip,
+            username,
+            ..Default::default()
+        }
     }
 
     pub fn convert_slim(&self) -> MinerStatSlim {
@@ -286,7 +287,7 @@ mod tests {
             deque.push_back(val);
             deque_total += val;
             if deque.len() > 50 {
-                deque_total -= deque.pop_front().unwrap_or_else(|| 0f32);
+                deque_total -= deque.pop_front().unwrap_or(0f32);
             }
 
             assert_eq!(ring.len(), deque.len());
@@ -311,7 +312,10 @@ mod tests {
         stats.insert(ConnId(0), MinerStatSlim::default());
         assert_eq!(ctx.min_json_len(), serde_json::to_vec(&ctx).unwrap().len());
 
-        stats.insert(ConnId(u64::MAX), MinerStat::new("::1".into(), "bob".into()).convert_slim());
+        stats.insert(
+            ConnId(u64::MAX),
+            MinerStat::new("::1".into(), "bob".into()).convert_slim(),
+        );
         assert!(ctx.min_json_len() <= serde_json::to_vec(&ctx).unwrap().len());
     }
 

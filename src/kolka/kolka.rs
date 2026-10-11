@@ -25,6 +25,12 @@ impl Kolka {
     }
 }
 
+impl Default for Kolka {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn v1(
     kolka: &Kolka,
     hashrate: f32,

@@ -1,17 +1,18 @@
 use crate::cfg::config::PoolConfig;
-use crate::data::data::Bans;
 use crate::mining::{mining, stats};
 use crate::{data, kolka, BANS, CONFIG, CONNECTIONS, POOL_REWARDS};
 use compact_str::CompactString;
 use dashmap::DashMap;
 use data::data::LoginInfos;
-use log::{debug, error, info, warn};
+#[cfg(not(feature = "dummy_sync"))]
+use log::warn;
+use log::{debug, error, info};
 use reqwest::multipart;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{HashMap, HashSet};
 use std::process::exit;
-#[cfg(any(not(feature = "dummy_sync"), test))]
+#[cfg(any(all(not(feature = "dummy_sync"), not(debug_assertions)), test))]
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -72,7 +73,7 @@ impl Serialize for RewardSnapshot {
     }
 }
 
-#[cfg(any(not(feature = "dummy_sync"), test))]
+#[cfg(any(all(not(feature = "dummy_sync"), not(debug_assertions)), test))]
 fn acknowledge_uploaded_work(
     rewards: &RewardSnapshot,
     balances: &DashMap<CompactString, f32>,
@@ -104,6 +105,7 @@ pub struct Difficulty {
     pub block_chance: u32,
 }
 
+#[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
 pub async fn get_pool_ip(config: &&PoolConfig) -> Result<String, Box<dyn std::error::Error>> {
     debug!("Getting ip..");
     let client = &*HTTP_CLIENT;
@@ -116,16 +118,15 @@ pub async fn get_pool_ip(config: &&PoolConfig) -> Result<String, Box<dyn std::er
     let text = response.text().await?;
     Ok(text)
 }
-
+#[cfg(not(debug_assertions))]
 pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
     debug!("Gathering login data..");
-    let ip;
-    if config.use_ngrok {
+    let ip = if config.use_ngrok {
         // ip = "".to_string();
         return Err(Box::from("Ngrok not implemented"));
     } else {
-        ip = get_pool_ip(&config).await?;
-    }
+        get_pool_ip(&config).await?
+    };
     let infos = LoginInfos::new(
         &ip,
         config.port,
@@ -179,7 +180,7 @@ pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>
     }
     Ok(())
 }
-
+#[cfg(not(debug_assertions))]
 pub async fn logout(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
     let mut socket =
         TcpStream::connect(format!("{}:{}", config.server_ip, config.server_port)).await?;
@@ -251,8 +252,9 @@ async fn update_pool_rewards(config: &PoolConfig) -> Result<String, Box<dyn std:
     Ok(response_data)
 }
 
+#[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
 pub async fn sync(
-    sys: &mut Arc<Mutex<System>>,
+    sys: &Arc<Mutex<System>>,
     last_ip: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     info!("Starting sync..");
@@ -260,29 +262,6 @@ pub async fn sync(
     if !std::fs::exists(&config.base_sync_folder)? {
         std::fs::create_dir_all(&config.base_sync_folder)?;
     }
-
-    // with a standard sync delay of 15s, this is 300 seconds (or every 5 minutes)
-    // let sync_count = SYNC_COUNT.load(Ordering::Relaxed);
-    // // this is a dirty fix for the kolka_id "randomly" starting at a higher point..
-    // if sync_count != 0 && sync_count % 10 == 0 {
-    //     let mut current_id_map: HashMap<String, f32> = HashMap::new();
-
-    //     mining::MINER_STATS.iter().map(|x| (x.key().clone(), x.value().clone()))
-    //         .for_each(|(id, stat)|{
-
-    //             let worker_add;
-    //             // determine the new kolka_id
-    //             if stat.is_req_diff_esp32 {
-    //                 worker_add = 0.5;
-    //             } else {
-    //                 worker_add = 1.0;
-    //             }
-    //             let current = current_id_map.entry(stat.username.clone()).or_insert(0.0);
-    //             *current += worker_add;
-    //             mining::SYNC_RELEGATION_MAP.insert(id.to_string(), current.clone());
-    //         });
-
-    // }
 
     let mut sys = sys.lock().await;
     let ip = match get_pool_ip(&config).await {
@@ -365,11 +344,7 @@ pub async fn sync(
         mem_usage,
         connections
     );
-    let form = reqwest::multipart::Form::new();
 
-    debug!("Workers: {}", String::from_utf8_lossy(&worker_content));
-    let workers = multipart::Part::bytes(worker_content)
-        .file_name(format!("workers_{}.json", config.pool_name));
 
     let rewards_snapshot = RewardSnapshot::capture(&mining::BALANCES_TO_UPDATE);
     let mut rewards_content = Vec::with_capacity(rewards_snapshot.min_json_len());
@@ -377,18 +352,23 @@ pub async fn sync(
 
     let rewards_content = write_file(reward_path.clone(), rewards_content).await?;
 
-    debug!("Rewards: {}", String::from_utf8_lossy(&rewards_content));
-    let rewards = multipart::Part::bytes(rewards_content)
-        .file_name(format!("rewards_{}.json", config.pool_name));
-
-    // Add the custom part to our form...
-    let form = form.part("rewards", rewards).part("workers", workers);
 
     let sync_count = SYNC_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    let shrink_maps = sync_count % SHRINK_EVERY_N_SYNCS == 0;
+    let shrink_maps = sync_count.is_multiple_of(SHRINK_EVERY_N_SYNCS);
     debug!("Syncing to {request_url}");
     #[cfg(not(feature = "dummy_sync"))]
     {
+        debug!("Workers: {}", String::from_utf8_lossy(&worker_content));
+        let workers = multipart::Part::bytes(worker_content)
+            .file_name(format!("workers_{}.json", config.pool_name));
+
+        debug!("Rewards: {}", String::from_utf8_lossy(&rewards_content));
+        let rewards = multipart::Part::bytes(rewards_content)
+            .file_name(format!("rewards_{}.json", config.pool_name));
+
+        let form = reqwest::multipart::Form::new()
+            .part("rewards", rewards)
+            .part("workers", workers);
         let client = &*HTTP_CLIENT;
         match client
             .post(request_url)

@@ -27,7 +27,7 @@ async fn ban_ip(ip: &str) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::Error> {
+pub async fn handle_connection(conn: &mut Connection) -> Result<(), anyhow::Error> {
     let config = CONFIG.get().unwrap();
     let greeting = GREETING.get_or_init(|| format!("{}\n", config.server_version));
     conn.write(greeting).await?;
@@ -53,8 +53,7 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
             // block so we lose the lock on the mutex
             {
                 let mut ban = BANS.lock().await;
-                if ban.banned_ips.contains(&conn.miner_stat.ip)
-                    && conn.miner_stat.ip != "127.0.0.1"
+                if ban.banned_ips.contains(&conn.miner_stat.ip) && conn.miner_stat.ip != "127.0.0.1"
                 {
                     conn.write("BAD,User banned\n").await?;
                     return Ok(());
@@ -91,7 +90,7 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
                 if data_split[0] == "MOTD" {
                     conn.write(&config.motd).await?;
                 } else if data_split[0] == "DEBG_VERSION" {
-                    conn.write(&CARGO_VERSION).await?;
+                    conn.write(CARGO_VERSION).await?;
                 }
                 false
             }
@@ -99,7 +98,7 @@ pub async fn handle_connection(mut conn: &mut Connection) -> Result<(), anyhow::
 
         if is_job {
             // hand the line over, its buffer is reused for the rest of the session
-            mining::mining::handle(&mut conn, std::mem::take(&mut data), config, false).await?;
+            mining::mining::handle(conn, std::mem::take(&mut data), config, false).await?;
             break;
         }
     }

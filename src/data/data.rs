@@ -60,12 +60,7 @@ impl Drop for Connection {
 }
 
 impl Connection {
-    pub fn new(
-        socket: TcpStream,
-        addr: SocketAddr,
-        username: CompactString,
-        id: ConnId,
-    ) -> Self {
+    pub fn new(socket: TcpStream, addr: SocketAddr, username: CompactString, id: ConnId) -> Self {
         Connection {
             stream: BufReader::with_capacity(256, socket),
             id,
@@ -214,5 +209,11 @@ impl Bans {
         std::fs::write("./config/bans.json", serde_json::to_string(&self)?)?;
 
         Ok(())
+    }
+}
+
+impl Default for Bans {
+    fn default() -> Self {
+        Bans::new()
     }
 }

@@ -68,8 +68,7 @@ pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<(
     let route = ping.or(data);
     let serve = warp::serve(route).bind(addr).await;
 
-    let web = tokio::spawn(serve.run());
-    web
+    tokio::spawn(serve.run())
 }
 
 // constant time equals check, prevents timing-based brute forcing

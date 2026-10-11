@@ -11,23 +11,21 @@ use compact_str::CompactString;
 use dashmap::DashMap;
 use log::{debug, info};
 use rand::{rng, RngExt};
+use sha1::Digest;
 use std::str::FromStr;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::{Arc, LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use sha1::Digest;
 use tokio::sync::Mutex;
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
 
 pub static USR_WORKERS_ALLOC: LazyLock<DashMap<CompactString, WorkerAllocator>> =
-    LazyLock::new(|| DashMap::new());
+    LazyLock::new(DashMap::new);
 
-pub static BALANCES_TO_UPDATE: LazyLock<DashMap<CompactString, f32>> =
-    LazyLock::new(|| DashMap::new());
+pub static BALANCES_TO_UPDATE: LazyLock<DashMap<CompactString, f32>> = LazyLock::new(DashMap::new);
 
-pub static MINER_STATS: LazyLock<DashMap<ConnId, MinerStatSlim>> =
-    LazyLock::new(|| DashMap::new());
+pub static MINER_STATS: LazyLock<DashMap<ConnId, MinerStatSlim>> = LazyLock::new(DashMap::new);
 
 static LAST_BLOCK_HASH: LazyLock<ArcSwap<String>> = LazyLock::new(|| {
     let config = CONFIG.get().expect("config not initialised");
@@ -77,19 +75,18 @@ pub async fn handle(
     // the handler already validated this line; scan it the same way (trimmed)
     data_len = scan_fields(read.trim(), &mut data);
 
-    let mut share_accepted = false;
+    let mut share_accepted: bool;
 
     loop {
         // set when the requested tier was already looked up for this share
         let mut prefetched_info = None;
         if is_first_share {
             req_difficulty.clear();
-            if data_len < 3 || data[2].is_empty() {
+            if data_len < 3
+                || data[2].is_empty()
+                || !set_req_difficulty(&mut req_difficulty, data[2])
+            {
                 req_difficulty.push_str("NET");
-            } else {
-                if !set_req_difficulty(&mut req_difficulty, data[2]) {
-                    req_difficulty.push_str("NET");
-                }
             }
             // if !pool_rewards.contains_key(&req_difficulty) {
             //     req_difficulty.clear();
@@ -130,12 +127,11 @@ pub async fn handle(
             } else if using_avr {
                 req_difficulty.push_str("AVR");
             } else {
-                if data_len < 3 || data[2].is_empty() {
+                if data_len < 3
+                    || data[2].is_empty()
+                    || !set_req_difficulty(&mut req_difficulty, data[2])
+                {
                     req_difficulty.push_str("NET");
-                } else {
-                    if !set_req_difficulty(&mut req_difficulty, data[2]) {
-                        req_difficulty.push_str("NET");
-                    }
                 }
 
                 prefetched_info = pool_rewards.get(req_difficulty.as_str()).map(|r| *r);
@@ -159,7 +155,7 @@ pub async fn handle(
             if data[4].len() > 48 {
                 conn.miner_stat.iot_reading = CompactString::const_new("Error:data too long");
             } else {
-                clean_iot_into(&data[4], &mut conn.miner_stat.iot_reading);
+                clean_iot_into(data[4], &mut conn.miner_stat.iot_reading);
             }
         }
 
@@ -174,7 +170,7 @@ pub async fn handle(
             })
             .unwrap_or((0.0, None));
 
-        if check_workers(user_workers, &config) {
+        if check_workers(user_workers, config) {
             conn.miner_stat.reject_shares = Some("BAD,Too many workers\n");
         }
         if let Some(id) = new_id {
@@ -199,6 +195,7 @@ pub async fn handle(
 
         #[cfg(feature = "bench")]
         {
+            std::hint::black_box(random);
             random = 1;
         }
 
@@ -282,11 +279,10 @@ pub async fn handle(
 
         conn.miner_stat.last_min_shares += 1;
 
-        let nonce;
-        if using_avr {
-            nonce = u64::from_str_radix(&data[0], 2)?;
+        let nonce = if using_avr {
+            u64::from_str_radix(data[0], 2)?
         } else {
-            nonce = match u64::from_str(&data[0]) {
+            match u64::from_str(data[0]) {
                 Ok(ok) => ok,
                 Err(err) => {
                     debug!("Nonce error: {err:?} ({:?})", data);
@@ -295,8 +291,9 @@ pub async fn handle(
                     // used so we can handle closes centrally
                     // (some request a job and after receiving the job they immediately request another one)
                 }
-            };
-        }
+            }
+        };
+
         {
             let now_secs = UNIX_EPOCH.elapsed()?.as_secs();
             if now_secs - conn.miner_stat.last_share_reset >= 60 {
@@ -342,11 +339,11 @@ pub async fn handle(
             && hashrate_perc_diff_for_calc > 15f32
             && hashrate < hashrate_calc
         {
+            // disabled for now..
             // the difference is sometimes (currently) inexplicably high, therefore we rarely want to reject shares for it..
-            if hashrate_perc_diff_for_calc >= 50f32 && false {
-                // disabled for now..
-                conn.miner_stat.reject_shares = Some("BAD,Modified hashrate\n");
-            }
+            // if hashrate_perc_diff_for_calc >= 50f32 && false {
+            //     conn.miner_stat.reject_shares = Some("BAD,Modified hashrate\n");
+            // }
             hashrate = hashrate_calc;
         }
 
@@ -404,6 +401,7 @@ pub async fn handle(
             if conn.miner_stat.accepted_shares > 10 {
                 // why is this a thing?
                 if diff <= ESP8266NH_DIFF_CACHE.load(Relaxed) {
+                    #[allow(clippy::if_same_then_else)]
                     if conn.miner_stat.this_miner_chipid.is_empty() {
                         conn.miner_stat.rejected_shares += 1;
                     } else if data_len >= 5 && data[4] != conn.miner_stat.this_miner_chipid.as_str()
@@ -411,7 +409,7 @@ pub async fn handle(
                         conn.miner_stat.rejected_shares += 1;
                     } else {
                         reward = kolka::kolka::v1(
-                            &kolka,
+                            kolka,
                             hashrate_calc,
                             diff,
                             // conn.miner_stat.amount_of_workers,
@@ -421,7 +419,7 @@ pub async fn handle(
                     }
                 } else {
                     reward = kolka::kolka::v1(
-                        &kolka,
+                        kolka,
                         hashrate_calc,
                         diff,
                         // conn.miner_stat.amount_of_workers,
@@ -473,7 +471,10 @@ pub async fn handle(
             );
         }
         if conn.miner_stat.accepted_shares > 0
-            && conn.miner_stat.accepted_shares % config.update_miners_stats_every as u64 == 0
+            && conn
+                .miner_stat
+                .accepted_shares
+                .is_multiple_of(config.update_miners_stats_every as u64)
         {
             let (rig_part, key_part) = if data_len >= 4 {
                 match data[3].split_once(':') {
@@ -610,7 +611,8 @@ fn set_req_difficulty(out: &mut CompactString, value: &str) -> bool {
 }
 
 fn check_workers(max: f32, config: &PoolConfig) -> bool {
-    if config.max_workers <= 0 {
+    // u64 can't be lower than zero
+    if config.max_workers == 0 {
         return false;
     }
 

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -7,7 +8,6 @@ use std::str::FromStr;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-
 // TODO: change to prod url
 // const API_URL: &str = "https://api.github.com/repos/duino-coin/libducohash/releases/latest";
 const API_URL: &str =
@@ -39,7 +39,7 @@ pub const VERSION_CODE: u32 = create_version_code(VERSION_MAJOR, VERSION_MINOR, 
 
 fn parse_tag(tag: &str) -> anyhow::Result<u32> {
     let tag_split = tag.split('.').collect::<Vec<&str>>();
-    let major = if tag_split.len() >= 1 {
+    let major = if !tag_split.is_empty() {
         u32::from_str(tag_split[0])?
     } else {
         0
@@ -159,11 +159,11 @@ async fn spawn_update_restart_in(
     };
 
     let child = command
-        .current_dir(&working_dir)
+        .current_dir(working_dir)
         .env("UPDATE_PARENT_PID", std::process::id().to_string())
         .env("UPDATE_SOURCE", &update.path)
         .env("UPDATE_EXECUTABLE", &update.executable)
-        .env("UPDATE_WORKING_DIR", &working_dir)
+        .env("UPDATE_WORKING_DIR", working_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(log))

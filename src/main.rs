@@ -1,3 +1,5 @@
+#![allow(clippy::module_inception)]
+
 mod cfg;
 mod data;
 mod handler;
@@ -60,7 +62,7 @@ impl Drop for ConnectionCounterGuard {
 // and it's cleaner than cloning hundreds of arcs..
 pub static BANS: LazyLock<Mutex<Bans>> = LazyLock::new(|| Mutex::new(Bans::load_bans().unwrap()));
 pub static POOL_REWARDS: LazyLock<DashMap<String, sync::sync::Difficulty>> =
-    LazyLock::new(|| DashMap::new());
+    LazyLock::new(DashMap::new);
 
 pub static KOLKA: OnceLock<Kolka> = OnceLock::new();
 
@@ -79,7 +81,7 @@ async fn main() {
         .init();
 
     let mut config = cfg::config::load_config().unwrap();
-    let mut sys = Arc::new(Mutex::new(System::new()));
+    let sys = Arc::new(Mutex::new(System::new()));
 
     if config.guess_port {
         let port = get_rand(1000, 9999) as u32;
@@ -93,7 +95,7 @@ async fn main() {
             "Auto restart is enabled. Restarting every {} minutes.",
             config.auto_restart
         );
-        let restart_delay = (config.auto_restart.clone() * 60) as u64;
+        let restart_delay = (config.auto_restart * 60) as u64;
         let script_path = config.restart_script.clone();
         let tx_clone = tx.clone();
         restarter = Some(tokio::spawn(async move {
@@ -124,46 +126,46 @@ async fn main() {
 
     #[cfg(not(debug_assertions))]
     sync::sync::login(&config).await.expect("failed to login");
-    let config = CONFIG.get_or_init(|| config);
-    let mut update_thread = None;
+    CONFIG.get_or_init(|| config);
     // TODO: test and then activate
-    if false && config.auto_update && !config.update_restart_script.is_empty() {
-        let update_shutdown = tx.clone();
-        update_thread = Some(tokio::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_secs(
-                config.update_check_time_seconds,
-            ))
-            .await;
-
-            match updater::updater::fetch_latest_version().await {
-                Ok(Some(update)) => {
-                    match updater::updater::spawn_update_restart(
-                        &update,
-                        &config.update_restart_script,
-                    )
-                    .await
-                    {
-                        Ok(helper) => {
-                            info!(
-                                "Update {} is ready; shutting down before replacement",
-                                update.version
-                            );
-                            if update_shutdown.send("s".to_owned()).is_ok() {
-                                helper.detach();
-                            }
-                        }
-                        Err(err) => error!("Failed to prepare update restart: {err:#}"),
-                    }
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    error!("Failed to download update: {err:#}");
-                }
-            };
-        }));
-    }
-
-    let mut sys_clone = sys.clone();
+    // let mut update_thread = None;
+    // if false && config.auto_update && !config.update_restart_script.is_empty() {
+    //     let update_shutdown = tx.clone();
+    //     update_thread = Some(tokio::spawn(async move {
+    //         tokio::time::sleep(tokio::time::Duration::from_secs(
+    //             config.update_check_time_seconds,
+    //         ))
+    //         .await;
+    //
+    //         match updater::updater::fetch_latest_version().await {
+    //             Ok(Some(update)) => {
+    //                 match updater::updater::spawn_update_restart(
+    //                     &update,
+    //                     &config.update_restart_script,
+    //                 )
+    //                 .await
+    //                 {
+    //                     Ok(helper) => {
+    //                         info!(
+    //                             "Update {} is ready; shutting down before replacement",
+    //                             update.version
+    //                         );
+    //                         if update_shutdown.send("s".to_owned()).is_ok() {
+    //                             helper.detach();
+    //                         }
+    //                     }
+    //                     Err(err) => error!("Failed to prepare update restart: {err:#}"),
+    //                 }
+    //             }
+    //             Ok(None) => {}
+    //             Err(err) => {
+    //                 error!("Failed to download update: {err:#}");
+    //             }
+    //         };
+    //     }));
+    // }
+    #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
+    let sys_clone = sys.clone();
     let sync_thread = tokio::spawn(async move {
         info!("Starting sync thread..");
         // only start a sync thread if: we want dummy syncs or we are in release mode
@@ -172,12 +174,12 @@ async fn main() {
             let config = crate::CONFIG.get().unwrap();
             let pool_reward_sync_factor = (3600f64 / config.sync_time as f64).ceil() as u64;
             let mut count = 0;
-            let sys = &mut sys_clone;
+            let sys = &sys_clone;
             let mut last_ip = String::new();
             loop {
                 if count >= pool_reward_sync_factor {
                     count = 0;
-                    match sync::sync::resync_pool_rewards(&config).await {
+                    match sync::sync::resync_pool_rewards(config).await {
                         Ok(_) => {
                             info!("Resynced pool rewards.");
                         }
@@ -214,14 +216,15 @@ async fn main() {
     if restarter.is_some() {
         restarter.take().unwrap().abort();
     }
-    if update_thread.is_some() {
-        update_thread.take().unwrap().abort();
-    }
+    // TODO: uncomment once auto updater is activated
+    // if update_thread.is_some() {
+    //     update_thread.take().unwrap().abort();
+    // }
     sync_thread.abort();
     // last sync before shutdown
     #[cfg(not(debug_assertions))]
     {
-        sync::sync::sync(&mut sys, "")
+        sync::sync::sync(&sys, "")
             .await
             .expect("failed to sync database");
         sync::sync::logout(crate::CONFIG.get().unwrap())
@@ -235,7 +238,7 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
     rlimit::increase_nofile_limit(u64::MAX).expect("failed to increase nofile limit");
     info!("Starting tcp server...");
 
-    KOLKA.get_or_init(|| Kolka::new());
+    KOLKA.get_or_init(Kolka::new);
 
     let config = CONFIG.get().unwrap();
 
@@ -245,7 +248,7 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
     info!("Listening on {}:{}", config.host, config.port);
 
     // start "webserver" and parse addr from config
-    let addr: SocketAddr = (&format!("{}:{}", config.host, config.dashboard_port))
+    let addr: SocketAddr = format!("{}:{}", config.host, config.dashboard_port)
         .parse()
         .expect("failed to parse host:port");
     let web_handle = web::web::start_webserver(addr, config.dashboard_key.clone()).await;
@@ -302,12 +305,11 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
             }
         }
     });
-    while let Some(_) = rx.recv().await {
+    if rx.recv().await.is_some() {
         // waits until it receives a message (signals a shutdown)
         info!("Received abort");
         #[cfg(compile_env = "test")]
         panic!("Received abort");
-        break;
     }
 
     info!("Stopping tcp server...");
