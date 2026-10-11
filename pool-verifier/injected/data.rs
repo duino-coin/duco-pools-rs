@@ -1,4 +1,4 @@
-// Appended to the disposable copy of `data/data.rs`; see `prepare::build`.
+// Appended to the disposable copy of `data/data.rs`; see `prepare::append_injected_tests`.
 // Its test process has an isolated current directory, so these relative writes are
 // fixtures and never the production pool's ban file.
 #[cfg(test)]

@@ -1,9 +1,23 @@
-// This file is not a standalone module. `prepare::build` appends it to the end of
-// the disposable copy's `mining/id_allocator.rs`. That location gives the tests
-// access to private allocator operations without changing production visibility.
+// This file is not a standalone module. `prepare::append_injected_tests` appends
+// it to the end of the disposable copy's `mining/id_allocator.rs`. That location
+// gives the tests access to private allocator operations without changing
+// production visibility.
 #[cfg(test)]
 mod verifier_tests {
     use super::*;
+    use std::collections::{BTreeMap, HashSet};
+
+    /// A worker the model believes is active.
+    #[derive(Clone, Copy)]
+    struct Active {
+        slot: WorkerSlot,
+        esp: bool,
+        /// Position in half-steps (production `slot.id()` is `id / 2`).
+        id: u32,
+        /// Half-steps this position occupies: 1 for ESP, 2 for normal workers.
+        /// A reused position keeps the width it was first allocated with.
+        width: u32,
+    }
 
     #[test]
     fn seeded_sequences() {
@@ -11,14 +25,13 @@ mod verifier_tests {
         // half-step and a normal worker by two. This simple ordered-map model is an
         // independent oracle for the optimized production allocator.
         //
-        // Each active tuple is (slot, is_esp, half-step ID, allocation width).
         // `free` maps a released ID to its original width. `high` is the highest
         // half-step ever allocated after trimming free slots at the top.
         for seed in [1u64, 17, 0x12345678, 0xdeadbeef] {
             let mut random = seed;
             let mut alloc = WorkerAllocator::new();
-            let mut active: Vec<(WorkerSlot, bool, u32, u32)> = vec![];
-            let mut free = std::collections::BTreeMap::<u32, u32>::new();
+            let mut active: Vec<Active> = vec![];
+            let mut free = BTreeMap::<u32, u32>::new();
             let mut high = 0;
 
             for _ in 0..4000 {
@@ -28,49 +41,60 @@ mod verifier_tests {
                 let action = (random >> 32) % 3;
 
                 if active.is_empty() || action == 0 {
+                    // Allocate: reuse the lowest free hole, or grow at the top.
                     let esp = random & 1 == 0;
                     let step = if esp { 1 } else { 2 };
-                    let (id, original) = if let Some((&id, &original)) = free.first_key_value() {
-                        free.remove(&id);
-                        (id, original)
-                    } else {
-                        high += step;
-                        (high, step)
+                    let (id, width) = match free.pop_first() {
+                        Some(hole) => hole,
+                        None => {
+                            high += step;
+                            (high, step)
+                        }
                     };
-
                     let slot = alloc.allocate(esp);
                     assert_eq!(slot.id(), id as f32 / 2.0);
-                    active.push((slot, esp, id, original));
+                    active.push(Active {
+                        slot,
+                        esp,
+                        id,
+                        width,
+                    });
                 } else {
                     let index = (random as usize) % active.len();
-                    let (slot, esp, id, original) = active[index];
+                    let worker = active[index];
                     if action == 1 {
+                        // Release.
                         active.swap_remove(index);
-                        alloc.release(slot, esp);
-                        free.insert(id, original);
+                        alloc.release(worker.slot, worker.esp);
+                        free.insert(worker.id, worker.width);
                     } else {
                         // Recycling may move an active worker only into a lower
                         // hole. Its old slot then becomes free.
-                        let next = free
+                        let lower_hole = free
                             .first_key_value()
-                            .map(|(&id, &step)| (id, step))
-                            .filter(|(free_id, _)| *free_id < id);
-                        let got = alloc.try_recycle(slot);
-                        if let Some((next_id, next_step)) = next {
-                            free.remove(&next_id);
-                            free.insert(id, original);
-                            let got = got.expect("allocator missed a lower free slot");
-                            assert_eq!(got.id(), next_id as f32 / 2.0);
-                            active[index] = (got, esp, next_id, next_step);
+                            .map(|(&id, &width)| (id, width))
+                            .filter(|&(hole_id, _)| hole_id < worker.id);
+                        let moved = alloc.try_recycle(worker.slot);
+                        if let Some((hole_id, hole_width)) = lower_hole {
+                            free.remove(&hole_id);
+                            free.insert(worker.id, worker.width);
+                            let slot = moved.expect("allocator missed a lower free slot");
+                            assert_eq!(slot.id(), hole_id as f32 / 2.0);
+                            active[index] = Active {
+                                slot,
+                                id: hole_id,
+                                width: hole_width,
+                                ..worker
+                            };
                         } else {
-                            assert!(got.is_none());
+                            assert!(moved.is_none());
                         }
                     }
 
                     // Free space at the top is not a reusable hole; it reduces the
                     // model's high-water mark, just as production compaction does.
-                    while let Some(step) = free.remove(&high) {
-                        high -= step;
+                    while let Some(width) = free.remove(&high) {
+                        high -= width;
                     }
                 }
 
@@ -78,19 +102,18 @@ mod verifier_tests {
                 // the exact state transition that corrupted the allocator.
                 let expected_weight = active
                     .iter()
-                    .map(|(_, esp, _, _)| if *esp { 0.5 } else { 1.0 })
+                    .map(|w| if w.esp { 0.5 } else { 1.0 })
                     .sum::<f32>();
                 assert_eq!(alloc.active_workers(), expected_weight);
                 assert_eq!(alloc.is_empty(), active.is_empty());
-                let ids: std::collections::HashSet<_> =
-                    active.iter().map(|(_, _, id, _)| *id).collect();
+                let ids: HashSet<_> = active.iter().map(|w| w.id).collect();
                 assert_eq!(ids.len(), active.len(), "duplicate active worker ID");
             }
 
             // Releasing everything must reset both accounting and the next normal
             // worker ID, regardless of the preceding random history.
-            for (slot, esp, _, _) in active {
-                alloc.release(slot, esp);
+            for worker in active {
+                alloc.release(worker.slot, worker.esp);
             }
             assert!(alloc.is_empty());
             assert_eq!(alloc.allocate(false).id(), 1.0);

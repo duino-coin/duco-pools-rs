@@ -1,4 +1,4 @@
-// Appended to the disposable copy of `cfg/config.rs`; see `prepare::build`.
+// Appended to the disposable copy of `cfg/config.rs`; see `prepare::append_injected_tests`.
 // The internal test process runs in its own empty scenario directory, so relative
 // `config/...` paths cannot touch the user's real pool configuration.
 #[cfg(test)]

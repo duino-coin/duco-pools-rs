@@ -1,4 +1,4 @@
-// Appended to the disposable copy of `kolka/kolka.rs`; see `prepare::build`.
+// Appended to the disposable copy of `kolka/kolka.rs`; see `prepare::append_injected_tests`.
 // These are white-box formula tests, so their expected values are calculated here
 // from independent constants rather than by calling another production helper.
 #[cfg(test)]

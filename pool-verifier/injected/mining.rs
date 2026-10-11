@@ -1,4 +1,4 @@
-// Appended to the disposable copy of `mining/mining.rs`; see `prepare::build`.
+// Appended to the disposable copy of `mining/mining.rs`; see `prepare::append_injected_tests`.
 // Injection keeps these white-box checks next to private helpers without exporting
 // those helpers from the production crate.
 #[cfg(test)]
