@@ -19,6 +19,7 @@
   "serverPort": 2810,
   "serverVersion": "3.0",
   "server_sync_url": "https://server.duinocoin.com/poolsyncdata",
+  "server_endpoint": "server.duinocoin.com",
   "base_sync_folder": "./dashboard/",
   "initialBlockHash": "05b7406b3909071b2d85b2d2958ad07a0d52bd12",
   "expectedSharetime": 15,
