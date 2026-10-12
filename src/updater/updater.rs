@@ -278,8 +278,13 @@ fn stage_executable(archive: &Path, staging: &Path) -> anyhow::Result<()> {
     bail!("{member} not found in the archive")
 }
 
-pub async fn fetch_latest_version() -> anyhow::Result<Option<DownloadedUpdate>> {
-    let client = reqwest::Client::new();
+// `timeout` bounds connecting and each read rather than the whole request, so a slow but
+// progressing download of the release archive is not cut off
+pub async fn fetch_latest_version(timeout: Duration) -> anyhow::Result<Option<DownloadedUpdate>> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(timeout)
+        .read_timeout(timeout)
+        .build()?;
     let response = client
         .get(API_URL)
         .header(

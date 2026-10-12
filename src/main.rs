@@ -137,7 +137,11 @@ async fn main() {
     //         ))
     //         .await;
     //
-    //         match updater::updater::fetch_latest_version().await {
+    //         match updater::updater::fetch_latest_version(Duration::from_secs(
+    //             config.timeout as u64,
+    //         ))
+    //         .await
+    //         {
     //             Ok(Some(update)) => {
     //                 match updater::updater::spawn_update_restart(
     //                     &update,
