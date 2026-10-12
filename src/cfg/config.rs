@@ -51,6 +51,7 @@ pub struct PoolConfig {
     pub sync_time: u32,
     pub timeout: u16, // probably shouldn't exceed 65k either
     pub server_sync_url: String,
+    #[serde(default = "default_server_endpoint")]
     pub server_endpoint: String,
     pub base_sync_folder: String,
     #[serde(rename = "maxSharesPerMinute", default = "default_shares")]
@@ -73,6 +74,8 @@ fn generate_key() -> String {
     let str: String = (0..32).map(|_| charset.sample(&mut rng)).collect();
     str
 }
+
+fn default_server_endpoint() -> String { "server.duinocoin.com".into() }
 
 impl Default for PoolConfig {
     fn default() -> Self {
