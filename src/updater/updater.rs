@@ -13,6 +13,8 @@ use tokio::process::{Child, Command};
 const API_URL: &str =
     "https://api.github.com/repos/profpandaa/compatible-libducohash/releases/latest";
 const BUILD_TARGET: &str = env!("BUILD_TARGET");
+// release archive as packaged by actions-rust-release
+const ARCHIVE_EXTENSION: &str = ".tar.gz";
 const fn parse_version_component(value: &str) -> u32 {
     match u32::from_str_radix(value, 10) {
         Ok(number) => number,
@@ -255,8 +257,13 @@ pub async fn fetch_latest_version() -> anyhow::Result<Option<DownloadedUpdate>> 
     let tag_version = parse_tag(&response.tag_name.replace("v", ""))?;
 
     if tag_version > VERSION_CODE {
+        // exact match, so the .sha256 sidecar or a target sharing our prefix is never picked
+        let archive_name = format!(
+            "{}-{BUILD_TARGET}{ARCHIVE_EXTENSION}",
+            env!("CARGO_PKG_NAME")
+        );
         for asset in response.assets {
-            if asset.name.to_lowercase().contains(BUILD_TARGET) {
+            if asset.name.eq_ignore_ascii_case(&archive_name) {
                 let download = client
                     .get(asset.browser_download_url)
                     .send()
