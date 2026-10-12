@@ -20,7 +20,7 @@ There are several ways you can contribute to duco-pools-rs:
   If you encounter a bug, please search for existing issues on the issue tracker first.
   If you can't find a duplicate issue, open a new one.
   Provide a clear description of the bug, including steps to reproduce it if possible.
-  Screenshots, logs, or code snippets can also be helpful.
+  Logs, or code snippets can also be helpful.
 - **Suggesting Features**:
   Do you have an idea on how duco-pools-rs can be improved? Share your thoughts by opening an issue on the issue tracker.
   Describe the proposed feature in detail, including its benefits and potential implementation considerations.
