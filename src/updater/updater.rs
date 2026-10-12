@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use anyhow::{bail, Context};
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -15,6 +16,8 @@ const API_URL: &str =
 const BUILD_TARGET: &str = env!("BUILD_TARGET");
 // release archive as packaged by actions-rust-release
 const ARCHIVE_EXTENSION: &str = ".tar.gz";
+// release builds are ~8 MiB; anything far beyond that is not our executable
+const MAX_EXECUTABLE_SIZE: u64 = 64 * 1024 * 1024;
 const fn parse_version_component(value: &str) -> u32 {
     match u32::from_str_radix(value, 10) {
         Ok(number) => number,
@@ -105,6 +108,12 @@ fn update_path(executable: &Path) -> anyhow::Result<PathBuf> {
         name.push(extension);
     }
     Ok(executable.with_file_name(name))
+}
+
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut path = path.as_os_str().to_os_string();
+    path.push(suffix);
+    PathBuf::from(path)
 }
 
 fn restart_script(configured: &str, working_dir: &Path) -> anyhow::Result<PathBuf> {
@@ -241,6 +250,34 @@ async fn stage_download(
     Ok(())
 }
 
+// pulls only the executable out of the verified release archive into `staging`
+fn stage_executable(archive: &Path, staging: &Path) -> anyhow::Result<()> {
+    let member = format!("{}{}", env!("CARGO_PKG_NAME"), std::env::consts::EXE_SUFFIX);
+    let mut archive = tar::Archive::new(GzDecoder::new(std::fs::File::open(archive)?));
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if entry.path()? != Path::new(&member) {
+            continue;
+        }
+        if !entry.header().entry_type().is_file() {
+            bail!("{member} in the archive is not a regular file");
+        }
+        // the entry reader stops at the header size, so this bounds what is written
+        let len = entry.header().size()?;
+        if len == 0 {
+            bail!("{member} in the archive is empty");
+        }
+        if len > MAX_EXECUTABLE_SIZE {
+            bail!("{member} in the archive exceeds {MAX_EXECUTABLE_SIZE} bytes");
+        }
+        let mut file = std::fs::File::create(staging)?;
+        std::io::copy(&mut entry, &mut file)?;
+        file.sync_all()?;
+        return Ok(());
+    }
+    bail!("{member} not found in the archive")
+}
+
 pub async fn fetch_latest_version() -> anyhow::Result<Option<DownloadedUpdate>> {
     let client = reqwest::Client::new();
     let response = client
@@ -271,17 +308,28 @@ pub async fn fetch_latest_version() -> anyhow::Result<Option<DownloadedUpdate>> 
                     .error_for_status()?;
                 let executable = std::env::current_exe()?;
                 let path = update_path(&executable)?;
-                // streamed into a staging file (never the whole binary in memory), only moved
-                // to `path` after the checks pass, so a partial or bad download is never installable
-                let mut staging = path.clone().into_os_string();
-                staging.push(".part");
-                let staging = PathBuf::from(staging);
-                let staged = stage_download(download, &staging, asset.digest.as_deref()).await;
+                // the archive is streamed to disk (never in memory) and verified, then only the
+                // executable is extracted into a staging file that is moved to `path` once
+                // complete, so a partial or bad download is never installable
+                let archive = with_suffix(&path, ARCHIVE_EXTENSION);
+                let staged = stage_download(download, &archive, asset.digest.as_deref()).await;
                 if let Err(err) = staged {
-                    let _ = tokio::fs::remove_file(&staging).await;
+                    let _ = tokio::fs::remove_file(&archive).await;
                     return Err(err).with_context(|| {
                         format!("Downloading or verifying asset {} failed", asset.name)
                     });
+                }
+                let staging = with_suffix(&path, ".part");
+                let extracted = tokio::task::spawn_blocking({
+                    let (archive, staging) = (archive.clone(), staging.clone());
+                    move || stage_executable(&archive, &staging)
+                })
+                .await;
+                let _ = tokio::fs::remove_file(&archive).await;
+                if let Err(err) = extracted.map_err(anyhow::Error::from).and_then(|res| res) {
+                    let _ = tokio::fs::remove_file(&staging).await;
+                    return Err(err)
+                        .with_context(|| format!("Extracting asset {} failed", asset.name));
                 }
                 tokio::fs::rename(&staging, &path).await?;
                 return Ok(Some(DownloadedUpdate {
