@@ -3,6 +3,7 @@ use rand::distr::{Distribution, Uniform};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::path::Path;
+use std::net::IpAddr;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PoolConfig {
@@ -62,6 +63,14 @@ pub struct PoolConfig {
     pub auto_update: bool,
     pub update_check_time_seconds: u64,
 }
+
+impl PoolConfig {
+    /// Plain IPs can't present a normal TLS cert, so they use http. Domains use https.
+    pub fn sync_scheme(&self) -> &'static str {
+        if self.server_ip.parse::<IpAddr>().is_ok() { "http" } else { "https" }
+    }
+}
+
 fn default_shares() -> u16 {
     80u16
 }

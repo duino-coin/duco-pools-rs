@@ -329,8 +329,9 @@ pub async fn sync(
     );
 
     let request_url = format!(
-        "https://{}/pool_sync/?host={}&port={}&version={}&identifier={}&name={}\
+        "{}://{}/pool_sync/?host={}&port={}&version={}&identifier={}&name={}\
     &blockIncrease={}&bigBlocks={}&cpu={}&ram={}&connections={}",
+        config.sync_scheme(),
         // "server.duinocoin.com", //TODO: temp fix
         config.server_ip,
         ip,
