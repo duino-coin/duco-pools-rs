@@ -3,8 +3,8 @@ set -euo pipefail
 trap '' HUP
 
 : "${UPDATE_PARENT_PID:?Missing parent PID}"
-: "${UPDATE_SOURCE:?Missing update path}"
-: "${UPDATE_EXECUTABLE:?Missing executable path}"
+: "${UPDATE_SOURCE:?Missing update path}" # path to the updated executable
+: "${UPDATE_EXECUTABLE:?Missing executable path}" # corresponds to the current executable path
 : "${UPDATE_WORKING_DIR:?Missing working directory}"
 
 [[ "$UPDATE_PARENT_PID" =~ ^[1-9][0-9]*$ ]]
@@ -22,5 +22,5 @@ while kill -0 "$UPDATE_PARENT_PID" 2>/dev/null; do
     sleep 0.2
 done
 
-mv -f -- "$UPDATE_SOURCE" "$UPDATE_EXECUTABLE"
+mv -f -- "$UPDATE_SOURCE" "$UPDATE_EXECUTABLE" # the pool is shutdown, so we can override it's executable
 exec "$UPDATE_EXECUTABLE"
