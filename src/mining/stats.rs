@@ -122,15 +122,13 @@ pub struct MinerStatSlim {
     pub accepted_shares: u64,
     #[serde(rename = "r")]
     pub rejected_shares: u64,
-    // #[serde(rename = "al")]
-    // pub algorithm: CompactString,
     #[serde(rename = "d")]
     pub difficulty: u32,
-    // #[serde(rename = "p")]
-    // pub pool_name: CompactString,
     #[serde(rename = "sft")]
     pub software: CompactString,
     pub id: CompactString,
+    #[serde(rename = "t")]
+    pub timestamp: u32, // unix secs of the last update, the server uses it to tell active miners; u32: fine until 2106 and fits within struct without extra bytes
     #[serde(rename = "wd")]
     pub wallet_id: CompactString,
     #[serde(rename = "k")]
@@ -151,7 +149,7 @@ pub struct MinerStatSlim {
 }
 
 impl MinerStatSlim {
-    // The display-only fields (software, id, wallet_id, hashrate, difficulty, reward) start
+    // The display-only fields (software, id, timestamp, wallet_id, hashrate, difficulty, reward) start
     // empty/zero, the caller writes them (mining::Published) before publishing
     pub fn new(miner_stat: &MinerStat) -> MinerStatSlim {
         MinerStatSlim {
@@ -159,15 +157,12 @@ impl MinerStatSlim {
             share_time: miner_stat.share_time,
             accepted_shares: miner_stat.accepted_shares,
             rejected_shares: miner_stat.rejected_shares,
-            // algorithm: miner_stat.algorithm.clone(),
-            // pool_name: miner_stat.pool_name.clone(),
             this_miner_chipid: miner_stat.this_miner_chipid.clone(),
             password: miner_stat.password.clone(),
             last_min_shares: miner_stat.last_min_shares,
             iot_reading: miner_stat.iot_reading.clone(),
             ping: miner_stat.ping,
             ip: miner_stat.ip.clone(),
-            // amount_of_workers: miner_stat.amount_of_workers,
             amount_of_workers: miner_stat.worker_slot.id(),
             ..MinerStatSlim::default()
         }
@@ -213,7 +208,7 @@ pub struct StatsWithContext<'a> {
 
 // JSON bytes of one entry with every string empty and every number as short as possible
 // (`"<16 hex>":{"u":"","h":0.0,...,"al":"DUCO-S1","p":""}`), without the pool name
-const MIN_ENTRY_JSON_BYTES: usize = 172;
+const MIN_ENTRY_JSON_BYTES: usize = 178;
 
 impl StatsWithContext<'_> {
     // never more than the serialized size, so it can pre-size the buffer without over-allocating

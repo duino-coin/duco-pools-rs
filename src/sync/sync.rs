@@ -329,11 +329,10 @@ pub async fn sync(
     );
 
     let request_url = format!(
-        "{}://{}/pool_sync/?host={}&port={}&version={}&identifier={}&name={}\
+        "https://{}/pool_sync/?host={}&port={}&version={}&identifier={}&name={}\
     &blockIncrease={}&bigBlocks={}&cpu={}&ram={}&connections={}",
-        config.sync_scheme(),
         // "server.duinocoin.com", //TODO: temp fix
-        config.server_ip,
+        config.server_endpoint,
         ip,
         config.port,
         config.pool_version,
@@ -380,7 +379,12 @@ pub async fn sync(
         {
             Ok(res) => {
                 let status = res.status();
-                if status.is_success() {
+                let final_url = res.url().clone();
+                // the server answers 200 even when it rejects the sync, the verdict is in the body
+                let body = res.text().await?;
+                let accepted = serde_json::from_str::<serde_json::Value>(&body)
+                    .is_ok_and(|reply| reply["success"] == true);
+                if accepted {
                     {
                         let mut block_lock = mining::GLOBAL_BLOCKS.lock().await;
                         acknowledge_uploaded_work(
@@ -401,9 +405,9 @@ pub async fn sync(
                     tokio::fs::remove_file(&worker_path).await?;
                 } else {
                     warn!(
-                        "Failed to sync {}: {}",
+                        "Failed to sync {} ({status} from {final_url}): {}",
                         SYNC_COUNT.load(Ordering::Relaxed),
-                        res.text().await?
+                        body
                     );
                 }
             }

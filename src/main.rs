@@ -78,6 +78,7 @@ async fn main() {
     env_logger::builder()
         .target(Target::Stdout)
         .filter_level(LevelFilter::Info)
+        .parse_default_env()
         .init();
 
     let mut config = cfg::config::load_config().unwrap();

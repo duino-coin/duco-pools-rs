@@ -3,7 +3,6 @@ use rand::distr::{Distribution, Uniform};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::path::Path;
-use std::net::IpAddr;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PoolConfig {
@@ -52,6 +51,7 @@ pub struct PoolConfig {
     pub sync_time: u32,
     pub timeout: u16, // probably shouldn't exceed 65k either
     pub server_sync_url: String,
+    pub server_endpoint: String,
     pub base_sync_folder: String,
     #[serde(rename = "maxSharesPerMinute", default = "default_shares")]
     pub max_shares_per_minute: u16, // probably shouldn't exceed 65k either
@@ -63,14 +63,6 @@ pub struct PoolConfig {
     pub auto_update: bool,
     pub update_check_time_seconds: u64,
 }
-
-impl PoolConfig {
-    /// Plain IPs can't present a normal TLS cert, so they use http. Domains use https.
-    pub fn sync_scheme(&self) -> &'static str {
-        if self.server_ip.parse::<IpAddr>().is_ok() { "http" } else { "https" }
-    }
-}
-
 fn default_shares() -> u16 {
     80u16
 }
@@ -110,6 +102,7 @@ impl Default for PoolConfig {
             sync_time: 15,
             timeout: 30,
             server_sync_url: "https://server.duinocoin.com/poolsyncdata".to_string(),
+            server_endpoint: "server.duinocoin.com".to_string(),
             base_sync_folder: "".to_string(),
             max_shares_per_minute: 80,
             restart_script: "".to_string(),

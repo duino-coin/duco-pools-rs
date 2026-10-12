@@ -504,6 +504,7 @@ pub async fn handle(
                 },
                 difficulty: diff,
                 reward,
+                timestamp: answer_received.duration_since(UNIX_EPOCH)?.as_secs() as u32,
             };
 
             // one guard for all fields; nothing below fails or awaits
@@ -536,6 +537,7 @@ struct Published<'a> {
     hashrate: f32,
     difficulty: u32,
     reward: f32,
+    timestamp: u32, // unix secs of the last accepted share, u32 lasts until 2106
 }
 
 impl Published<'_> {
@@ -565,6 +567,7 @@ impl Published<'_> {
         stat.hashrate = self.hashrate;
         stat.difficulty = self.difficulty;
         stat.reward = self.reward;
+        stat.timestamp = self.timestamp;
     }
 }
 
