@@ -78,7 +78,7 @@ Passing clippy and tests doesn't show that a change works. Run the pool and exer
 - **Functionality test** Run the pool as documented by `pool-verifier/README.md`. All test cases, including the slow suite, must be run.
 - **Load and memory.** For performance or memory changes, run a benchmark `pool-verifier` suite. Record a baseline before you change anything. Compare the values from pre-change to post-change. One run each isn't enough when the numbers are close. Distinguish noise from an actual performance or memory change. Should it be a decrease in either, argue why it is justified.
 - **Counters over guesses.** When you're chasing a bug, add temporary counters or `tracing` output to prove the cause before changing code. Take the instrumentation out before committing.
-- **Keep investigation tools out of the repo.** Bot scripts, one-off benchmark scripts and debug patches you used while working live outside the repository and don't go into the PR. A benchmark or test worth keeping goes into the existing benches or test suite instead, sized like its neighbours.
+- **Keep investigation tools out of the repo.** Scripts, one-off benchmark scripts and debug patches you used while working live outside the repository and don't go into the PR. A benchmark or test worth keeping goes into the existing benches or test suite instead, sized like its neighbours.
 
 
 ### Tests
@@ -133,7 +133,6 @@ The е in both headings in this text is already the Cyrillic one, so you can pas
 
 - A dot after Testing means the description was written by an agent.
 - A dot after Description means the code was written by an agent.
-- For anything a player can see or feel in-game (blocks, items, mobs, combat, movement, particles, sounds, GUIs, world generation), a play-test checklist in "do X, expect Y" form, plus what the human should capture. Put a `Capture: <attach screenshot or recording here>` line in the Testing section of the draft so a missing capture is obvious.
 
 ### Tell the author what they have to do
 
