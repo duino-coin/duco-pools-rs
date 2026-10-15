@@ -3,8 +3,8 @@ use crate::mining::mining::USR_WORKERS_ALLOC;
 use crate::{mining, BANS, CONFIG};
 use compact_str::CompactString;
 use log::{debug, warn};
-use std::process::Command;
 use std::sync::OnceLock;
+use tokio::process::Command;
 
 const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -21,7 +21,11 @@ async fn ban_ip(ip: &str) -> Result<(), anyhow::Error> {
         command = command.replace("${ip}", ip);
         let cmd_split = command.split(" ").collect::<Vec<&str>>();
         let cmd = cmd_split[0].trim();
-        Command::new(cmd).args(&cmd_split[1..]).spawn()?;
+        let mut child = Command::new(cmd).args(&cmd_split[1..]).spawn()?;
+        // reap it, otherwise every ban leaves a zombie process behind until the pool exits
+        tokio::spawn(async move {
+            let _ = child.wait().await;
+        });
         warn!("Banned {ip}");
     }
     Ok(())
@@ -50,29 +54,28 @@ pub async fn handle_connection(conn: &mut Connection) -> Result<(), anyhow::Erro
             }
 
             // check for bans
-            // block so we lose the lock on the mutex
-            {
+            // only decide under the lock, the firewall call and the write happen after it's
+            // released, so a slow client can't stall every other connection's ban check
+            let (banned, newly_banned_ip) = {
                 let mut ban = BANS.lock().await;
-                if ban.banned_ips.contains(&conn.miner_stat.ip) && conn.miner_stat.ip != "127.0.0.1"
-                {
-                    conn.write("BAD,User banned\n").await?;
-                    return Ok(());
+                if conn.miner_stat.ip == "127.0.0.1" {
+                    (false, false)
+                } else if ban.banned_ips.contains(&conn.miner_stat.ip) {
+                    (true, false)
+                } else if data_len >= 2 && ban.banned_usernames.contains(data_split[1]) {
+                    ban.banned_ips.insert(conn.miner_stat.ip.clone());
+                    ban.save_bans().expect("failed to save config bans.json");
+                    (true, true)
+                } else {
+                    (false, false)
                 }
-                if data_len >= 2 {
-                    let username = data_split[1];
-                    if ban.banned_usernames.contains(username) && conn.miner_stat.ip != "127.0.0.1"
-                    {
-                        if !ban.banned_ips.contains(&conn.miner_stat.ip) {
-                            ban_ip(&conn.miner_stat.ip).await?;
-                            // ban.banned_ips.push(conn.ip.clone());
-                            ban.banned_ips.insert(conn.miner_stat.ip.clone());
-                            ban.save_bans().expect("failed to save config bans.json");
-                        }
-
-                        conn.write("BAD,User banned\n").await?;
-                        return Ok(());
-                    }
+            };
+            if banned {
+                if newly_banned_ip {
+                    ban_ip(&conn.miner_stat.ip).await?;
                 }
+                conn.write("BAD,User banned\n").await?;
+                return Ok(());
             }
 
             if data_split[0] == "JOB" {

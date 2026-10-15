@@ -19,12 +19,13 @@ use log::{debug, error, info, LevelFilter};
 use mimalloc::MiMalloc;
 use rand::{Rng, RngExt};
 use std::net::SocketAddr;
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
 use sysinfo::System;
 use tokio::net::TcpListener;
+// tokio's Child reaps itself in the background when dropped, std's leaves a zombie
+use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
