@@ -313,9 +313,11 @@ fn patch_sync_endpoints(stage: &Path) -> Result<()> {
             "{}/pool_sync/",
             "sync URL scheme",
         )?;
-        // Two pool versions exist: the configurable host and the older
-        // hard-coded one. Both are supported.
-        let host = if patched_url.contains("        config.server_ip,") {
+        // Three pool versions exist: the dedicated `server_endpoint` host, the
+        // older `server_ip` host and the oldest hard-coded one. All are supported.
+        let host = if patched_url.contains("        config.server_endpoint,") {
+            "        config.server_endpoint,"
+        } else if patched_url.contains("        config.server_ip,") {
             "        config.server_ip,"
         } else {
             "        \"server.duinocoin.com\", //TODO: temp fix"

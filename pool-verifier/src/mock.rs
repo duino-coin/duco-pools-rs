@@ -336,7 +336,15 @@ async fn handle_sync_upload(
         uploads[id].completed = true;
         uploads[id].status = status;
     }
-    let body = scripted.map_or_else(|| "mock sync response".into(), |r| r.body);
+    // The real server puts its verdict in a JSON body; a 2xx status alone is
+    // not an acknowledgement.
+    let body = scripted.map_or_else(
+        || {
+            let success = (200..300).contains(&status);
+            json!({ "success": success, "message": "mock sync response" }).to_string()
+        },
+        |r| r.body,
+    );
     text_reply(status, body)
 }
 
