@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use anyhow::{bail, Context};
+#[cfg(not(target_os = "windows"))]
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -7,15 +8,16 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::str::FromStr;
 use std::time::Duration;
+use flate2::read::GzDecoder;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-// TODO: change to prod url
-// const API_URL: &str = "https://api.github.com/repos/duino-coin/libducohash/releases/latest";
-const API_URL: &str =
-    "https://api.github.com/repos/profpandaa/compatible-libducohash/releases/latest";
+ const API_URL: &str = "https://api.github.com/repos/duino-coin/duco-pools-rs/releases/latest";
 const BUILD_TARGET: &str = env!("BUILD_TARGET");
 // release archive as packaged by actions-rust-release
+#[cfg(not(target_os = "windows"))]
 const ARCHIVE_EXTENSION: &str = ".tar.gz";
+#[cfg(target_os = "windows")]
+const ARCHIVE_EXTENSION: &str = ".zip";
 // release builds are ~8 MiB; anything far beyond that is not our executable
 const MAX_EXECUTABLE_SIZE: u64 = 64 * 1024 * 1024;
 const fn parse_version_component(value: &str) -> u32 {
@@ -251,6 +253,39 @@ async fn stage_download(
 }
 
 // pulls only the executable out of the verified release archive into `staging`
+#[cfg(target_os = "windows")]
+fn stage_executable(archive: &Path, staging: &Path) -> anyhow::Result<()> {
+    use std::io::Read;
+    let member = format!("{}{}", env!("CARGO_PKG_NAME"), std::env::consts::EXE_SUFFIX);
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(archive)?)?;
+    let entry = match archive.by_name(&member) {
+        Ok(entry) => entry,
+        Err(zip::result::ZipError::FileNotFound) => bail!("{member} not found in the archive"),
+        Err(err) => return Err(err.into()),
+    };
+    if !entry.is_file() {
+        bail!("{member} in the archive is not a regular file");
+    }
+    let len = entry.size();
+    if len == 0 {
+        bail!("{member} in the archive is empty");
+    }
+    if len > MAX_EXECUTABLE_SIZE {
+        bail!("{member} in the archive exceeds {MAX_EXECUTABLE_SIZE} bytes");
+    }
+    let mut file = std::fs::File::create(staging)?;
+    // the declared size is untrusted, so the decompressed stream is bounded as well
+    let copied = std::io::copy(&mut entry.take(len), &mut file)?;
+    if copied != len {
+        bail!("{member} in the archive is truncated");
+    }
+    file.sync_all()?;
+
+    Ok(())
+}
+
+// pulls only the executable out of the verified release archive into `staging`
+#[cfg(not(target_os = "windows"))]
 fn stage_executable(archive: &Path, staging: &Path) -> anyhow::Result<()> {
     let member = format!("{}{}", env!("CARGO_PKG_NAME"), std::env::consts::EXE_SUFFIX);
     let mut archive = tar::Archive::new(GzDecoder::new(std::fs::File::open(archive)?));
@@ -307,16 +342,27 @@ pub async fn fetch_latest_version(timeout: Duration) -> anyhow::Result<Option<Do
         for asset in response.assets {
             if asset.name.eq_ignore_ascii_case(&archive_name) {
                 let download = client
-                    .get(asset.browser_download_url)
+                    .get(asset.url)
+                    .header(
+                        "Accept",
+                        "application/octet-stream"
+                    )
+                    .header(
+                        "User-Agent",
+                        "duco-pool-rs"
+                    )
                     .send()
                     .await?
-                    .error_for_status()?;
+                    .error_for_status()?;;
+
                 let executable = std::env::current_exe()?;
                 let path = update_path(&executable)?;
+
                 // the archive is streamed to disk (never in memory) and verified, then only the
                 // executable is extracted into a staging file that is moved to `path` once
                 // complete, so a partial or bad download is never installable
                 let archive = with_suffix(&path, ARCHIVE_EXTENSION);
+
                 let staged = stage_download(download, &archive, asset.digest.as_deref()).await;
                 if let Err(err) = staged {
                     let _ = tokio::fs::remove_file(&archive).await;
@@ -325,6 +371,7 @@ pub async fn fetch_latest_version(timeout: Duration) -> anyhow::Result<Option<Do
                     });
                 }
                 let staging = with_suffix(&path, ".part");
+
                 let extracted = tokio::task::spawn_blocking({
                     let (archive, staging) = (archive.clone(), staging.clone());
                     move || stage_executable(&archive, &staging)
@@ -495,6 +542,48 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    // the release zip is deflate-compressed, as produced by Compress-Archive
+    #[cfg(windows)]
+    #[test]
+    fn stage_executable_extracts_from_zip() {
+        let dir = TestDirectory::new();
+        let member = format!("{}.exe", env!("CARGO_PKG_NAME"));
+        let contents = b"MZ duco".repeat(4096);
+        fs::write(dir.0.join(&member), &contents).unwrap();
+        fs::write(dir.0.join("README.md"), b"readme").unwrap();
+        let archive = dir.0.join("release.zip");
+        let status = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command"])
+            .arg(format!(
+                "Compress-Archive -Path '{}','{}' -DestinationPath '{}'",
+                dir.0.join(&member).display(),
+                dir.0.join("README.md").display(),
+                archive.display()
+            ))
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let staging = dir.0.join("staged.part");
+        stage_executable(&archive, &staging).unwrap();
+        assert_eq!(fs::read(&staging).unwrap(), contents);
+
+        fs::remove_file(dir.0.join(&member)).unwrap();
+        let without = dir.0.join("without.zip");
+        let status = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command"])
+            .arg(format!(
+                "Compress-Archive -Path '{}' -DestinationPath '{}'",
+                dir.0.join("README.md").display(),
+                without.display()
+            ))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let err = stage_executable(&without, &staging).unwrap_err();
+        assert!(err.to_string().contains("not found in the archive"));
     }
 
     fn fixture() -> (TestDirectory, DownloadedUpdate) {

@@ -408,10 +408,10 @@ fn add_observation_surface(stage: &Path) -> Result<()> {
             "rejected": conn.miner_stat.rejected_shares, "reward": reward,
             "hashrate_calc": hashrate_calc, "hashrate": hashrate, "difficulty": diff,
             "tier": req_difficulty, "worker": conn.miner_stat.worker_slot.id(),
-            "reward_div": reward_div, "sample_count": conn.miner_stat.share_times_list.len(),
-            "sample_sum": conn.miner_stat.total_share_times,
+            "reward_div": reward_div, "avg_hashes": avg_hashes,
+            "avg_share_time": avg_share_time, "rtt": rtt,
             "share_time": conn.miner_stat.share_time, "ping": conn.miner_stat.ping,
-            "samples": conn.miner_stat.share_times_list, "expected_time": expected_share_time,
+            "expected_time": expected_share_time,
             "hash": new_hash_str, "nonce": random, "last_min_shares": conn.miner_stat.last_min_shares
         }));
         is_first_share = false;"#,

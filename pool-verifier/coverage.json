@@ -76,7 +76,7 @@
     {
       "behavior": "Difficulty mapping and adaptation",
       "coverage": "asserted",
-      "assertion": "All transition mappings and initial tier difficulties; fallback/override resolution; deviation threshold/minimum vectors; adjustment after four accepts and a 50-sample rolling sum.",
+      "assertion": "All transition mappings and initial tier difficulties; fallback/override resolution; deviation threshold/minimum vectors; adjustment after four accepts and the exponential hashrate average.",
       "cases": [
         "lifecycle/difficulty-fallback",
         "lifecycle/difficulty-upshift",
@@ -84,14 +84,14 @@
         "internal/tier-transitions",
         "internal/adaptive-vectors",
         "internal/fallback-and-sanitizers",
-        "lifecycle/adaptive-mining-window",
+        "lifecycle/adaptive-mining-average",
         "lifecycle/all-tier-initial-jobs"
       ]
     },
     {
       "behavior": "Hashrate validation and estimation",
       "coverage": "asserted",
-      "assertion": "Zero/negative/nonfinite rejection, valid recovery, missing/malformed estimation and modified-hashrate feedback.",
+      "assertion": "Zero/negative/nonfinite rejection, valid recovery, missing/malformed estimation and underreported-hashrate rejection with accepted overreports.",
       "cases": [
         "protocol/invalid-hashrates",
         "protocol/estimated-hashrates",

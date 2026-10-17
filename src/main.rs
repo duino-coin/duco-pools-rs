@@ -128,48 +128,49 @@ async fn main() {
 
     #[cfg(not(debug_assertions))]
     sync::sync::login(&config).await.expect("failed to login");
+    // TODO: seems to work, needs to be tested in a production setting (and the repo set to public!)
+    let mut update_thread = None;
+    if config.auto_update && !config.update_restart_script.is_empty() {
+        let update_shutdown = tx.clone();
+        let update_restart_script = config.update_restart_script.clone();
+        update_thread = Some(tokio::spawn(async move {
+            loop {
+                match updater::updater::fetch_latest_version(Duration::from_secs(
+                    config.timeout as u64,
+                ))
+                    .await
+                {
+                    Ok(Some(update)) => {
+                        match updater::updater::spawn_update_restart(
+                            &update,
+                            &update_restart_script,
+                        )
+                            .await
+                        {
+                            Ok(helper) => {
+                                info!(
+                                "Update {} is ready; shutting down before replacement",
+                                update.version
+                            );
+                                if update_shutdown.send("s".to_owned()).is_ok() {
+                                    helper.detach();
+                                }
+                            }
+                            Err(err) => error!("Failed to prepare update restart: {err:#}"),
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        error!("Failed to download update: {err:#}");
+                    }
+                };
+                tokio::time::sleep(tokio::time::Duration::from_secs(
+                    config.update_check_time_seconds,
+                )).await;
+            }
+        }));
+    }
     CONFIG.get_or_init(|| config);
-    // TODO: test and then activate
-    // let mut update_thread = None;
-    // if false && config.auto_update && !config.update_restart_script.is_empty() {
-    //     let update_shutdown = tx.clone();
-    //     update_thread = Some(tokio::spawn(async move {
-    //         tokio::time::sleep(tokio::time::Duration::from_secs(
-    //             config.update_check_time_seconds,
-    //         ))
-    //         .await;
-    //
-    //         match updater::updater::fetch_latest_version(Duration::from_secs(
-    //             config.timeout as u64,
-    //         ))
-    //         .await
-    //         {
-    //             Ok(Some(update)) => {
-    //                 match updater::updater::spawn_update_restart(
-    //                     &update,
-    //                     &config.update_restart_script,
-    //                 )
-    //                 .await
-    //                 {
-    //                     Ok(helper) => {
-    //                         info!(
-    //                             "Update {} is ready; shutting down before replacement",
-    //                             update.version
-    //                         );
-    //                         if update_shutdown.send("s".to_owned()).is_ok() {
-    //                             helper.detach();
-    //                         }
-    //                     }
-    //                     Err(err) => error!("Failed to prepare update restart: {err:#}"),
-    //                 }
-    //             }
-    //             Ok(None) => {}
-    //             Err(err) => {
-    //                 error!("Failed to download update: {err:#}");
-    //             }
-    //         };
-    //     }));
-    // }
     #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
     let sys_clone = sys.clone();
     let sync_thread = tokio::spawn(async move {
@@ -222,10 +223,9 @@ async fn main() {
     if restarter.is_some() {
         restarter.take().unwrap().abort();
     }
-    // TODO: uncomment once auto updater is activated
-    // if update_thread.is_some() {
-    //     update_thread.take().unwrap().abort();
-    // }
+    if update_thread.is_some() {
+        update_thread.take().unwrap().abort();
+    }
     sync_thread.abort();
     // last sync before shutdown
     #[cfg(not(debug_assertions))]

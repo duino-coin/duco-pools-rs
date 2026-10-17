@@ -52,3 +52,6 @@ dummy_sync = []
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(compile_env, values("test"))', 'cfg(run_env, values("bench"))'] }
+
+[target."cfg(windows)".dependencies]
+zip = { version = "9.0.4", default-features = false, features = ["deflate-flate2"] }

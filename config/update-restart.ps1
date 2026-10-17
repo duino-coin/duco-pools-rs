@@ -24,9 +24,11 @@ try {
     $parentProcess.Dispose()
 
     Move-Item -LiteralPath $source -Destination $destination -Force
-    Start-Process -FilePath $destination -WorkingDirectory $workingDirectory -WindowStyle Hidden `
-        -RedirectStandardOutput (Join-Path $workingDirectory "pool-update.stdout.log") `
-        -RedirectStandardError (Join-Path $workingDirectory "pool-update.stderr.log")
+#     Start-Process -FilePath $destination -WorkingDirectory $workingDirectory -WindowStyle Hidden `
+#         -RedirectStandardOutput (Join-Path $workingDirectory "pool-update.stdout.log") `
+#         -RedirectStandardError (Join-Path $workingDirectory "pool-update.stderr.log")
+    Start-Process -FilePath "cmd.exe" -WorkingDirectory $workingDirectory `
+        -ArgumentList "/k `"`"$destination`"`""
 } catch {
     [Console]::Error.WriteLine($_.Exception.Message)
     exit 1

@@ -3,58 +3,6 @@ use crate::mining::id_allocator::WorkerSlot;
 use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
 
-// Same window as the previous VecDeque: after pushing the 51st sample the oldest is dropped.
-const SHARE_TIME_WINDOW: usize = 50;
-
-// Fixed-size ring buffer for the rolling share times, stored inline in MinerStat
-// so it never allocates.
-#[derive(Debug, Clone)]
-pub struct ShareTimes {
-    buf: [f32; SHARE_TIME_WINDOW],
-    head: u8, // index of the oldest sample
-    len: u8,
-}
-
-impl Default for ShareTimes {
-    fn default() -> Self {
-        ShareTimes {
-            buf: [0f32; SHARE_TIME_WINDOW],
-            head: 0,
-            len: 0,
-        }
-    }
-}
-
-impl ShareTimes {
-    // Appends a sample and returns the evicted one, if the window was full
-    pub fn push(&mut self, val: f32) -> Option<f32> {
-        if (self.len as usize) < SHARE_TIME_WINDOW {
-            self.buf[(self.head as usize + self.len as usize) % SHARE_TIME_WINDOW] = val;
-            self.len += 1;
-            None
-        } else {
-            let oldest = std::mem::replace(&mut self.buf[self.head as usize], val);
-            self.head = ((self.head as usize + 1) % SHARE_TIME_WINDOW) as u8;
-            Some(oldest)
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.len as usize
-    }
-
-    // oldest to newest
-    pub fn iter(&self) -> impl Iterator<Item = f32> + '_ {
-        (0..self.len as usize).map(|i| self.buf[(self.head as usize + i) % SHARE_TIME_WINDOW])
-    }
-}
-
-impl Serialize for ShareTimes {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_seq(self.iter())
-    }
-}
-
 // Live per-connection state. The display-only fields (sft, id, wd, h, d, rw) aren't kept
 // here, they are written straight into the published MinerStatSlim (see mining::Published)
 // #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -89,8 +37,6 @@ pub struct MinerStat {
 
     // NEVER SERIALIZED:
     pub last_share_reset: u64,
-    pub total_share_times: f32, // adds all items from share_time_list
-    pub share_times_list: ShareTimes,
     pub reject_shares: Option<&'static str>, // the full "BAD,<reason>\n" response
     pub override_diff: CompactString,
     pub is_req_diff_esp32: bool, // because "ESP32" only adds 0.5..
@@ -262,38 +208,6 @@ impl BlockInfos {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::VecDeque;
-
-    #[test]
-    fn share_times_match_previous_vecdeque_window() {
-        let mut ring = ShareTimes::default();
-        let mut ring_total = 0f32;
-        let mut deque = VecDeque::new();
-        let mut deque_total = 0f32;
-
-        for i in 0..137 {
-            let val = (i as f32 * 0.37).sin().abs() * 3.0;
-
-            ring_total += val;
-            if let Some(old) = ring.push(val) {
-                ring_total -= old;
-            }
-
-            deque.push_back(val);
-            deque_total += val;
-            if deque.len() > 50 {
-                deque_total -= deque.pop_front().unwrap_or(0f32);
-            }
-
-            assert_eq!(ring.len(), deque.len());
-            assert_eq!(ring_total.to_bits(), deque_total.to_bits());
-            assert!(ring.iter().eq(deque.iter().copied()));
-        }
-        assert_eq!(
-            serde_json::to_string(&ring).unwrap(),
-            serde_json::to_string(&deque).unwrap()
-        );
-    }
 
     #[test]
     fn min_json_len_is_exact_for_the_smallest_entry() {

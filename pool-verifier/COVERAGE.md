@@ -38,13 +38,13 @@ Scenarios: `protocol/forced-block`, `internal/reward-vectors`, `counters/reward-
 
 ## Difficulty mapping and adaptation
 
-**asserted** - All transition mappings and initial tier difficulties; fallback/override resolution; deviation threshold/minimum vectors; adjustment after four accepts and a 50-sample rolling sum.
+**asserted** - All transition mappings and initial tier difficulties; fallback/override resolution; deviation threshold/minimum vectors; adjustment after four accepts and the exponential hashrate average.
 
-Scenarios: `lifecycle/difficulty-fallback`, `lifecycle/difficulty-upshift`, `lifecycle/difficulty-downshift`, `internal/tier-transitions`, `internal/adaptive-vectors`, `internal/fallback-and-sanitizers`, `lifecycle/adaptive-mining-window`, `lifecycle/all-tier-initial-jobs`.
+Scenarios: `lifecycle/difficulty-fallback`, `lifecycle/difficulty-upshift`, `lifecycle/difficulty-downshift`, `internal/tier-transitions`, `internal/adaptive-vectors`, `internal/fallback-and-sanitizers`, `lifecycle/adaptive-mining-average`, `lifecycle/all-tier-initial-jobs`.
 
 ## Hashrate validation and estimation
 
-**asserted** - Zero/negative/nonfinite rejection, valid recovery, missing/malformed estimation and modified-hashrate feedback.
+**asserted** - Zero/negative/nonfinite rejection, valid recovery, missing/malformed estimation and underreported-hashrate rejection with accepted overreports.
 
 Scenarios: `protocol/invalid-hashrates`, `protocol/estimated-hashrates`, `protocol/modified-hashrate`.
 

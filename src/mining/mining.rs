@@ -45,6 +45,13 @@ pub static DUE_DIFF_CACHE: AtomicU32 = AtomicU32::new(0);
 const MAX_PASSWORD_BYTES: usize = 96;
 const PASSWORD_B64_BYTES: usize = MAX_PASSWORD_BYTES.div_ceil(3) * 4;
 
+// weight of the newest share in the hashrate average, ~ the last 9 shares
+const HASHRATE_EMA_WEIGHT: f32 = 0.2;
+// lets the round trip estimate recover when the route gets slower
+const RTT_DECAY: f32 = 1.01;
+// keeps the hashrate finite if the round trip estimate covers the whole share time
+const MIN_SHARE_TIME: f32 = 0.001;
+
 // every local that lives across an .await is stored in the connection's future,
 // so scratch buffers are kept in the sync blocks/functions that use them
 pub async fn handle(
@@ -56,9 +63,13 @@ pub async fn handle(
     let mut random;
     let mut hex_buf = [0u8; 40]; // stack-allocated, reused every iteration
     let mut req_difficulty = CompactString::with_capacity(16);
-    let mut expected_share_time = 0;
     let mut feedback_sent = SystemTime::now();
-    let mut start_hashrate = -1f32;
+    // smallest gap between our feedback and the next request, the gap is a round trip plus
+    // the miner's idle time, so its minimum is close to the round trip alone
+    let mut rtt: Option<f32> = None;
+    // averages of the hashes and seconds per accepted share, their ratio is the hashrate
+    let mut avg_hashes = 0f32;
+    let mut avg_share_time = 0f32;
     let mut diff = 1u32;
     let mut reported_hashrate;
     let mut hashrate_calc: f32;
@@ -115,6 +126,8 @@ pub async fn handle(
             conn.miner_stat.ping = SystemTime::now()
                 .duration_since(feedback_sent)?
                 .as_secs_f32();
+            let ping = conn.miner_stat.ping;
+            rtt = Some(rtt.map_or(ping, |rtt| (rtt * RTT_DECAY).min(ping)));
 
             data_len = scan_fields(&read, &mut data);
             req_difficulty.clear();
@@ -227,17 +240,9 @@ pub async fn handle(
         data_len = scan_fields(&read, &mut data);
         let answer_received = SystemTime::now();
 
-        conn.miner_stat.share_time = answer_received.duration_since(job_sent)?.as_secs_f32();
-        if conn.miner_stat.share_time > conn.miner_stat.ping {
-            conn.miner_stat.share_time -= conn.miner_stat.ping;
-        }
-
-        // 1.5x to account that the average will be half the target (I don't know what this means, I copied the original comment)
-        let val = conn.miner_stat.share_time * 1.5;
-        conn.miner_stat.total_share_times += val;
-        if let Some(oldest) = conn.miner_stat.share_times_list.push(val) {
-            conn.miner_stat.total_share_times -= oldest;
-        }
+        conn.miner_stat.share_time = (answer_received.duration_since(job_sent)?.as_secs_f32()
+            - rtt.unwrap_or(0f32))
+        .max(MIN_SHARE_TIME);
 
         let mut wrong_reported_hashrate = false;
         if data_len >= 2 {
@@ -260,23 +265,6 @@ pub async fn handle(
             conn.miner_stat.reject_shares = Some("BAD,Invalid data\n");
         }
 
-        {
-            let temp_share_time = conn.miner_stat.share_time + conn.miner_stat.ping; // it benefits the user
-            if temp_share_time > 0f32 {
-                hashrate_calc = random as f32 / temp_share_time;
-            } else {
-                hashrate_calc = if wrong_reported_hashrate {
-                    start_hashrate
-                } else {
-                    reported_hashrate
-                }; // I'd be damned if the sharetime's actually ever EXACTLY 0...
-            }
-        }
-
-        if wrong_reported_hashrate {
-            reported_hashrate = hashrate_calc;
-        }
-
         conn.miner_stat.last_min_shares += 1;
 
         let nonce = if using_avr {
@@ -293,6 +281,27 @@ pub async fn handle(
                 }
             }
         };
+
+        // only correct answers are real work, fast wrong ones would inflate the average
+        if nonce == random {
+            // the first one seeds the averages
+            let weight = if avg_share_time > 0f32 {
+                HASHRATE_EMA_WEIGHT
+            } else {
+                1f32
+            };
+            avg_hashes += (random as f32 - avg_hashes) * weight;
+            avg_share_time += (conn.miner_stat.share_time - avg_share_time) * weight;
+        }
+        hashrate_calc = if avg_share_time > 0f32 {
+            avg_hashes / avg_share_time
+        } else {
+            random as f32 / conn.miner_stat.share_time
+        };
+
+        if wrong_reported_hashrate {
+            reported_hashrate = hashrate_calc;
+        }
 
         {
             let now_secs = UNIX_EPOCH.elapsed()?.as_secs();
@@ -329,6 +338,7 @@ pub async fn handle(
         if diff > DUE_DIFF_CACHE.load(Relaxed)
             && diff <= ESP8266NH_DIFF_CACHE.load(Relaxed)
             && hashrate_perc_diff_for_calc > 15f32
+            && hashrate < hashrate_calc // only underreporting keeps a lower difficulty
             && conn.miner_stat.share_time >= 1.5
         {
             conn.miner_stat.reject_shares = Some("BAD,Modified hashrate\n");
@@ -347,33 +357,10 @@ pub async fn handle(
             hashrate = hashrate_calc;
         }
 
-        let avg_sharetime =
-            conn.miner_stat.total_share_times / conn.miner_stat.share_times_list.len() as f32;
-        let actual_expected_share_time =
-            random * expected_share_time as u64 / (diff as u64 * 100 + 1);
-        if (conn.miner_stat.accepted_shares == 4
-            || (
-                conn.miner_stat.accepted_shares > 4
-                    && (perc_diff(hashrate, start_hashrate) > 15f32
-                        || (1f32 - (avg_sharetime / actual_expected_share_time as f32)) * 100f32
-                            > 25f32)
-                // if the hashrate has changed substantially or if the sharetime is substantially lower than targeted, adjust
-            ))
-            && is_pc_diff_tier(req_difficulty.as_str())
-        {
-            start_hashrate = hashrate;
-
-            diff = kolka::kolka::v3(
-                // avg_from_array(&conn.miner_stat.share_times_list),
-                avg_sharetime,
-                expected_share_time,
-                hashrate,
-            );
-        }
         let reward_div = diff_info.reward;
         let max_hashrate = diff_info.max_hashrate;
         let min_hashrate = diff_info.min_hashrate;
-        expected_share_time = diff_info.expected_share_time;
+        let expected_share_time = diff_info.expected_share_time;
         let block_probability = diff_info.block_chance;
 
         share_accepted = false;
@@ -387,14 +374,12 @@ pub async fn handle(
                 CompactString::from(kolka::kolka::v2_reverse(req_difficulty.as_str()));
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too high starting difficulty\n").await?;
-            start_hashrate = -1f32;
             diff = kolka::kolka::get_diff(&conn.miner_stat.override_diff);
         } else if hashrate >= max_hashrate as f32 {
             conn.miner_stat.override_diff =
                 CompactString::from(kolka::kolka::v2(req_difficulty.as_str()));
             conn.miner_stat.rejected_shares += 1;
             conn.write("BAD,Too low starting difficulty\n").await?;
-            start_hashrate = -1f32;
             diff = kolka::kolka::get_diff(&conn.miner_stat.override_diff);
         } else if nonce == random {
             conn.miner_stat.accepted_shares += 1;
@@ -410,7 +395,7 @@ pub async fn handle(
                     } else {
                         reward = kolka::kolka::v1(
                             kolka,
-                            hashrate_calc,
+                            hashrate_calc.max(1f32), // v1 takes ln(), keep the reward >= 0
                             diff,
                             // conn.miner_stat.amount_of_workers,
                             conn.miner_stat.worker_slot.id(),
@@ -420,7 +405,7 @@ pub async fn handle(
                 } else {
                     reward = kolka::kolka::v1(
                         kolka,
-                        hashrate_calc,
+                        hashrate_calc.max(1f32), // v1 takes ln(), keep the reward >= 0
                         diff,
                         // conn.miner_stat.amount_of_workers,
                         conn.miner_stat.worker_slot.id(),
@@ -521,6 +506,13 @@ pub async fn handle(
             }
 
             LAST_BLOCK_HASH.store(Arc::new(new_hash_str.to_string()));
+        }
+
+        // after the reward and stats, so both use the difficulty of the job that was just solved
+        // TODO: in case the curved rewards are not implemented: add back hashrate-change trigger (15%)
+        if conn.miner_stat.accepted_shares > 4 && is_pc_diff_tier(req_difficulty.as_str()) {
+            // 1.5x to account that the average will be half the target (I don't know what this means, I copied the original comment)
+            diff = kolka::kolka::v3(avg_share_time * 1.5, expected_share_time, hashrate);
         }
 
         is_first_share = false;

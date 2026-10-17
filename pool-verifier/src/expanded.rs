@@ -47,7 +47,7 @@ pub const CASES: &[Case] = &[
     Case::new("kolka", "reverse-mixed-reuse"),
     Case::new("kolka", "overlapping-churn"),
     Case::new("kolka", "worker-limit-recovery"),
-    Case::new("lifecycle", "adaptive-mining-window"),
+    Case::new("lifecycle", "adaptive-mining-average"),
     Case::new("lifecycle", "all-tier-initial-jobs"),
     Case::new("lifecycle", "dashboard-disabled"),
     Case::new("lifecycle", "dashboard-key-boundary"),
@@ -251,7 +251,7 @@ pub async fn run(case: &Case, h: &mut Harness) -> Result<()> {
         "overlapping-churn" => overlapping_churn(h).await,
         "worker-limit-recovery" => worker_limit_recovery(h).await,
         // lifecycle
-        "adaptive-mining-window" => adaptive_mining_window(h).await,
+        "adaptive-mining-average" => adaptive_mining_average(h).await,
         "all-tier-initial-jobs" => all_tier_initial_jobs(h).await,
         "dashboard-disabled" => dashboard_key(h, false).await,
         "dashboard-key-boundary" => dashboard_key(h, true).await,
@@ -661,21 +661,28 @@ async fn estimated_hashrates(h: &Harness) -> Result<()> {
     Ok(())
 }
 
-/// A reported hashrate far above the measured one (a slow answer that claims
-/// 100 kH/s) is rejected as `BAD,Modified hashrate`.
+/// A reported hashrate far below the measured one (a slow answer that claims
+/// 0.001 H/s) is rejected as `BAD,Modified hashrate`. One far above it (5 kH/s,
+/// at most ~300 H/s measured) is accepted, overreporting gains nothing.
 async fn modified_hashrate(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "ESP8266", "modified").await?;
     let job = m.job().await?;
     sleep(Duration::from_millis(1700)).await;
     let reply = m
-        .answer_fields(job.nonce.to_string(), "100000", "chip-verifier")
+        .answer_fields(job.nonce.to_string(), "0.001", "chip-verifier")
         .await?;
     anyhow::ensure!(
         reply == "BAD,Modified hashrate",
-        "Modified hashrate not rejected"
+        "Underreported hashrate not rejected"
     );
+    let job = m.job().await?;
+    sleep(Duration::from_millis(1700)).await;
+    ensure_accepted(
+        &m.answer_fields(job.nonce.to_string(), "5000", "chip-verifier")
+            .await?,
+    )?;
     m.share().await?;
-    observation(h, "alice", 1, 1).await?;
+    observation(h, "alice", 2, 1).await?;
     Ok(())
 }
 
@@ -928,12 +935,13 @@ async fn worker_limit_recovery(h: &Harness) -> Result<()> {
 /// Real adaptive difficulty over 55 shares on a LOW tier:
 /// * the first five jobs keep the tier difficulty (11);
 /// * afterwards the adaptive floor of 5000 applies;
-/// * each share time enters the window scaled by 1.5;
-/// * the window keeps the most recent 50 samples, and its sum matches.
-async fn adaptive_mining_window(h: &Harness) -> Result<()> {
+/// * the nonce and share time of each accepted share enter exponential
+///   averages (the first share seeds them, later ones weigh 0.2);
+/// * the calculated hashrate is the ratio of the two averages.
+async fn adaptive_mining_average(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "LOW", "adaptive").await?;
-    // Independent model of the rolling window.
-    let mut expected_samples = std::collections::VecDeque::new();
+    // Independent model of the averages.
+    let (mut expected_hashes, mut expected_time) = (0.0, 0.0);
     for i in 1..=55 {
         let job = m.job().await?;
         if i <= 5 {
@@ -943,22 +951,25 @@ async fn adaptive_mining_window(h: &Harness) -> Result<()> {
         }
         ensure_accepted(&m.answer(&job, true).await?)?;
         let o = observation(h, "alice", i, 0).await?;
-        let samples = o["samples"].as_array().context("samples")?;
-        let expected_sample = o["share_time"].as_f64().context("observed share time")? * 1.5;
+        let weight = if i == 1 { 1.0 } else { 0.2 };
+        expected_hashes +=
+            (o["nonce"].as_f64().context("observed nonce")? - expected_hashes) * weight;
+        expected_time +=
+            (o["share_time"].as_f64().context("observed share time")? - expected_time) * weight;
         near(
-            samples.last().unwrap().as_f64().context("new sample")?,
-            expected_sample,
-            "share-time sample scaling",
+            o["avg_hashes"].as_f64().context("hash average")?,
+            expected_hashes,
+            "hash average",
         )?;
-        expected_samples.push_back(expected_sample);
-        if expected_samples.len() > 50 {
-            expected_samples.pop_front();
-        }
-        anyhow::ensure!(o["sample_count"] == i.min(50), "rolling window size");
         near(
-            o["sample_sum"].as_f64().unwrap(),
-            expected_samples.iter().sum(),
-            "rolling window sum",
+            o["avg_share_time"].as_f64().context("share-time average")?,
+            expected_time,
+            "share-time average",
+        )?;
+        near(
+            o["hashrate_calc"].as_f64().context("calculated hashrate")?,
+            expected_hashes / expected_time,
+            "averaged hashrate",
         )?;
     }
     Ok(())

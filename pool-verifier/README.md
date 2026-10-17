@@ -67,7 +67,7 @@ Coverage includes:
 - Connections, early/active disconnects, resets, overlapping churn, worker counts and real read deadlines.
 - SHA-1 solving, framing and size limits, malformed input, hashrate rejection/estimation, metadata sanitization, mining keys, blocks and hash chaining.
 - Full accounting with stats intervals 1, 2 and 5, reward warmup, chip eligibility, partial disconnect/shutdown and rejection boundaries.
-- Independent reward formula vectors, all tier mappings/initial jobs, adaptive thresholds, real mining adjustment and the 50-sample window.
+- Independent reward formula vectors, all tier mappings/initial jobs, adaptive thresholds, real mining adjustment and the hashrate average.
 - Worker limits/recovery, both mixed-slot reuse directions and 16,000 seeded allocator operations against a separate ordered-map model.
 - Multipart sync, immutable snapshots, in-flight work, transport failure/retry, staging-file failures, cached IPs and shutdown during an upload.
 - Configuration creation/defaults/persistence, dashboard authentication/schema, startup failures, ban persistence/enforcement and directly triggered reward/ban refresh.

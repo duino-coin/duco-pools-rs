@@ -358,7 +358,7 @@ fn time_limit(case: &Case) -> Duration {
     if case.slow {
         // Slow cases wait on 61- and 90-second production deadlines.
         Duration::from_secs(115)
-    } else if case.name == "adaptive-mining-window" {
+    } else if case.name == "adaptive-mining-average" {
         // Solves 55 jobs at adaptively raised difficulty.
         Duration::from_secs(90)
     } else {
