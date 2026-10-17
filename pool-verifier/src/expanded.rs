@@ -37,7 +37,6 @@ pub const CASES: &[Case] = &[
     Case::new("protocol", "motd-version"),
     Case::new("protocol", "invalid-hashrates"),
     Case::new("protocol", "estimated-hashrates"),
-    Case::new("protocol", "modified-hashrate"),
     Case::new("protocol", "metadata-sanitization"),
     Case::new("protocol", "metadata-defaults"),
     Case::new("protocol", "iot-boundaries"),
@@ -47,8 +46,8 @@ pub const CASES: &[Case] = &[
     Case::new("kolka", "reverse-mixed-reuse"),
     Case::new("kolka", "overlapping-churn"),
     Case::new("kolka", "worker-limit-recovery"),
+    Case::new("kolka", "esp32-downgrade"),
     Case::new("lifecycle", "adaptive-mining-average"),
-    Case::new("lifecycle", "all-tier-initial-jobs"),
     Case::new("lifecycle", "dashboard-disabled"),
     Case::new("lifecycle", "dashboard-key-boundary"),
     Case::new("lifecycle", "dashboard-schema"),
@@ -57,11 +56,9 @@ pub const CASES: &[Case] = &[
     Case::new("lifecycle", "ban-reconnect"),
     Case::new("lifecycle", "localhost-exemption"),
     Case::new("lifecycle", "refreshed-bans"),
-    Case::new("lifecycle", "refreshed-rewards"),
     Case::new("lifecycle", "startup-invalid-config"),
     Case::new("lifecycle", "startup-missing-field"),
     Case::new("lifecycle", "startup-invalid-rewards"),
-    Case::new("lifecycle", "startup-missing-tier"),
     Case::new("lifecycle", "startup-invalid-bans"),
     Case::new("lifecycle", "startup-ip-disconnect"),
     Case::new("lifecycle", "startup-master-reject"),
@@ -145,16 +142,7 @@ pub fn options(case: &Case, o: &mut Options) {
 pub fn configure_mock(name: &str, mock: &Mock) {
     let master = || mock.shared.master_reply.lock().unwrap();
     match name {
-        "startup-invalid-rewards" => mock.respond("/poolrewards.json", 200, "{"),
-        "startup-missing-tier" => {
-            mock.shared
-                .rewards
-                .lock()
-                .unwrap()
-                .as_object_mut()
-                .unwrap()
-                .remove("DUE");
-        }
+        "startup-invalid-rewards" => mock.respond("/curve.json", 200, "{"),
         "startup-invalid-bans" => mock.respond("/bans.json", 200, "{}"),
         // Enough faults to exhaust the pool's IP-lookup retries.
         "startup-ip-disconnect" => {
@@ -239,7 +227,6 @@ pub async fn run(case: &Case, h: &mut Harness) -> Result<()> {
         "motd-version" => motd_version(h).await,
         "invalid-hashrates" => invalid_hashrates(h).await,
         "estimated-hashrates" => estimated_hashrates(h).await,
-        "modified-hashrate" => modified_hashrate(h).await,
         "metadata-sanitization" => metadata(h, Metadata::Sanitized).await,
         "metadata-defaults" => metadata(h, Metadata::Defaults).await,
         "legacy-key" => metadata(h, Metadata::LegacyKey).await,
@@ -250,9 +237,9 @@ pub async fn run(case: &Case, h: &mut Harness) -> Result<()> {
         "reverse-mixed-reuse" => reverse_mixed_reuse(h).await,
         "overlapping-churn" => overlapping_churn(h).await,
         "worker-limit-recovery" => worker_limit_recovery(h).await,
+        "esp32-downgrade" => esp32_downgrade(h).await,
         // lifecycle
         "adaptive-mining-average" => adaptive_mining_average(h).await,
-        "all-tier-initial-jobs" => all_tier_initial_jobs(h).await,
         "dashboard-disabled" => dashboard_key(h, false).await,
         "dashboard-key-boundary" => dashboard_key(h, true).await,
         "dashboard-schema" => dashboard_schema(h).await,
@@ -261,7 +248,6 @@ pub async fn run(case: &Case, h: &mut Harness) -> Result<()> {
         "ban-reconnect" => ban(h, Ban::Reconnect).await,
         "localhost-exemption" => ban(h, Ban::LocalhostExempt).await,
         "refreshed-bans" => ban(h, Ban::Refreshed).await,
-        "refreshed-rewards" => refreshed_rewards(h).await,
         "rate-window-reset" => rate_window_reset(h).await,
         // sync
         "transport-disconnect-retry" => transport_retry(h, Fault::Disconnect).await,
@@ -324,12 +310,11 @@ fn master_login(h: &Harness) -> Result<Value> {
 
 // ---- Startup -------------------------------------------------------------------
 
-/// Invalid config, rewards, bans, IP lookup or master login must stop startup
+/// Invalid config, reward curve, bans, IP lookup or master login must stop startup
 /// with a recognizable diagnostic.
 async fn startup_failure(h: &mut Harness, name: &str) -> Result<()> {
     let diagnostic = match name {
         "startup-invalid-rewards" | "startup-invalid-bans" => "failed to update pool rewards",
-        "startup-missing-tier" => "Failed to get DUE",
         "startup-ip-disconnect" | "startup-master-invalid-utf8" => "failed to login",
         "startup-master-reject" | "startup-master-disconnect" => "Unknown error",
         // startup-invalid-config, startup-missing-field
@@ -373,7 +358,7 @@ async fn startup_master_delay(h: &Harness) -> Result<()> {
 // }
 
 /// With stats published only every 2 or 5 shares, every per-share reward
-/// still accrues to the balance, and every block is counted.
+/// still accrues to the balance.
 async fn interval_rewards(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "AVR", "rewards").await?;
     let mut earned = 0.0;
@@ -388,12 +373,7 @@ async fn interval_rewards(h: &Harness) -> Result<()> {
         s["verify"]["balances"]["alice"].as_f64().unwrap_or(0.0),
         earned,
         "All per-share rewards must accrue between publications",
-    )?;
-    anyhow::ensure!(
-        s["verify"]["blocks"] == 12,
-        "Block accounting differs from accepted BLOCK responses"
-    );
-    Ok(())
+    )
 }
 
 /// Three shares, fewer than the publication interval of 5, must not be lost
@@ -431,7 +411,7 @@ async fn partial_batch(h: &mut Harness, shutdown: bool) -> Result<()> {
 }
 
 /// With a publication interval of 2, rejected shares on both sides of a
-/// publication boundary change no totals, balances or blocks.
+/// publication boundary change no totals or balances.
 async fn publication_rejection_boundaries(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "AVR", "boundaries").await?;
     let mut rejects = 0;
@@ -447,7 +427,7 @@ async fn publication_rejection_boundaries(h: &Harness) -> Result<()> {
         rejects += 1;
         observation(h, "alice", i, rejects).await?;
         let after = h.state().await?;
-        for key in ["shares_total", "shares_pending", "balances", "blocks"] {
+        for key in ["shares_total", "shares_pending", "balances"] {
             anyhow::ensure!(
                 before["verify"][key] == after["verify"][key],
                 "Rejected share changed {key}"
@@ -457,11 +437,13 @@ async fn publication_rejection_boundaries(h: &Harness) -> Result<()> {
     Ok(())
 }
 
-/// For one tier per device class, the 11th share's reward matches an
-/// independent formula: `2 * ln(observed hashrate) / 1000`, plus 2.0 for a
-/// block. The balance must equal earlier block rewards plus that reward.
+/// The 11th share's reward matches an independent evaluation of the reward
+/// curve (see [`curve_reward`]) at the observed hashrate and the solved job's
+/// difficulty, plus 2.0 for a block. The balance must equal earlier block
+/// rewards plus that reward. A PC and an ESP32 (half-step worker ID) are checked.
 async fn reward_formula_mining(h: &Harness) -> Result<()> {
-    for (index, tier) in ["AVR", "ESP32", "LOW", "EXTREME"].iter().enumerate() {
+    let curve = h.mock.shared.curve.lock().unwrap().clone();
+    for (index, tier) in ["LOW", "ESP32"].iter().enumerate() {
         let user = format!("formula{index}");
         let mut m = h.miner(&user, tier, "formula").await?;
         // The first ten shares only earn block rewards (reward warmup).
@@ -471,11 +453,14 @@ async fn reward_formula_mining(h: &Harness) -> Result<()> {
                 block_extra += 2.0;
             }
         }
-        let reply = m.share().await?;
+        let job = m.job().await?;
+        let reply = m.answer(&job, true).await?;
+        ensure_accepted(&reply)?;
         let o = observation(h, &user, 11, 0).await?;
         let hashrate = o["hashrate_calc"].as_f64().context("calculated hashrate")?;
+        let worker = o["worker"].as_f64().context("worker ID")?;
         let block_reward = if reply == "BLOCK" { 2.0 } else { 0.0 };
-        let expected = 2.0 * hashrate.ln() / 1000.0 + block_reward;
+        let expected = curve_reward(&curve, hashrate, job.difficulty, worker)? + block_reward;
         near(
             o["reward"].as_f64().context("reward")?,
             expected,
@@ -492,6 +477,47 @@ async fn reward_formula_mining(h: &Harness) -> Result<()> {
         h.empty().await?;
     }
     Ok(())
+}
+
+/// Reward of one share, from the curve parameters served by the mock.
+///
+/// The daily reward is a PC/microcontroller step with a slow-device boost, an
+/// Arduino bonus and a low-end cutoff, handed over to a logarithmic GPU branch
+/// at `pc_gpu_crossover_h`. A share earns the part of a day it represents
+/// (`difficulty * 50` expected hashes at that hashrate), reduced by the Kolka
+/// drop for every worker before this one. Hashrates below 1 count as 1.
+fn curve_reward(curve: &Value, hashrate: f64, difficulty: u64, worker: f64) -> Result<f64> {
+    let p = |key: &str| curve[key].as_f64().with_context(|| format!("curve {key}"));
+    let h = hashrate.max(1.0);
+
+    let gpu_start = p("gpu_growth_start")? * p("pc_gpu_crossover_h")?;
+    let softness = p("gpu_growth_softness")?;
+    let gpu = p("gpu_base")?
+        * (1.0 + p("gpu_growth")? * (1.0 + (h / gpu_start).powf(softness)).log2() / softness);
+
+    let step = p("pc_base")?
+        + (p("mcu_base")? - p("pc_base")?)
+            / (1.0 + (h / p("mcu_pc_step_h")?).powf(p("mcu_pc_step_sharpness")?));
+    let boost = 1.0 + p("slow_boost_h")? / h;
+    let sharpness = p("cutoff_sharpness")?;
+    let cutoff = (1.0 + (p("arduino_h")? / h).powf(sharpness)).powf(p("cutoff_slope")? / sharpness);
+    let octaves = (h / p("arduino_h")?).log2() / p("arduino_bonus_width")?;
+    let bonus = 1.0 + p("arduino_bonus")? / (1.0 + octaves * octaves);
+    let pc = step * boost * cutoff * bonus;
+
+    let handover =
+        1.0 / (1.0 + (h / p("pc_gpu_crossover_h")?).powf(p("pc_gpu_crossover_sharpness")?));
+    let daily = gpu + (pc - gpu) * handover;
+
+    let drop = if h > p("h_ref")? {
+        p("drop_high")?
+    } else {
+        p("drop_low")?
+    };
+    // the exponent is the whole number of workers before this one
+    let previous_workers = (worker - 1.0).trunc();
+    let share_seconds = difficulty as f64 * 50.0 / h;
+    Ok(daily * share_seconds / 86_400.0 * drop.powf(previous_workers))
 }
 
 // ---- protocol ------------------------------------------------------------------
@@ -609,6 +635,7 @@ async fn invalid_hashrates(h: &Harness) -> Result<()> {
         let mut m = h.miner(&user, "AVR", "hashrate").await?;
         m.share().await?;
         let job = m.job().await?;
+        let before = job.difficulty;
         let reply = m
             .answer_fields(job.nonce.to_string(), rate, "chip-verifier")
             .await?;
@@ -616,8 +643,11 @@ async fn invalid_hashrates(h: &Harness) -> Result<()> {
             errors.push(format!("{rate}: {reply}"));
         }
         let job = m.job().await?;
-        if job.difficulty != 1 {
-            errors.push(format!("{rate} changed difficulty to {}", job.difficulty));
+        if job.difficulty != before {
+            errors.push(format!(
+                "{rate} changed difficulty from {before} to {}",
+                job.difficulty
+            ));
         }
         ensure_accepted(&m.answer(&job, true).await?)?;
         m.close().await?;
@@ -658,31 +688,6 @@ async fn estimated_hashrates(h: &Harness) -> Result<()> {
         m.close().await?;
         h.empty().await?;
     }
-    Ok(())
-}
-
-/// A reported hashrate far below the measured one (a slow answer that claims
-/// 0.001 H/s) is rejected as `BAD,Modified hashrate`. One far above it (5 kH/s,
-/// at most ~300 H/s measured) is accepted, overreporting gains nothing.
-async fn modified_hashrate(h: &Harness) -> Result<()> {
-    let mut m = h.miner("alice", "ESP8266", "modified").await?;
-    let job = m.job().await?;
-    sleep(Duration::from_millis(1700)).await;
-    let reply = m
-        .answer_fields(job.nonce.to_string(), "0.001", "chip-verifier")
-        .await?;
-    anyhow::ensure!(
-        reply == "BAD,Modified hashrate",
-        "Underreported hashrate not rejected"
-    );
-    let job = m.job().await?;
-    sleep(Duration::from_millis(1700)).await;
-    ensure_accepted(
-        &m.answer_fields(job.nonce.to_string(), "5000", "chip-verifier")
-            .await?,
-    )?;
-    m.share().await?;
-    observation(h, "alice", 2, 1).await?;
     Ok(())
 }
 
@@ -821,9 +826,8 @@ async fn password_boundaries(h: &Harness) -> Result<()> {
     Ok(())
 }
 
-/// The first job builds on the configured initial hash. A found block records
-/// finder, hash, algorithm, amount and a current timestamp, and the next job
-/// builds on the found hash.
+/// The first job builds on the configured initial hash, and the job after a
+/// found block builds on the found hash.
 async fn hash_chain_block_details(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "AVR", "chain").await?;
     let job = m.job().await?;
@@ -833,26 +837,6 @@ async fn hash_chain_block_details(h: &Harness) -> Result<()> {
     );
     anyhow::ensure!(m.answer(&job, true).await? == "BLOCK", "forced block");
     observation(h, "alice", 1, 0).await?;
-    let s = h.state().await?;
-    let block = &s["verify"]["block_info"][0];
-    anyhow::ensure!(
-        block["finder"] == "alice"
-            && block["hash"] == job.hash
-            && block["algorithm"] == "DUCO-S1"
-            && block["amount"] == 2.0,
-        "block details: {block}"
-    );
-    // Despite its name, the field holds epoch seconds.
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
-    let when = block["time_since_epoch_millis"]
-        .as_u64()
-        .context("block time")?;
-    anyhow::ensure!(
-        now.abs_diff(when) <= 5,
-        "block timestamp differs from current epoch seconds"
-    );
     let next = m.job().await?;
     anyhow::ensure!(next.previous == job.hash, "hash chain did not advance");
     ensure_accepted(&m.answer(&next, true).await?)?;
@@ -930,6 +914,39 @@ async fn worker_limit_recovery(h: &Harness) -> Result<()> {
     Ok(())
 }
 
+/// An ESP32 claim counts as half a worker only while the measured hashrate stays
+/// at or below the curve's `mcu_pc_step_h`. After the ten warmup shares, a faster
+/// miner moves to a full worker slot, and its disconnect releases the full weight.
+async fn esp32_downgrade(h: &mut Harness) -> Result<()> {
+    // No loopback hashrate reaches this limit, so the claim holds through the warmup.
+    h.mock.shared.curve.lock().unwrap()["mcu_pc_step_h"] = json!(1e30);
+    h.refresh().await?;
+    let mut m = h.miner("alice", "ESP32", "esp").await?;
+    for i in 1..=11 {
+        m.share().await?;
+        observation(h, "alice", i, 0).await?;
+    }
+    h.wait_state("ESP32 half slot below the limit", |s| {
+        stat(s, "esp").is_some_and(|m| m["c"] == 0.5)
+            && s["workers"]["alice"]["active_half_steps"] == 1
+    })
+    .await?;
+
+    // Every measured hashrate exceeds this limit, from the very next share on.
+    h.mock.shared.curve.lock().unwrap()["mcu_pc_step_h"] = json!(1.0);
+    h.refresh().await?;
+    m.share().await?;
+    let o = observation(h, "alice", 12, 0).await?;
+    anyhow::ensure!(o["worker"] == 1.0, "ESP32 not moved to a full slot: {o}");
+    h.wait_state("full worker weight", |s| {
+        stat(s, "esp").is_some_and(|m| m["c"] == 1.0)
+            && s["workers"]["alice"]["active_half_steps"] == 2
+    })
+    .await?;
+    m.close().await?;
+    h.empty().await
+}
+
 // ---- lifecycle -----------------------------------------------------------------
 
 /// Real adaptive difficulty over 55 shares on a LOW tier:
@@ -939,18 +956,25 @@ async fn worker_limit_recovery(h: &Harness) -> Result<()> {
 ///   averages (the first share seeds them, later ones weigh 0.2);
 /// * the calculated hashrate is the ratio of the two averages.
 async fn adaptive_mining_average(h: &Harness) -> Result<()> {
+    let expected_sharetime = h.mock.shared.curve.lock().unwrap()["expected_sharetime"]
+        .as_f64()
+        .context("curve expected_sharetime")?;
     let mut m = h.miner("alice", "LOW", "adaptive").await?;
     // Independent model of the averages.
     let (mut expected_hashes, mut expected_time) = (0.0, 0.0);
+    // every first job has difficulty 100; later ones follow the last hashrate
+    let mut expected_difficulty = 100;
     for i in 1..=55 {
         let job = m.job().await?;
-        if i <= 5 {
-            anyhow::ensure!(job.difficulty == 11, "Adjusted before four accepted shares");
-        } else {
-            anyhow::ensure!(job.difficulty >= 5000, "Adaptive floor not applied");
-        }
+        anyhow::ensure!(
+            job.difficulty == expected_difficulty,
+            "share {i}: difficulty {} instead of {expected_difficulty}",
+            job.difficulty
+        );
         ensure_accepted(&m.answer(&job, true).await?)?;
         let o = observation(h, "alice", i, 0).await?;
+        let hashrate = o["hashrate"].as_f64().context("observed hashrate")?;
+        expected_difficulty = ((hashrate * expected_sharetime / 50.0).round() as u64).max(1);
         let weight = if i == 1 { 1.0 } else { 0.2 };
         expected_hashes +=
             (o["nonce"].as_f64().context("observed nonce")? - expected_hashes) * weight;
@@ -971,35 +995,6 @@ async fn adaptive_mining_average(h: &Harness) -> Result<()> {
             expected_hashes / expected_time,
             "averaged hashrate",
         )?;
-    }
-    Ok(())
-}
-
-/// Each tier's first job uses that tier's fixture difficulty (1..=14, in order).
-async fn all_tier_initial_jobs(h: &Harness) -> Result<()> {
-    let tiers = [
-        "AVR",
-        "MEGA",
-        "ARM",
-        "DUE",
-        "ESP8266",
-        "ESP8266H",
-        "ESP8266N",
-        "ESP8266NH",
-        "ESP32",
-        "ESP32S",
-        "LOW",
-        "MEDIUM",
-        "NET",
-        "EXTREME",
-    ];
-    for (i, tier) in tiers.iter().enumerate() {
-        let mut m = h.miner("alice", tier, "tier").await?;
-        let job = m.job().await?;
-        anyhow::ensure!(job.difficulty == i as u64 + 1, "initial {tier}");
-        ensure_accepted(&m.answer(&job, true).await?)?;
-        m.close().await?;
-        h.empty().await?;
     }
     Ok(())
 }
@@ -1026,7 +1021,8 @@ async fn dashboard_key(h: &Harness, enabled: bool) -> Result<()> {
     Ok(())
 }
 
-/// Published miner stats have the expected field types and values.
+/// Published miner stats have the expected field types and values. Every
+/// first job has difficulty 100.
 async fn dashboard_schema(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "AVR", "schema").await?;
     m.share().await?;
@@ -1047,7 +1043,7 @@ async fn dashboard_schema(h: &Harness) -> Result<()> {
         v["h"] == 1000.0
             && v["a"] == 1
             && v["r"] == 0
-            && v["d"] == 1
+            && v["d"] == 100
             && v["c"] == 1.0
             && v["ip"] == "127.0.0.1",
         "schema values: {v}"
@@ -1123,30 +1119,6 @@ async fn ban(h: &mut Harness, variant: Ban) -> Result<()> {
     Ok(())
 }
 
-/// A refresh applies new tier difficulties to new miners and updates the
-/// DUE / ESP8266NH difficulty caches.
-async fn refreshed_rewards(h: &mut Harness) -> Result<()> {
-    let mut m = h.miner("alice", "AVR", "old").await?;
-    m.share().await?;
-    {
-        let mut rewards = h.mock.shared.rewards.lock().unwrap();
-        rewards["AVR"]["difficulty"] = json!(3);
-        rewards["DUE"]["difficulty"] = json!(7);
-        rewards["ESP8266NH"]["difficulty"] = json!(12);
-    }
-    h.refresh().await?;
-    let mut new = h.miner("bob", "AVR", "new").await?;
-    let job = new.job().await?;
-    anyhow::ensure!(job.difficulty == 3, "Refreshed reward difficulty not used");
-    ensure_accepted(&new.answer(&job, true).await?)?;
-    let s = h.state().await?;
-    anyhow::ensure!(
-        s["verify"]["due_cache"] == 7 && s["verify"]["esp_cache"] == 12,
-        "Difficulty caches not refreshed"
-    );
-    Ok(())
-}
-
 /// The real 61-second rate window expires, and shares are accepted again (slow).
 async fn rate_window_reset(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "AVR", "window").await?;
@@ -1182,7 +1154,7 @@ async fn transport_retry(h: &Harness, fault: Fault) -> Result<()> {
     h.mock.fault("/pool_sync/", fault);
     h.wait_log("Error while syncing:").await?;
     let after = h.state().await?;
-    for key in ["shares_total", "shares_pending", "balances", "blocks"] {
+    for key in ["shares_total", "shares_pending", "balances"] {
         anyhow::ensure!(
             before[key] == after["verify"][key],
             "Transport failure lost {key}"
@@ -1340,7 +1312,7 @@ mod tests {
 
     #[tokio::test]
     async fn scripted_mock_and_transport_faults_are_observable() {
-        let mock = Mock::start(false, false).await.unwrap();
+        let mock = Mock::start(false).await.unwrap();
         let client = reqwest::Client::builder()
             .no_proxy()
             .timeout(Duration::from_secs(2))

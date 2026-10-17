@@ -38,7 +38,6 @@ pub struct MinerStat {
     // NEVER SERIALIZED:
     pub last_share_reset: u64,
     pub reject_shares: Option<&'static str>, // the full "BAD,<reason>\n" response
-    pub override_diff: CompactString,
     pub is_req_diff_esp32: bool, // because "ESP32" only adds 0.5..
 }
 
@@ -175,33 +174,6 @@ impl<'a> serde::Serialize for StatsWithContext<'a> {
             map.serialize_entry(entry.key(), &ctx)?;
         }
         map.end()
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct BlockInfos {
-    time_since_epoch_millis: u64,
-    finder: CompactString,
-    amount: f32, // reward
-    algorithm: CompactString,
-    hash: String,
-}
-
-impl BlockInfos {
-    pub fn new(
-        time_since_epoch_millis: u64,
-        finder: CompactString,
-        amount: f32,
-        algorithm: CompactString,
-        hash: String,
-    ) -> Self {
-        BlockInfos {
-            time_since_epoch_millis,
-            finder,
-            amount,
-            algorithm,
-            hash,
-        }
     }
 }
 

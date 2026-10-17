@@ -1,6 +1,6 @@
 # Pool verifier
 (vibe-coded (read: I didn't read the code, but verified it against a known-working build of the pools) with GPT-6 Astra) <br/>
-A standalone Rust CLI that checks the current Rust pool working tree against isolated loopback services. It contains **104 scenarios**: 99 process scenarios and 7 injected internal-test scenarios. The default runs 101; `--slow` includes three real-time checks. These are functional checks, not exhaustive proof. An additional opt-in benchmark suite measures throughput against a saved, measured baseline using the pool's `bench` feature.
+A standalone Rust CLI that checks the current Rust pool working tree against isolated loopback services. It contains **95 scenarios**: 88 process scenarios and 7 injected internal-test scenarios. The default runs 92; `--slow` includes three real-time checks. These are functional checks, not exhaustive proof. An additional opt-in benchmark suite measures throughput against a saved, measured baseline using the pool's `bench` feature.
 
 ## Run
 
@@ -67,7 +67,7 @@ Coverage includes:
 - Connections, early/active disconnects, resets, overlapping churn, worker counts and real read deadlines.
 - SHA-1 solving, framing and size limits, malformed input, hashrate rejection/estimation, metadata sanitization, mining keys, blocks and hash chaining.
 - Full accounting with stats intervals 1, 2 and 5, reward warmup, chip eligibility, partial disconnect/shutdown and rejection boundaries.
-- Independent reward formula vectors, all tier mappings/initial jobs, adaptive thresholds, real mining adjustment and the hashrate average.
+- Independent reward formula vectors, an independent reward-curve evaluation of real mining, tier mappings, adaptive thresholds, curve difficulty and the hashrate average.
 - Worker limits/recovery, both mixed-slot reuse directions and 16,000 seeded allocator operations against a separate ordered-map model.
 - Multipart sync, immutable snapshots, in-flight work, transport failure/retry, staging-file failures, cached IPs and shutdown during an upload.
 - Configuration creation/defaults/persistence, dashboard authentication/schema, startup failures, ban persistence/enforcement and directly triggered reward/ban refresh.
@@ -80,9 +80,9 @@ Every run refreshes `work/source-next` from current `src`, `Cargo.toml`, `Cargo.
 
 Adapters operate only in the disposable copy:
 
-1. Redirect public-IP and sync URLs to loopback mocks. Existing configuration redirects reward/ban downloads and master TCP requests.
-2. Add authenticated read-only observations: pending/total counters, balances, block contents, hash state, difficulty caches, and mining calculation inputs/results captured at iteration boundaries. The observations do not recalculate or replace mining outcomes. Block snapshots add `Clone` only to the disposable type. Observation overhead can affect timing; tests do not claim performance equivalence.
-3. Accept `shutdown` on stdin through the existing shutdown channel. A `refresh` test command invokes the actual `resync_pool_rewards` operation; it does not change scheduler timing or refresh behavior.
+1. Redirect public-IP and sync URLs to loopback mocks. Existing configuration redirects reward-curve/ban downloads and master TCP requests.
+2. Add authenticated read-only observations: pending/total counters, balances, hash state, difficulty caches, and mining calculation inputs/results captured at iteration boundaries. The observations do not recalculate or replace mining outcomes. Observation overhead can affect timing; tests do not claim performance equivalence.
+3. Accept `shutdown` on stdin through the existing shutdown channel. A `refresh` test command invokes the actual `resync_curve` operation; it does not change scheduler timing or refresh behavior.
 4. Append verifier-owned `injected/*.rs` tests to corresponding modules. Each internal scenario runs exactly one named test in its own process and directory, avoiding shared-global and current-directory contamination.
 
 Replacement anchors must match once; drift is a setup error. Update the adapter instead of changing pool behavior. The old hard-coded and current configurable sync URL forms remain supported.

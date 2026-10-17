@@ -1,134 +1,47 @@
-use crate::POOL_REWARDS;
+use crate::sync::sync::Curve;
+use std::sync::Arc;
 
-#[derive(Clone)]
-pub struct Kolka {
-    highest_pc_diff: u32,
-    highest_esp_diff: u32,
-    highest_avr_diff: u32,
-    gpu_mining_percentage: f32,
-    pc_mining_percentage: f32,
-    esp_mining_percentage: f32,
-    avr_mining_percentage: f32,
+// based on the values provided by the master server, this function calculates the estimated daily reward that should be given to a device of this hashrate
+pub fn calculate_daily_reward(hashrate: f64, curve: &Arc<Curve>) -> f64 {
+
+    let phi = curve.gpu_base
+        * (1.0
+            + ((curve.gpu_growth
+                * (1.0
+                    + (hashrate / (curve.gpu_growth_start * curve.pc_gpu_crossover_h))
+                        .powf(curve.gpu_growth_softness))
+                .log2())
+                / curve.gpu_growth_softness));
+
+    phi + ((((((curve.pc_base
+        + ((curve.mcu_base - curve.pc_base)
+            / (1.0 + (hashrate / curve.mcu_pc_step_h).powf(curve.mcu_pc_step_sharpness))))
+        * (1.0 + (curve.slow_boost_h / hashrate)))
+        * (1.0 + (curve.arduino_h / hashrate).powf(curve.cutoff_sharpness))
+            .powf(curve.cutoff_slope / curve.cutoff_sharpness))
+        * (1.0
+            + (curve.arduino_bonus
+                / (1.0
+                    + ((hashrate / curve.arduino_h).log2() / curve.arduino_bonus_width)
+                        .powi(2)))))
+        - phi)
+        / (1.0 + (hashrate / curve.pc_gpu_crossover_h).powf(curve.pc_gpu_crossover_sharpness)))
 }
 
-impl Kolka {
-    pub fn new() -> Self {
-        Kolka {
-            highest_pc_diff: (get_diff("NET") as f32 * 5.19202).round() as u32,
-            highest_esp_diff: get_diff("ESP32"),
-            highest_avr_diff: get_diff("DUE"),
-            gpu_mining_percentage: get_decrease_perc("EXTREME") * 0.01,
-            pc_mining_percentage: get_decrease_perc("NET") * 0.01,
-            esp_mining_percentage: get_decrease_perc("ESP32") * 0.01,
-            avr_mining_percentage: get_decrease_perc("AVR") * 0.01,
-        }
-    }
+pub fn calculate_difficulty(hashrate: f64, curve: &Arc<Curve>) -> u32 {
+    let diff = hashrate * curve.expected_sharetime as f64 / 50.0;
+    (diff.round() as u32).max(1)
 }
 
-impl Default for Kolka {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub fn calculate_reward(hashrate: f32, amount_of_workers: f32, difficulty: u32, curve: &Arc<Curve>) -> f32 {
+    let drop = if hashrate as f64 > curve.h_ref { curve.drop_high } else { curve.drop_low };
 
-pub fn v1(
-    kolka: &Kolka,
-    hashrate: f32,
-    difficulty: u32,
-    amount_of_workers: f32,
-    reward_div: u32,
-) -> f32 {
-    let mut output = hashrate.ln() / reward_div as f32;
-
-    if difficulty > kolka.highest_pc_diff {
-        // GPU, Extreme PC
-        output = 2f32
-            * (output
-                * kolka
-                    .gpu_mining_percentage
-                    .powi((amount_of_workers - 1.0) as i32));
-    } else if difficulty > kolka.highest_esp_diff {
-        // PC
-        output = 2f32
-            * (output
-                * kolka
-                    .pc_mining_percentage
-                    .powi((amount_of_workers - 1.0) as i32));
-    } else if difficulty > kolka.highest_avr_diff {
-        // ESP
-        output = 2f32
-            * (output
-                * kolka
-                    .esp_mining_percentage
-                    .powi((amount_of_workers - 1.0) as i32));
-    } else {
-        // AVR
-        output = 2f32
-            * (output
-                * kolka
-                    .avr_mining_percentage
-                    .powi((amount_of_workers - 1.0) as i32));
-    }
-    output
-}
-
-pub fn v2(difficulty: &str) -> &str {
-    match difficulty {
-        "AVR" => "MEGA",
-        "MEGA" => "ARM",
-        "ARM" => "DUE",
-        "DUE" => "ESP8266",
-        "ESP8266" => "ESP8266H",
-        "ESP8266N" => "ESP8266NH",
-        "ESP32" => "ESP32S",
-        "LOW" => "MEDIUM",
-        "MEDIUM" => "NET",
-        "NET" => "EXTREME",
-        _ => difficulty,
-    }
-}
-
-pub fn v2_reverse(difficulty: &str) -> &str {
-    match difficulty {
-        "AVR" => "AVR",
-        "MEGA" => "AVR",
-        "ARM" => "MEGA",
-        "DUE" => "ARM",
-        "ESP8266NH" => "ESP8266N",
-        "ESP8266H" => "ESP8266",
-        "ESP32" => "ESP32",
-        "MEDIUM" => "LOW",
-        "NET" => "MEDIUM",
-        "EXTREME" => "NET",
-        _ => difficulty,
-    }
-}
-pub fn v3(sharetime: f32, expected_sharetime: u16, hashrate: f32) -> u32 {
-    let mut new_diff_temp = ((hashrate / 100f32).floor() * expected_sharetime as f32).round();
-
-    let deviation = sharetime / expected_sharetime as f32;
-    const HASHRATE_SCALING_FACTOR: f32 = 0.28;
-    if deviation < 0.9 {
-        new_diff_temp *= 1.0 + HASHRATE_SCALING_FACTOR;
-    } else if deviation > 1.0 {
-        new_diff_temp *= 1.0 - HASHRATE_SCALING_FACTOR;
-    }
-    const MIN_DIFF: u32 = 5000;
-    let mut new_diff = new_diff_temp as u32;
-    new_diff = MIN_DIFF.max(new_diff);
-
-    new_diff
-}
-
-pub fn get_diff(req_diff: &str) -> u32 {
-    let diff = POOL_REWARDS
-        .get(req_diff)
-        .unwrap_or_else(|| panic!("Failed to get {req_diff}"))
-        .difficulty;
-    diff as u32
-}
-
-fn get_decrease_perc(req_diff: &str) -> f32 {
-    let diff = POOL_REWARDS.get(req_diff).unwrap().kolka_decrease_perc;
-    diff as f32
+    // the nonce is within `difficulty * 100`, so the average lies at roughly `difficulty * 50`
+    // therefore, we expect a miner to solve a job at a given difficulty on average within `difficulty * 50 / hashrate`
+    let average_expected_sharetime = difficulty as f32 * 50.0 / hashrate;
+    // the reward per share is defined by how much of a day the sharetime makes up
+    let reward = (calculate_daily_reward(hashrate as f64, curve) as f32 * average_expected_sharetime / 86_400.0)
+        * drop.powi((amount_of_workers - 1.0) as i32) as f32;
+    // a NaN would stick to the balance for good, a negative one would take coins away
+    if reward.is_finite() { reward.max(0.0) } else { 0.0 }
 }

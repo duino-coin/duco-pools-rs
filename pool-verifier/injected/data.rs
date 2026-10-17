@@ -5,8 +5,8 @@
 mod verifier_tests {
     use super::*;
 
-    #[test]
-    fn bans_persistence() {
+    #[tokio::test]
+    async fn bans_persistence() {
         std::fs::create_dir_all("config").unwrap();
 
         // A missing file is a valid empty ban list.
@@ -16,7 +16,7 @@ mod verifier_tests {
         // Both independent sets must survive a save/load round trip.
         bans.banned_ips.insert(CompactString::from("127.0.0.2"));
         bans.banned_usernames.insert("alice".into());
-        bans.save_bans().unwrap();
+        bans.save_bans().await.unwrap();
         let bans = Bans::load_bans().unwrap();
         assert!(bans.banned_ips.contains("127.0.0.2"));
         assert!(bans.banned_usernames.contains("alice"));

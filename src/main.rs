@@ -11,9 +11,7 @@ mod web;
 
 use crate::cfg::config::PoolConfig;
 use crate::data::data::{Bans, ConnId, Connection};
-use crate::kolka::kolka::Kolka;
 use compact_str::CompactString;
-use dashmap::DashMap;
 use env_logger::Target;
 use log::{debug, error, info, LevelFilter};
 use mimalloc::MiMalloc;
@@ -22,6 +20,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
+use arc_swap::ArcSwap;
 use sysinfo::System;
 use tokio::net::TcpListener;
 // tokio's Child reaps itself in the background when dropped, std's leaves a zombie
@@ -30,6 +29,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use crate::sync::sync::Curve;
 
 pub static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
@@ -62,10 +62,9 @@ impl Drop for ConnectionCounterGuard {
 // doesn't look nice, but it's fine because these live during the entire runtime anyway
 // and it's cleaner than cloning hundreds of arcs..
 pub static BANS: LazyLock<Mutex<Bans>> = LazyLock::new(|| Mutex::new(Bans::load_bans().unwrap()));
-pub static POOL_REWARDS: LazyLock<DashMap<String, sync::sync::Difficulty>> =
-    LazyLock::new(DashMap::new);
 
-pub static KOLKA: OnceLock<Kolka> = OnceLock::new();
+pub static CURVE_VALUES: LazyLock<ArcSwap<Curve>> = LazyLock::new(|| ArcSwap::from_pointee(Curve::new()));
+
 
 pub static CONFIG: OnceLock<PoolConfig> = OnceLock::new();
 
@@ -122,7 +121,7 @@ async fn main() {
     }
     // TODO: impl ngrok
 
-    sync::sync::resync_pool_rewards(&config)
+    sync::sync::resync_curve(&config)
         .await
         .expect("failed to update pool rewards");
 
@@ -173,8 +172,18 @@ async fn main() {
     CONFIG.get_or_init(|| config);
     #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
     let sys_clone = sys.clone();
+    // stops the sync loop between syncs, aborting it could cut off an upload the server already took
+    let sync_token = CancellationToken::new();
+    #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
+    let sync_stop = sync_token.clone();
+    // returns the last pool ip, so the final sync can fall back to it
     let sync_thread = tokio::spawn(async move {
         info!("Starting sync thread..");
+        #[cfg_attr(
+            not(any(feature = "dummy_sync", not(debug_assertions))),
+            allow(unused_mut)
+        )]
+        let mut last_ip = String::new();
         // only start a sync thread if: we want dummy syncs or we are in release mode
         #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
         {
@@ -182,11 +191,10 @@ async fn main() {
             let pool_reward_sync_factor = (3600f64 / config.sync_time as f64).ceil() as u64;
             let mut count = 0;
             let sys = &sys_clone;
-            let mut last_ip = String::new();
             loop {
                 if count >= pool_reward_sync_factor {
                     count = 0;
-                    match sync::sync::resync_pool_rewards(config).await {
+                    match sync::sync::resync_curve(config).await {
                         Ok(_) => {
                             info!("Resynced pool rewards.");
                         }
@@ -208,13 +216,18 @@ async fn main() {
                 };
 
                 count += 1;
-                tokio::time::sleep(tokio::time::Duration::from_secs(config.sync_time as u64)).await;
+                tokio::select! {
+                    () = tokio::time::sleep(tokio::time::Duration::from_secs(config.sync_time as u64)) => {}
+                    () = sync_stop.cancelled() => break,
+                }
             }
         }
+        last_ip
     });
 
     ctrlc::set_handler(move || {
-        tx.send("s".to_owned()).unwrap();
+        // the receiver is gone once shutdown has started
+        let _ = tx.send("s".to_owned());
     })
     .expect("Failed to handle ctrl-c");
 
@@ -226,13 +239,16 @@ async fn main() {
     if update_thread.is_some() {
         update_thread.take().unwrap().abort();
     }
-    sync_thread.abort();
+    sync_token.cancel();
+    // wait for a running sync, so the final one doesn't upload the same work again
+    #[cfg_attr(debug_assertions, allow(unused_variables))]
+    let last_ip = sync_thread.await.unwrap_or_default();
     // last sync before shutdown
     #[cfg(not(debug_assertions))]
     {
-        sync::sync::sync(&sys, "")
-            .await
-            .expect("failed to sync database");
+        if let Err(err) = sync::sync::sync(&sys, &last_ip).await {
+            error!("Final sync failed: {err}");
+        }
         sync::sync::logout(crate::CONFIG.get().unwrap())
             .await
             .expect("failed to logout");
@@ -243,8 +259,6 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
     // set max open file descriptors to the maximum the platform allows, so we can handle *a lot* of sockets
     rlimit::increase_nofile_limit(u64::MAX).expect("failed to increase nofile limit");
     info!("Starting tcp server...");
-
-    KOLKA.get_or_init(Kolka::new);
 
     let config = CONFIG.get().unwrap();
 
@@ -293,7 +307,7 @@ async fn start_tcp(mut rx: UnboundedReceiver<String>) {
                                         }
                                     }
                                 };
-                                // handler::handler::handle_close(&mut conn);
+
                                 // to drop the socket and (hopefully) close it
                                 drop(conn);
                             } => {

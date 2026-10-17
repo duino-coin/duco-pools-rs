@@ -1,0 +1,23 @@
+{
+  "gpu_base": 0.7,
+  "gpu_growth": 0.9,
+  "gpu_growth_start": 0.9,
+  "pc_gpu_crossover_h": 2100000.0,
+  "gpu_growth_softness": 0.2,
+  "pc_base": 3.12,
+  "mcu_base": 5.91,
+  "mcu_pc_step_h": 195000.0,
+  "mcu_pc_step_sharpness": 10.0,
+  "slow_boost_h": 70.0,
+  "arduino_h": 340.0,
+  "cutoff_sharpness": 100.0,
+  "cutoff_slope": -4.0,
+  "arduino_bonus": 0.42,
+  "arduino_bonus_width": 0.2,
+  "pc_gpu_crossover_sharpness": 0.9,
+  "drop_low": 0.9393,
+  "drop_high": 0.7456,
+  "h_ref": 200000.0,
+  "expected_sharetime": 10,
+  "block_probability": 28110000
+}

@@ -82,10 +82,11 @@ pub async fn handle_connection(conn: &mut Connection) -> Result<(), anyhow::Erro
             }
 
             if data_split[0] == "JOB" {
-                if data_len == 1 {
+                if data_len == 1 || (data_len > 1 && data_split[1].is_empty()) {
                     conn.write("BAD,No username specified\n").await?;
                     return Ok(());
                 }
+
                 if conn.miner_stat.username.is_empty() {
                     conn.miner_stat.username = CompactString::from(data_split[1]);
                 } else if conn.miner_stat.username != data_split[1] {
@@ -104,7 +105,7 @@ pub async fn handle_connection(conn: &mut Connection) -> Result<(), anyhow::Erro
 
         if is_job {
             // hand the line over, its buffer is reused for the rest of the session
-            mining::mining::handle(conn, std::mem::take(&mut data), config, false).await?;
+            mining::mining::handle(conn, std::mem::take(&mut data), config).await?;
             break;
         }
     }

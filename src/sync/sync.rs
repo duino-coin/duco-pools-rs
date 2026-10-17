@@ -1,6 +1,6 @@
 use crate::cfg::config::PoolConfig;
 use crate::mining::{mining, stats};
-use crate::{data, kolka, BANS, CONFIG, CONNECTIONS, POOL_REWARDS};
+use crate::{data, BANS, CONFIG, CONNECTIONS, CURVE_VALUES};
 use compact_str::CompactString;
 use dashmap::DashMap;
 use data::data::LoginInfos;
@@ -10,7 +10,7 @@ use log::{debug, error, info};
 use reqwest::multipart;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashSet};
 use std::process::exit;
 #[cfg(any(all(not(feature = "dummy_sync"), not(debug_assertions)), test))]
 use std::sync::atomic::AtomicU64;
@@ -77,8 +77,6 @@ impl Serialize for RewardSnapshot {
 fn acknowledge_uploaded_work(
     rewards: &RewardSnapshot,
     balances: &DashMap<CompactString, f32>,
-    blocks: &mut Vec<stats::BlockInfos>,
-    big_blocks: usize,
     pending_shares: &AtomicU64,
     block_increase: u64,
 ) {
@@ -88,23 +86,109 @@ fn acknowledge_uploaded_work(
             *pending == 0.0
         });
     }
-    blocks.drain(..big_blocks);
     pending_shares.fetch_sub(block_increase, Relaxed);
 }
 
-//#[serde(skip_serializing_if = "Option::is_none")]
-#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
-pub struct Difficulty {
-    pub difficulty: u64,
-    pub reward: u32,
-    pub max_hashrate: u64,
-    pub min_hashrate: u64,
-    pub kolka_decrease_perc: u8,
-    #[serde(rename = "expected_sharetime")]
-    pub expected_share_time: u16,
-    pub block_chance: u32,
+// query of the sync request, serialized so every value is url-encoded
+#[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct SyncQuery<'a> {
+    host: &'a str,
+    port: u32,
+    version: &'a str,
+    identifier: &'a str,
+    name: &'a str,
+    block_increase: u64,
+    cpu: f32,
+    ram: f32,
+    connections: usize,
 }
 
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+pub struct Curve {
+    pub pc_base: f64, // Base pay for PCs
+    pub mcu_base: f64, // Base pay for microcontrollers
+    pub mcu_pc_step_h: f64, // Hashrate where pay steps from the microcontroller level to the PC level
+    pub mcu_pc_step_sharpness: f64, // How abrupt that step is
+    pub slow_boost_h: f64, // Extra pay for slow devices
+
+    pub arduino_h: f64, // Arduino hashrate: the centre of the bonus and the low-end cutoff point
+    pub cutoff_sharpness: f64, // How fast pay falls below the Arduino hashrate
+    pub cutoff_slope: f64, // How sharp the cutoff’s corner is
+    pub arduino_bonus: f64, // Height of the Arduino bonus
+    pub arduino_bonus_width: f64, // Width of that bonus
+
+    pub pc_gpu_crossover_h: f64, // Hashrate where the PC branch hands over to the GPU branch
+    pub pc_gpu_crossover_sharpness: f64, // How abrupt that handover is
+
+    pub gpu_base: f64, // Starting pay of the GPU branch
+    pub gpu_growth: f64, // Pay added per doubling of hashrate on the GPU branch
+    pub gpu_growth_start: f64, // Where that growth begins, as a multiple of pc_gpu_crossover_h
+    pub gpu_growth_softness: f64, // How gradually that growth starts
+
+    pub h_ref: f64, // Hashrate when the switch from drop_low to drop_high happens
+    pub drop_low: f64, // Kolka efficiency drop for devices slower than h_ref
+    pub drop_high: f64, // Kolka efficiency drop for devices faster than h_ref
+
+    pub expected_sharetime: u8, // the sharetime in seconds want to normalize for (u8 allows up to 255)
+    pub block_probability: u32,
+}
+impl Default for Curve {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Curve {
+    pub fn new() -> Curve {
+        Curve {
+            pc_base: 0.0,
+            mcu_base: 0.0,
+            mcu_pc_step_h: 0.0,
+            mcu_pc_step_sharpness: 0.0,
+            slow_boost_h: 0.0,
+            arduino_h: 0.0,
+            cutoff_sharpness: 0.0,
+            cutoff_slope: 0.0,
+            arduino_bonus: 0.0,
+            arduino_bonus_width: 0.0,
+            pc_gpu_crossover_h: 0.0,
+            pc_gpu_crossover_sharpness: 0.0,
+            gpu_base: 0.0,
+            gpu_growth: 0.0,
+            gpu_growth_start: 0.0,
+            gpu_growth_softness: 0.0,
+            h_ref: 0.0,
+            drop_low: 0.0,
+            drop_high: 0.0,
+            expected_sharetime: 100,
+            block_probability: 28110000,
+        }
+    }
+
+    // serde_json only yields finite numbers, so this checks what the reward and
+    // difficulty calculations divide by, and what would panic or flood the pool
+    fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let divisors = [
+            ("mcu_pc_step_h", self.mcu_pc_step_h),
+            ("arduino_h", self.arduino_h),
+            ("cutoff_sharpness", self.cutoff_sharpness),
+            ("arduino_bonus_width", self.arduino_bonus_width),
+            ("pc_gpu_crossover_h", self.pc_gpu_crossover_h),
+            ("gpu_growth_start", self.gpu_growth_start),
+            ("gpu_growth_softness", self.gpu_growth_softness),
+        ];
+        if let Some((name, _)) = divisors.iter().find(|(_, value)| *value <= 0.0) {
+            return Err(format!("curve: {name} must be positive").into());
+        }
+        // block_probability is the exclusive bound of a random range
+        if self.expected_sharetime == 0 || self.block_probability == 0 {
+            return Err("curve: expected_sharetime and block_probability must be positive".into());
+        }
+        Ok(())
+    }
+}
 #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
 pub async fn get_pool_ip(config: &&PoolConfig) -> Result<String, Box<dyn std::error::Error>> {
     debug!("Getting ip..");
@@ -139,18 +223,7 @@ pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>
         .await
         .unwrap();
     debug!("Connected to server");
-    let mut reader = BufReader::new(&mut socket);
-    let received: Vec<u8> = reader.fill_buf().await?.to_vec();
-    debug!("Received: {}", received.len());
-    reader.consume(received.len());
-
-    let data = String::from_utf8(received).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Couldn't parse received string as utf8",
-        )
-    })?;
-    debug!("Received: {}", data);
+    let data = read_master_reply(&mut socket).await?;
     if data.starts_with(&config.server_version) {
         let info_str = serde_json::to_string(&infos)?;
         debug!("Sending {info_str}");
@@ -160,18 +233,7 @@ pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>
         socket.flush().await?;
     }
     debug!("Waiting for response..");
-    reader = BufReader::new(&mut socket); // no clue why I need to do it like this, but the borrow checker is happy now
-    let received: Vec<u8> = reader.fill_buf().await?.to_vec();
-
-    reader.consume(received.len());
-
-    let data = String::from_utf8(received).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Couldn't parse received string as utf8",
-        )
-    })?;
-    debug!("Received: {}", data);
+    let data = read_master_reply(&mut socket).await?;
     if data == "LoginOK" {
         info!("Successfully logged in");
     } else {
@@ -184,7 +246,29 @@ pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>
 pub async fn logout(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
     let mut socket =
         TcpStream::connect(format!("{}:{}", config.server_ip, config.server_port)).await?;
-    let mut reader = BufReader::new(&mut socket);
+    let data = read_master_reply(&mut socket).await?;
+    // the greeting comes first, the logout reply only after our request
+    if data.starts_with(&config.server_version) {
+        socket
+            .write_all(format!("PoolLogout,{}", config.pool_id).as_bytes())
+            .await?;
+        socket.flush().await?;
+        let data = read_master_reply(&mut socket).await?;
+        if data == "LogoutOK" {
+            info!("Successfully logged out");
+            return Ok(());
+        }
+        error!("Unknown error, server returned {data} in logout");
+    } else {
+        error!("Unknown error, server greeted with {data} in logout");
+    }
+    Err(Box::from("Unknown error"))
+}
+
+// the master server answers each step with one unterminated message
+#[cfg(not(debug_assertions))]
+async fn read_master_reply(socket: &mut TcpStream) -> Result<String, Box<dyn std::error::Error>> {
+    let mut reader = BufReader::new(socket);
     let received: Vec<u8> = reader.fill_buf().await?.to_vec();
     reader.consume(received.len());
 
@@ -194,59 +278,46 @@ pub async fn logout(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error
             "Couldn't parse received string as utf8",
         )
     })?;
-    if data.starts_with(&config.server_version) {
-        socket
-            .write_all(format!("PoolLogout,{}", config.pool_id).as_bytes())
-            .await?;
-        socket.flush().await?;
-    } else if data == "LogoutOK" {
-        info!("Successfully logged out");
-    } else {
-        error!("Unknown error, server returned {data} in logout");
-        return Err(Box::from("Unknown error"));
-    }
-    Ok(())
+    debug!("Received: {}", data);
+    Ok(data)
 }
 
-pub async fn resync_pool_rewards(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
-    let reward_content = update_pool_rewards(config).await?;
-    let pool_rewards: HashMap<String, Difficulty> = serde_json::from_str(&reward_content)?;
+pub async fn resync_curve(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let curve_content = update_curve(config).await?;
+    let pool_rewards: Curve = serde_json::from_str(&curve_content)?;
+    // keeps the previous curve if the new one is unusable
+    pool_rewards.validate()?;
 
-    for (key, val) in pool_rewards {
-        POOL_REWARDS.insert(key, val);
-    }
-
-    mining::DUE_DIFF_CACHE.store(kolka::kolka::get_diff("DUE"), Relaxed);
-    mining::ESP8266NH_DIFF_CACHE.store(kolka::kolka::get_diff("ESP8266NH"), Relaxed);
+    CURVE_VALUES.store(Arc::new(pool_rewards));
 
     Ok(())
 }
 
-async fn update_pool_rewards(config: &PoolConfig) -> Result<String, Box<dyn std::error::Error>> {
+async fn update_curve(config: &PoolConfig) -> Result<String, Box<dyn std::error::Error>> {
     let response_data = HTTP_CLIENT
-        .get(format!("{}/poolrewards.json", config.server_sync_url))
+        .get(format!("{}/curve.json", config.server_sync_url))
+        // bounded like the other requests, shutdown waits for a running sync
+        .timeout(Duration::from_secs(config.timeout as u64))
         .send()
         .await?
         .text()
         .await?;
-    std::fs::write("./config/poolRewards.json", &response_data)?;
-    info!("Successfully updated pool rewards");
+    tokio::fs::write("./config/curve.json", &response_data).await?;
+    info!("Successfully updated curve settings");
 
-    // let mut bans = Bans::load_bans().expect("failed to load config bans.json");
 
     let response_data_bans = HTTP_CLIENT
         .get(format!("{}/bans.json", config.server_sync_url))
+        .timeout(Duration::from_secs(config.timeout as u64))
         .send()
         .await?
         .json::<HashSet<CompactString>>()
         .await?;
-    // bans.banned_usernames = response_data_bans;
 
-    // bans.save_bans().expect("failed to save config bans.json");
     let mut ban_lock = BANS.lock().await;
     ban_lock.banned_usernames = response_data_bans;
 
-    ban_lock.save_bans()?;
+    ban_lock.save_bans().await?;
     info!("Synced bans.");
 
     Ok(response_data)
@@ -275,12 +346,6 @@ pub async fn sync(
         }
     };
     let block_increase = mining::GLOBAL_SHARES_INCREASE.load(Ordering::Relaxed);
-    let big_blocks;
-    {
-        // used to drop lock faster
-        let lock = mining::GLOBAL_BLOCKS.lock().await;
-        big_blocks = lock.len();
-    }
 
     let connections = CONNECTIONS.load(Ordering::Relaxed);
     // TODO: impl ngrok
@@ -319,7 +384,6 @@ pub async fn sync(
     // pre-sized with a lower bound: fewer reallocations, never more capacity than needed
     let mut worker_content = Vec::with_capacity(workers_ctx.min_json_len());
     serde_json::to_writer(&mut worker_content, &workers_ctx)?;
-    // drop(stats);
 
     let worker_content = write_file(worker_path.clone(), worker_content).await?;
 
@@ -328,22 +392,18 @@ pub async fn sync(
         config.base_sync_folder, config.pool_name
     );
 
-    let request_url = format!(
-        "https://{}/pool_sync/?host={}&port={}&version={}&identifier={}&name={}\
-    &blockIncrease={}&bigBlocks={}&cpu={}&ram={}&connections={}",
-        // "server.duinocoin.com", //TODO: temp fix
-        config.server_endpoint,
-        ip,
-        config.port,
-        config.pool_version,
-        config.pool_id,
-        config.pool_name,
+    let request_url = format!("https://{}/pool_sync/", config.server_endpoint);
+    let query = SyncQuery {
+        host: &ip,
+        port: config.port,
+        version: &config.pool_version,
+        identifier: &config.pool_id,
+        name: &config.pool_name,
         block_increase,
-        big_blocks,
-        cpu_usage,
-        mem_usage,
-        connections
-    );
+        cpu: cpu_usage,
+        ram: mem_usage,
+        connections,
+    };
 
 
     let rewards_snapshot = RewardSnapshot::capture(&mining::BALANCES_TO_UPDATE);
@@ -352,10 +412,9 @@ pub async fn sync(
 
     let rewards_content = write_file(reward_path.clone(), rewards_content).await?;
 
-
     let sync_count = SYNC_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     let shrink_maps = sync_count.is_multiple_of(SHRINK_EVERY_N_SYNCS);
-    debug!("Syncing to {request_url}");
+    debug!("Syncing to {request_url} with {query:?}");
     #[cfg(not(feature = "dummy_sync"))]
     {
         debug!("Workers: {}", String::from_utf8_lossy(&worker_content));
@@ -372,6 +431,7 @@ pub async fn sync(
         let client = &*HTTP_CLIENT;
         match client
             .post(request_url)
+            .query(&query)
             .multipart(form)
             .timeout(Duration::from_secs(config.timeout as u64))
             .send()
@@ -385,18 +445,12 @@ pub async fn sync(
                 let accepted = serde_json::from_str::<serde_json::Value>(&body)
                     .is_ok_and(|reply| reply["success"] == true);
                 if accepted {
-                    {
-                        let mut block_lock = mining::GLOBAL_BLOCKS.lock().await;
-                        acknowledge_uploaded_work(
-                            &rewards_snapshot,
-                            &mining::BALANCES_TO_UPDATE,
-                            &mut block_lock,
-                            big_blocks,
-                            &mining::GLOBAL_SHARES_INCREASE,
-                            block_increase,
-                        );
-                        block_lock.shrink_to_fit();
-                    }
+                    acknowledge_uploaded_work(
+                        &rewards_snapshot,
+                        &mining::BALANCES_TO_UPDATE,
+                        &mining::GLOBAL_SHARES_INCREASE,
+                        block_increase,
+                    );
                     if shrink_maps {
                         mining::BALANCES_TO_UPDATE.shrink_to_fit();
                     }
@@ -427,18 +481,9 @@ pub async fn sync(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use super::*;
     use serde_json::json;
-
-    fn block(id: u64) -> stats::BlockInfos {
-        stats::BlockInfos::new(
-            id,
-            format!("miner{id}").into(),
-            id as f32,
-            "DUCO-S1".into(),
-            format!("hash{id}"),
-        )
-    }
 
     #[test]
     fn snapshot_serializes_captured_values_even_after_live_updates() {
@@ -462,55 +507,34 @@ mod tests {
     }
 
     #[test]
-    fn acknowledgement_preserves_new_work_and_block_order() {
+    fn acknowledgement_preserves_new_work() {
         let balances = DashMap::new();
         balances.insert(CompactString::from("alice"), 1.25);
         balances.insert(CompactString::from("fully-sent"), 2.0);
         balances.insert(CompactString::from("zero"), 0.0);
         balances.insert(CompactString::from("tiny"), 0.0);
         let snapshot = RewardSnapshot::capture(&balances);
-        let mut blocks = vec![block(1), block(2)];
         let pending_shares = AtomicU64::new(2);
-        let uploaded_blocks = blocks.len();
         let uploaded_shares = pending_shares.load(Relaxed);
 
         *balances.get_mut("alice").unwrap() += 0.5;
         *balances.get_mut("alice").unwrap() += 0.125;
         *balances.get_mut("tiny").unwrap() += f32::EPSILON / 2.0;
         balances.insert(CompactString::from("bob"), 3.0);
-        blocks.extend([block(3), block(4)]);
         pending_shares.fetch_add(3, Relaxed);
-        let expected_blocks = serde_json::to_value(&blocks[uploaded_blocks..]).unwrap();
 
-        acknowledge_uploaded_work(
-            &snapshot,
-            &balances,
-            &mut blocks,
-            uploaded_blocks,
-            &pending_shares,
-            uploaded_shares,
-        );
+        acknowledge_uploaded_work(&snapshot, &balances, &pending_shares, uploaded_shares);
 
         assert_eq!(
             serde_json::to_value(&balances).unwrap(),
             json!({"alice": 0.625, "bob": 3.0, "tiny": f32::EPSILON / 2.0})
         );
-        assert_eq!(serde_json::to_value(&blocks).unwrap(), expected_blocks);
         assert_eq!(pending_shares.load(Relaxed), 3);
 
         // The retained work is acknowledged exactly once by the next successful sync.
         let next = RewardSnapshot::capture(&balances);
-        let remaining_blocks = blocks.len();
-        acknowledge_uploaded_work(
-            &next,
-            &balances,
-            &mut blocks,
-            remaining_blocks,
-            &pending_shares,
-            3,
-        );
+        acknowledge_uploaded_work(&next, &balances, &pending_shares, 3);
         assert!(balances.is_empty());
-        assert!(blocks.is_empty());
         assert_eq!(pending_shares.load(Relaxed), 0);
     }
 }

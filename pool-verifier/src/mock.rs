@@ -46,7 +46,7 @@ pub struct Part {
 /// One `/pool_sync/` request as seen by the mock.
 #[derive(Clone, Debug, Serialize)]
 pub struct Upload {
-    /// Query string (`host`, `blockIncrease`, `bigBlocks`, `connections`, ...).
+    /// Query string (`host`, `blockIncrease`, `connections`, ...).
     pub query: BTreeMap<String, String>,
     /// Parsed `workers` and `rewards` parts; empty if parsing failed.
     pub parts: BTreeMap<String, Part>,
@@ -74,10 +74,10 @@ pub struct Shared {
     /// While `true`, each upload waits for a permit on `gate` before answering.
     pub hold: AtomicBool,
     pub gate: Semaphore,
-    /// Body of `/poolrewards.json`.
-    pub rewards: Mutex<Value>,
     /// Body of `/bans.json`.
     pub bans: Mutex<Value>,
+    /// Body of `/curve.json`.
+    pub curve: Mutex<Value>,
     /// Scripted HTTP responses, FIFO per path.
     pub responses: Mutex<BTreeMap<String, VecDeque<Response>>>,
     /// Scripted transport faults, FIFO per path (consumed by the proxy).
@@ -146,42 +146,19 @@ pub fn unused_port() -> Result<u16> {
         .port())
 }
 
-/// The default `/poolrewards.json` fixture.
+/// The repository's reward curve, the base of the `/curve.json` fixture.
+const CURVE: &str = include_str!("../../config/curve.json");
+
+/// The default `/curve.json` fixture.
 ///
-/// Each tier gets a distinct difficulty (1..=14), so tier selection is visible
-/// in the issued job. The flags enable the block and adaptive-transition
-/// branches only when a case needs them, keeping the default deterministic.
-pub fn rewards(blocks: bool, transition: bool) -> Value {
-    const TIERS: [&str; 14] = [
-        "AVR",
-        "MEGA",
-        "ARM",
-        "DUE",
-        "ESP8266",
-        "ESP8266H",
-        "ESP8266N",
-        "ESP8266NH",
-        "ESP32",
-        "ESP32S",
-        "LOW",
-        "MEDIUM",
-        "NET",
-        "EXTREME",
-    ];
-    let mut result = serde_json::Map::new();
-    for (index, name) in TIERS.into_iter().enumerate() {
-        result.insert(
-            name.into(),
-            json!({
-                "difficulty": index + 1, "reward": 1000,
-                "min_hashrate": if transition && name == "MEGA" { 200 } else { 1 },
-                "max_hashrate": if transition && name == "AVR" { 100 } else { 1_000_000_000u64 },
-                "kolka_decrease_perc": 90, "expected_sharetime": 1,
-                "block_chance": if blocks { 1u32 } else { u32::MAX },
-            }),
-        );
+/// `blocks` makes every accepted share a block (`block_probability = 1`), the
+/// curve's only block setting.
+pub fn curve(blocks: bool) -> Value {
+    let mut curve: Value = serde_json::from_str(CURVE).expect("config/curve.json is valid JSON");
+    if blocks {
+        curve["block_probability"] = json!(1);
     }
-    Value::Object(result)
+    curve
 }
 
 /// Extracts the `workers` and `rewards` JSON parts from a sync upload.
@@ -291,8 +268,8 @@ fn handle_get(state: &Shared, path: &str, scripted: Option<Response>) -> HttpRes
         return text_reply(response.status, response.body);
     }
     match path {
-        "/poolrewards.json" => warp::reply::json(&*state.rewards.lock().unwrap()).into_response(),
         "/bans.json" => warp::reply::json(&*state.bans.lock().unwrap()).into_response(),
+        "/curve.json" => warp::reply::json(&*state.curve.lock().unwrap()).into_response(),
         "/ip" => text_reply(200, "127.0.0.1"),
         _ => text_reply(404, "Unexpected GET"),
     }
@@ -433,7 +410,7 @@ async fn proxy_connection(
 }
 
 impl Mock {
-    pub async fn start(blocks: bool, transition: bool) -> Result<Self> {
+    pub async fn start(blocks: bool) -> Result<Self> {
         let shared = Arc::new(Shared {
             uploads: Mutex::new(vec![]),
             gets: Mutex::new(vec![]),
@@ -441,8 +418,8 @@ impl Mock {
             status: AtomicU16::new(503),
             hold: AtomicBool::new(false),
             gate: Semaphore::new(0),
-            rewards: Mutex::new(rewards(blocks, transition)),
             bans: Mutex::new(json!(["banned-verifier-user"])),
+            curve: Mutex::new(curve(blocks)),
             responses: Mutex::new(BTreeMap::new()),
             faults: Mutex::new(BTreeMap::new()),
             fault_log: Mutex::new(vec![]),

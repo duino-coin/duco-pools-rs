@@ -1,9 +1,8 @@
 use crate::cfg::config::PoolConfig;
 use crate::data::data::{ConnId, Connection};
 use crate::mining::id_allocator::WorkerAllocator;
-use crate::mining::stats::{BlockInfos, MinerStatSlim};
-use crate::sync::sync::Difficulty;
-use crate::{kolka, CONFIG, KOLKA, POOL_REWARDS};
+use crate::mining::stats::MinerStatSlim;
+use crate::{kolka, CONFIG, CURVE_VALUES};
 use arc_swap::ArcSwap;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -13,11 +12,9 @@ use log::{debug, info};
 use rand::{rng, RngExt};
 use sha1::Digest;
 use std::str::FromStr;
-use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicU64};
 use std::sync::{Arc, LazyLock};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
 
 pub static USR_WORKERS_ALLOC: LazyLock<DashMap<CompactString, WorkerAllocator>> =
@@ -32,14 +29,7 @@ static LAST_BLOCK_HASH: LazyLock<ArcSwap<String>> = LazyLock::new(|| {
     ArcSwap::from_pointee(config.initial_blockhash.clone())
 });
 
-pub static GLOBAL_BLOCKS: LazyLock<Mutex<Vec<BlockInfos>>> =
-    LazyLock::new(|| Mutex::new(Vec::new()));
-
 pub static GLOBAL_SHARES_INCREASE: AtomicU64 = AtomicU64::new(0);
-
-pub static ESP8266NH_DIFF_CACHE: AtomicU32 = AtomicU32::new(0);
-
-pub static DUE_DIFF_CACHE: AtomicU32 = AtomicU32::new(0);
 
 // longest password (or legacy mining key) accepted, its base64 form fits PASSWORD_B64_BYTES
 const MAX_PASSWORD_BYTES: usize = 96;
@@ -47,10 +37,10 @@ const PASSWORD_B64_BYTES: usize = MAX_PASSWORD_BYTES.div_ceil(3) * 4;
 
 // weight of the newest share in the hashrate average, ~ the last 9 shares
 const HASHRATE_EMA_WEIGHT: f32 = 0.2;
-// lets the round trip estimate recover when the route gets slower
-const RTT_DECAY: f32 = 1.01;
 // keeps the hashrate finite if the round trip estimate covers the whole share time
 const MIN_SHARE_TIME: f32 = 0.001;
+// accepted shares without a regular reward, the hashrate estimate settles meanwhile
+const WARMUP_SHARES: u64 = 10;
 
 // every local that lives across an .await is stored in the connection's future,
 // so scratch buffers are kept in the sync blocks/functions that use them
@@ -58,14 +48,13 @@ pub async fn handle(
     conn: &mut Connection,
     mut read: String, // holds the first JOB request, then reused for every job/answer line
     config: &PoolConfig,
-    using_avr: bool,
 ) -> Result<(), anyhow::Error> {
     let mut random;
     let mut hex_buf = [0u8; 40]; // stack-allocated, reused every iteration
-    let mut req_difficulty = CompactString::with_capacity(16);
-    let mut feedback_sent = SystemTime::now();
+    let mut feedback_sent = Instant::now();
     // smallest gap between our feedback and the next request, the gap is a round trip plus
-    // the miner's idle time, so its minimum is close to the round trip alone
+    // the miner's idle time, so its minimum is close to the round trip alone.
+    // it never grows: delaying requests can't shrink the measured share time
     let mut rtt: Option<f32> = None;
     // averages of the hashes and seconds per accepted share, their ratio is the hashrate
     let mut avg_hashes = 0f32;
@@ -78,8 +67,6 @@ pub async fn handle(
     let mut hashrate: f32;
     let mut is_first_share = true;
 
-    let kolka = KOLKA.get().unwrap();
-    let pool_rewards = &POOL_REWARDS;
     let mut data: [&str; 8] = [""; 8];
     let mut data_len: usize;
 
@@ -90,69 +77,28 @@ pub async fn handle(
 
     loop {
         // set when the requested tier was already looked up for this share
-        let mut prefetched_info = None;
         if is_first_share {
-            req_difficulty.clear();
-            if data_len < 3
-                || data[2].is_empty()
-                || !set_req_difficulty(&mut req_difficulty, data[2])
-            {
-                req_difficulty.push_str("NET");
-            }
-            // if !pool_rewards.contains_key(&req_difficulty) {
-            //     req_difficulty.clear();
-            //     req_difficulty.push_str("NET");
-            // }
-            // diff = kolka::kolka::get_diff(&req_difficulty);
-
-            // why??
-            if req_difficulty.as_str() == "ESP32" {
+            if data_len >= 3 && data[2] == "ESP32" {
                 conn.miner_stat.is_req_diff_esp32 = true;
             }
+
             let mut alloc = USR_WORKERS_ALLOC
                 .entry(conn.miner_stat.username.clone())
                 .or_default();
             let kolka_id = alloc.allocate(conn.miner_stat.is_req_diff_esp32);
 
-            // conn.miner_stat.amount_of_workers = kolka_id;
             conn.miner_stat.worker_slot = kolka_id;
 
-            // debug!("{}, Assigned {}", conn.id, conn.miner_stat.amount_of_workers);
             debug!("{}, Assigned {}", conn.id, conn.miner_stat.worker_slot.id());
         } else {
             data = [""; 8];
             conn.read_to_string(&mut read).await?;
 
-            conn.miner_stat.ping = SystemTime::now()
-                .duration_since(feedback_sent)?
-                .as_secs_f32();
+            conn.miner_stat.ping = feedback_sent.elapsed().as_secs_f32();
             let ping = conn.miner_stat.ping;
-            rtt = Some(rtt.map_or(ping, |rtt| (rtt * RTT_DECAY).min(ping)));
+            rtt = Some(rtt.map_or(ping, |rtt| rtt.min(ping)));
 
             data_len = scan_fields(&read, &mut data);
-            req_difficulty.clear();
-
-            if !conn.miner_stat.override_diff.is_empty() {
-                if !set_req_difficulty(&mut req_difficulty, conn.miner_stat.override_diff.as_str())
-                {
-                    req_difficulty.push_str("NET");
-                }
-            } else if using_avr {
-                req_difficulty.push_str("AVR");
-            } else {
-                if data_len < 3
-                    || data[2].is_empty()
-                    || !set_req_difficulty(&mut req_difficulty, data[2])
-                {
-                    req_difficulty.push_str("NET");
-                }
-
-                prefetched_info = pool_rewards.get(req_difficulty.as_str()).map(|r| *r);
-                if prefetched_info.is_none() {
-                    req_difficulty.clear();
-                    req_difficulty.push_str("NET");
-                }
-            }
         }
 
         if data_len >= 4 {
@@ -172,12 +118,11 @@ pub async fn handle(
             }
         }
 
-        // let user_workers = get_user_workers(&conn.miner_stat.username);
         let (user_workers, new_id) = USR_WORKERS_ALLOC
             .get_mut(&conn.miner_stat.username)
             .map(|mut alloc| {
                 let workers = alloc.active_workers();
-                // let new_id = alloc.try_recycle(conn.miner_stat.amount_of_workers, conn.miner_stat.is_req_diff_esp32);
+
                 let new_id = alloc.try_recycle(conn.miner_stat.worker_slot);
                 (workers, new_id)
             })
@@ -187,21 +132,11 @@ pub async fn handle(
             conn.miner_stat.reject_shares = Some("BAD,Too many workers\n");
         }
         if let Some(id) = new_id {
-            // conn.miner_stat.amount_of_workers = id;
             conn.miner_stat.worker_slot = id;
         }
 
-        let diff_info = match prefetched_info {
-            Some(info) => info,
-            None => resolve_reward_info(
-                pool_rewards,
-                req_difficulty.as_str(),
-                conn.miner_stat.override_diff.as_str(),
-            )
-            .ok_or_else(|| anyhow::anyhow!("failed to resolve difficulty info"))?,
-        };
         if is_first_share {
-            diff = diff_info.difficulty as u32;
+            diff = 100;
         }
 
         random = rand::rng().random_range(0u64..diff as u64 * 100u64) + 1;
@@ -234,15 +169,14 @@ pub async fn handle(
         read.push('\n');
         conn.write(&read).await?;
 
-        let job_sent = SystemTime::now();
+        let job_sent = Instant::now();
         conn.read_to_string(&mut read).await?;
 
         data_len = scan_fields(&read, &mut data);
         let answer_received = SystemTime::now();
 
-        conn.miner_stat.share_time = (answer_received.duration_since(job_sent)?.as_secs_f32()
-            - rtt.unwrap_or(0f32))
-        .max(MIN_SHARE_TIME);
+        conn.miner_stat.share_time =
+            (job_sent.elapsed().as_secs_f32() - rtt.unwrap_or(0f32)).max(MIN_SHARE_TIME);
 
         let mut wrong_reported_hashrate = false;
         if data_len >= 2 {
@@ -258,27 +192,24 @@ pub async fn handle(
             reported_hashrate = 0f32;
         }
 
-        if (reported_hashrate <= 0f32 && !wrong_reported_hashrate)
+        let invalid_hashrate = (reported_hashrate <= 0f32 && !wrong_reported_hashrate)
             || reported_hashrate.is_nan()
-            || reported_hashrate.is_infinite()
-        {
+            || reported_hashrate.is_infinite();
+        if invalid_hashrate {
             conn.miner_stat.reject_shares = Some("BAD,Invalid data\n");
         }
 
-        conn.miner_stat.last_min_shares += 1;
+        // saturating: a client flooding answers within one minute must not wrap past the limit
+        conn.miner_stat.last_min_shares = conn.miner_stat.last_min_shares.saturating_add(1);
 
-        let nonce = if using_avr {
-            u64::from_str_radix(data[0], 2)?
-        } else {
-            match u64::from_str(data[0]) {
-                Ok(ok) => ok,
-                Err(err) => {
-                    debug!("Nonce error: {err:?} ({:?})", data);
-                    conn.write("BAD,No response to job\n").await?;
-                    return Err(anyhow::Error::from_boxed(Box::from("Shutting down.")));
-                    // used so we can handle closes centrally
-                    // (some request a job and after receiving the job they immediately request another one)
-                }
+        let nonce = match u64::from_str(data[0]) {
+            Ok(ok) => ok,
+            Err(err) => {
+                debug!("Nonce error: {err:?} ({:?})", data);
+                conn.write("BAD,No response to job\n").await?;
+                return Err(anyhow::Error::from_boxed(Box::from("Shutting down.")));
+                // used so we can handle closes centrally
+                // (some request a job and after receiving the job they immediately request another one)
             }
         };
 
@@ -299,13 +230,30 @@ pub async fn handle(
             random as f32 / conn.miner_stat.share_time
         };
 
+        // an ESP32 only counts as half a worker, so a miner that measures faster than a
+        // microcontroller after the warmup is moved to a full worker slot.
+        // the curve is loaded at each use and never kept across an await: a held guard
+        // occupies one of arc-swap's few per-thread slots while the miner is idle
+        if conn.miner_stat.is_req_diff_esp32
+            && conn.miner_stat.accepted_shares >= WARMUP_SHARES
+            && hashrate_calc as f64 > CURVE_VALUES.load().mcu_pc_step_h
+        {
+            if let Some(mut alloc) = USR_WORKERS_ALLOC.get_mut(&conn.miner_stat.username) {
+                alloc.release(conn.miner_stat.worker_slot, true);
+                conn.miner_stat.worker_slot = alloc.allocate(false);
+            }
+            conn.miner_stat.is_req_diff_esp32 = false;
+            debug!("{}, Downgraded ESP32 to {}", conn.id, conn.miner_stat.worker_slot.id());
+        }
+
         if wrong_reported_hashrate {
             reported_hashrate = hashrate_calc;
         }
 
         {
             let now_secs = UNIX_EPOCH.elapsed()?.as_secs();
-            if now_secs - conn.miner_stat.last_share_reset >= 60 {
+            // abs_diff: a wall clock that stepped back must neither underflow nor stall the reset
+            if now_secs.abs_diff(conn.miner_stat.last_share_reset) >= 60 {
                 conn.miner_stat.last_share_reset = now_secs;
                 conn.miner_stat.last_min_shares = 0;
             }
@@ -335,14 +283,15 @@ pub async fn handle(
 
         let hashrate_perc_diff_for_calc = perc_diff(hashrate, hashrate_calc);
 
-        if diff > DUE_DIFF_CACHE.load(Relaxed)
-            && diff <= ESP8266NH_DIFF_CACHE.load(Relaxed)
-            && hashrate_perc_diff_for_calc > 15f32
-            && hashrate < hashrate_calc // only underreporting keeps a lower difficulty
-            && conn.miner_stat.share_time >= 1.5
-        {
-            conn.miner_stat.reject_shares = Some("BAD,Modified hashrate\n");
-        }
+        // TODO: determine if needed
+        // if diff > DUE_DIFF_CACHE.load(Relaxed)
+        //     && diff <= ESP8266NH_DIFF_CACHE.load(Relaxed)
+        //     && hashrate_perc_diff_for_calc > 15f32
+        //     && hashrate < hashrate_calc // only underreporting keeps a lower difficulty (overreporting the hashrate doesn't benefit the user)
+        //     && conn.miner_stat.share_time >= 1.5
+        // {
+        //     conn.miner_stat.reject_shares = Some("BAD,Modified hashrate\n");
+        // }
 
         // we don't care whether they overreport their hashrate
         if conn.miner_stat.share_time >= 1.5
@@ -357,35 +306,18 @@ pub async fn handle(
             hashrate = hashrate_calc;
         }
 
-        let reward_div = diff_info.reward;
-        let max_hashrate = diff_info.max_hashrate;
-        let min_hashrate = diff_info.min_hashrate;
-        let expected_share_time = diff_info.expected_share_time;
-        let block_probability = diff_info.block_chance;
-
         share_accepted = false;
         reward = 0f32;
         if let Some(response) = conn.miner_stat.reject_shares.take() {
             conn.write(response).await?;
 
             conn.miner_stat.rejected_shares += 1;
-        } else if hashrate < min_hashrate as f32 {
-            conn.miner_stat.override_diff =
-                CompactString::from(kolka::kolka::v2_reverse(req_difficulty.as_str()));
-            conn.miner_stat.rejected_shares += 1;
-            conn.write("BAD,Too high starting difficulty\n").await?;
-            diff = kolka::kolka::get_diff(&conn.miner_stat.override_diff);
-        } else if hashrate >= max_hashrate as f32 {
-            conn.miner_stat.override_diff =
-                CompactString::from(kolka::kolka::v2(req_difficulty.as_str()));
-            conn.miner_stat.rejected_shares += 1;
-            conn.write("BAD,Too low starting difficulty\n").await?;
-            diff = kolka::kolka::get_diff(&conn.miner_stat.override_diff);
         } else if nonce == random {
             conn.miner_stat.accepted_shares += 1;
-            if conn.miner_stat.accepted_shares > 10 {
+            if conn.miner_stat.accepted_shares > WARMUP_SHARES {
                 // why is this a thing?
-                if diff <= ESP8266NH_DIFF_CACHE.load(Relaxed) {
+                // the difficulty directly correlates with the hashrate, so we can check the device type this way
+                if hashrate_calc as f64 <= CURVE_VALUES.load().mcu_pc_step_h {
                     #[allow(clippy::if_same_then_else)]
                     if conn.miner_stat.this_miner_chipid.is_empty() {
                         conn.miner_stat.rejected_shares += 1;
@@ -393,39 +325,16 @@ pub async fn handle(
                     {
                         conn.miner_stat.rejected_shares += 1;
                     } else {
-                        reward = kolka::kolka::v1(
-                            kolka,
-                            hashrate_calc.max(1f32), // v1 takes ln(), keep the reward >= 0
-                            diff,
-                            // conn.miner_stat.amount_of_workers,
-                            conn.miner_stat.worker_slot.id(),
-                            reward_div,
-                        );
+                        reward = kolka::kolka::calculate_reward(hashrate_calc.max(1f32), conn.miner_stat.worker_slot.id(), diff, &CURVE_VALUES.load());
                     }
                 } else {
-                    reward = kolka::kolka::v1(
-                        kolka,
-                        hashrate_calc.max(1f32), // v1 takes ln(), keep the reward >= 0
-                        diff,
-                        // conn.miner_stat.amount_of_workers,
-                        conn.miner_stat.worker_slot.id(),
-                        reward_div,
-                    );
+                    reward = kolka::kolka::calculate_reward(hashrate_calc.max(1f32), conn.miner_stat.worker_slot.id(), diff, &CURVE_VALUES.load());
                 }
             }
 
-            // if (rand::rng().random_range(0f32..1f32) * block_probability as f32).floor() == 1f32 {
-            if rng().random_range(0u32..block_probability) == 0 {
+            if rng().random_range(0u32..CURVE_VALUES.load().block_probability) == 0 {
                 reward += config.block_reward;
 
-                let block_infos = BlockInfos::new(
-                    answer_received.duration_since(UNIX_EPOCH)?.as_secs(),
-                    conn.miner_stat.username.clone(),
-                    reward,
-                    CompactString::const_new("DUCO-S1"),
-                    new_hash_str.to_string(),
-                );
-                GLOBAL_BLOCKS.lock().await.push(block_infos);
                 conn.write("BLOCK\n").await?;
                 info!("Block found by {}", conn.miner_stat.username);
                 share_accepted = true;
@@ -450,7 +359,6 @@ pub async fn handle(
             }
 
             GLOBAL_SHARES_INCREASE.fetch_add(
-                // config.update_miners_stats_every as u64,
                 1u64,
                 std::sync::atomic::Ordering::Relaxed,
             );
@@ -509,15 +417,14 @@ pub async fn handle(
         }
 
         // after the reward and stats, so both use the difficulty of the job that was just solved
-        // TODO: in case the curved rewards are not implemented: add back hashrate-change trigger (15%)
-        if conn.miner_stat.accepted_shares > 4 && is_pc_diff_tier(req_difficulty.as_str()) {
-            // 1.5x to account that the average will be half the target (I don't know what this means, I copied the original comment)
-            diff = kolka::kolka::v3(avg_share_time * 1.5, expected_share_time, hashrate);
+        // a rejected hashrate must not steer the next job (inf would make it unsolvable)
+        if !invalid_hashrate {
+            diff = kolka::kolka::calculate_difficulty(hashrate as f64, &CURVE_VALUES.load());
         }
 
         is_first_share = false;
         // because feedback_sent is only used to calculate the ping, we want to set it as late as possible
-        feedback_sent = SystemTime::now();
+        feedback_sent = Instant::now();
     }
 }
 
@@ -588,21 +495,6 @@ async fn reject_password(conn: &mut Connection) -> Result<(), anyhow::Error> {
 
 fn perc_diff(hashrate: f32, hashrate_calc: f32) -> f32 {
     (100f32 * ((hashrate - hashrate_calc) / ((hashrate + hashrate_calc) / 2f32)).abs()).floor()
-}
-
-fn is_pc_diff_tier(req_difficulty: &str) -> bool {
-    matches!(req_difficulty, "EXTREME" | "NET" | "MEDIUM" | "LOW")
-}
-
-fn set_req_difficulty(out: &mut CompactString, value: &str) -> bool {
-    if value.len() > 16 {
-        out.clear();
-        return false;
-    }
-
-    out.clear();
-    out.push_str(value);
-    true
 }
 
 fn check_workers(max: f32, config: &PoolConfig) -> bool {
@@ -690,23 +582,6 @@ pub(crate) fn scan_fields<'a>(s: &'a str, dst: &mut [&'a str; 8]) -> usize {
     field
 }
 
-fn resolve_reward_info(
-    pool_rewards: &DashMap<String, Difficulty>,
-    req_difficulty: &str,
-    override_difficulty: &str,
-) -> Option<Difficulty> {
-    if let Some(info) = pool_rewards.get(req_difficulty).map(|r| *r) {
-        return Some(info);
-    }
-
-    if !override_difficulty.is_empty() {
-        if let Some(info) = pool_rewards.get(override_difficulty).map(|r| *r) {
-            return Some(info);
-        }
-    }
-
-    pool_rewards.get("NET").map(|r| *r)
-}
 
 #[cfg(test)]
 mod tests {

@@ -288,6 +288,19 @@ fn patch_sync_endpoints(stage: &Path) -> Result<()> {
     patch_file(stage, "src/sync/sync.rs", |sync| {
         replace_once(sync, "client.get(\"https://api.ipify.org/\")", "client.get(format!(\"{}/ip\", std::env::var(\"POOL_VERIFY_HTTP\").expect(\"mock HTTP URL\")))", "IP endpoint")?;
 
+        // Newest form: only the base URL is formatted, the query is serialized
+        // from a struct by reqwest.
+        const BASE_URL: &str =
+            "    let request_url = format!(\"https://{}/pool_sync/\", config.server_endpoint);";
+        if sync.contains(BASE_URL) {
+            return replace_once(
+                sync,
+                BASE_URL,
+                "    let request_url = format!(\"{}/pool_sync/\", std::env::var(\"POOL_VERIFY_HTTP\").expect(\"mock HTTP URL\"));",
+                "sync base URL",
+            );
+        }
+
         // The sync URL is built by a multi-line `format!`. Isolate exactly that
         // statement, which ends at its closing `);`, and patch inside it.
         let start = sync
@@ -336,43 +349,28 @@ fn patch_sync_endpoints(stage: &Path) -> Result<()> {
 // ---- Step 2b: read-only observation surface --------------------------------
 
 /// Adds a `verify` object to the already-authenticated dashboard `/data`
-/// response, with private counters, balances, blocks and per-connection mining
+/// response, with private counters, balances and per-connection mining
 /// observations.
 ///
 /// Tests observe private state at stable iteration boundaries, so they never
 /// re-implement the pool's calculations as their oracle.
 fn add_observation_surface(stage: &Path) -> Result<()> {
     patch_file(stage, "src/web/web.rs", |web| {
-        // Take one block snapshot before building the JSON. Locking separately
-        // for `len` and serialization could expose two moments in one response.
         replace_once(
             web,
             "                            return Ok(warp::reply::json(&data_res));",
-            r#"                            let verify_blocks = mining::mining::GLOBAL_BLOCKS.lock().await.clone();
-                            let mut combined = serde_json::to_value(&data_res).unwrap();
+            r#"                            let mut combined = serde_json::to_value(&data_res).unwrap();
                             combined["verify"] = serde_json::json!({
                                 "due_cache": mining::mining::DUE_DIFF_CACHE.load(Relaxed),
                                 "esp_cache": mining::mining::ESP8266NH_DIFF_CACHE.load(Relaxed),
                                 "shares_total": mining::mining::VERIFY_SHARES_TOTAL.load(Relaxed),
                                 "shares_pending": mining::mining::GLOBAL_SHARES_INCREASE.load(Relaxed),
                                 "balances": serde_json::to_value(&*mining::mining::BALANCES_TO_UPDATE).unwrap(),
-                                "blocks": verify_blocks.len(),
-                                "block_info": serde_json::to_value(&verify_blocks).unwrap(),
                                 "observations": serde_json::to_value(&*mining::mining::VERIFY_OBSERVATIONS).unwrap(),
                                 "last_hash": mining::mining::LAST_BLOCK_HASH.load().as_str(),
                             });
                             return Ok(warp::reply::json(&combined));"#,
             "read-only state probe",
-        )
-    })?;
-
-    // The snapshot above needs `Clone`, added only to the disposable type.
-    patch_file(stage, "src/mining/stats.rs", |stats| {
-        replace_once(
-            stats,
-            "#[derive(Serialize, Deserialize, Debug)]\npub struct BlockInfos",
-            "#[derive(Serialize, Deserialize, Debug, Clone)]\npub struct BlockInfos",
-            "clone read-only block snapshot",
         )
     })?;
 
@@ -408,10 +406,9 @@ fn add_observation_surface(stage: &Path) -> Result<()> {
             "rejected": conn.miner_stat.rejected_shares, "reward": reward,
             "hashrate_calc": hashrate_calc, "hashrate": hashrate, "difficulty": diff,
             "tier": req_difficulty, "worker": conn.miner_stat.worker_slot.id(),
-            "reward_div": reward_div, "avg_hashes": avg_hashes,
+            "avg_hashes": avg_hashes,
             "avg_share_time": avg_share_time, "rtt": rtt,
             "share_time": conn.miner_stat.share_time, "ping": conn.miner_stat.ping,
-            "expected_time": expected_share_time,
             "hash": new_hash_str, "nonce": random, "last_min_shares": conn.miner_stat.last_min_shares
         }));
         is_first_share = false;"#,
@@ -424,7 +421,7 @@ fn add_observation_surface(stage: &Path) -> Result<()> {
 
 /// Adds a stdin reader to the pool:
 ///
-/// * `refresh` calls the production `resync_pool_rewards` and prints
+/// * `refresh` calls the production `resync_curve` and prints
 ///   `VERIFY_REFRESH_OK` (or `VERIFY_REFRESH_ERROR: ...`);
 /// * `shutdown` sends on the same channel the Ctrl-C handler uses.
 ///
@@ -443,7 +440,7 @@ fn add_control_channel(stage: &Path) -> Result<()> {
         for line in std::io::stdin().lock().lines() {
             if matches!(line.as_deref(), Ok("refresh")) {
                 verify_runtime.block_on(async {
-                    match sync::sync::resync_pool_rewards(CONFIG.get().unwrap()).await {
+                    match sync::sync::resync_curve(CONFIG.get().unwrap()).await {
                         Ok(()) => println!("VERIFY_REFRESH_OK"),
                         Err(err) => println!("VERIFY_REFRESH_ERROR: {err}"),
                     }

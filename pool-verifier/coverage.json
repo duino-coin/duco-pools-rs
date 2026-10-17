@@ -48,13 +48,11 @@
     {
       "behavior": "Share and reward conservation",
       "coverage": "asserted",
-      "assertion": "Intervals 1/2/5, rejected shares across publication boundaries, per-share reward sum, partial disconnect/shutdown, warmup and chip eligibility. Reporting frequency must not discard earned work.",
+      "assertion": "Intervals 1/2/5, rejected shares across publication boundaries, per-share reward sum, partial disconnect/shutdown and warmup. Reporting frequency must not discard earned work.",
       "cases": [
         "counters/accepted-shares",
         "counters/rejected-share-accounting",
         "counters/reward-warmup",
-        "counters/chip-id-required",
-        "counters/chip-id-change",
         "counters/interval-two-rewards",
         "counters/interval-five-rewards",
         "counters/partial-disconnect",
@@ -63,9 +61,9 @@
       ]
     },
     {
-      "behavior": "Reward formula and block contents",
+      "behavior": "Reward formula and blocks",
       "coverage": "asserted",
-      "assertion": "Independent formula vectors across all four threshold branches, distinct decay/divisor constants and fractional workers; actual mining reward inputs; forced blocks, hash chain, finder, algorithm, amount and epoch-second timestamps.",
+      "assertion": "Independent formula vectors across all four threshold branches, distinct decay/divisor constants and fractional workers; independent reward-curve evaluation of actual mining inputs; forced blocks and hash chain.",
       "cases": [
         "protocol/forced-block",
         "internal/reward-vectors",
@@ -76,26 +74,21 @@
     {
       "behavior": "Difficulty mapping and adaptation",
       "coverage": "asserted",
-      "assertion": "All transition mappings and initial tier difficulties; fallback/override resolution; deviation threshold/minimum vectors; adjustment after four accepts and the exponential hashrate average.",
+      "assertion": "Tier transition mappings, fallback/override resolution and deviation threshold/minimum vectors (internal); initial difficulty 100, curve difficulty from the last hashrate and the exponential hashrate average.",
       "cases": [
-        "lifecycle/difficulty-fallback",
-        "lifecycle/difficulty-upshift",
-        "lifecycle/difficulty-downshift",
         "internal/tier-transitions",
         "internal/adaptive-vectors",
         "internal/fallback-and-sanitizers",
-        "lifecycle/adaptive-mining-average",
-        "lifecycle/all-tier-initial-jobs"
+        "lifecycle/adaptive-mining-average"
       ]
     },
     {
       "behavior": "Hashrate validation and estimation",
       "coverage": "asserted",
-      "assertion": "Zero/negative/nonfinite rejection, valid recovery, missing/malformed estimation and underreported-hashrate rejection with accepted overreports.",
+      "assertion": "Zero/negative/nonfinite rejection without a difficulty change, valid recovery and missing/malformed estimation.",
       "cases": [
         "protocol/invalid-hashrates",
-        "protocol/estimated-hashrates",
-        "protocol/modified-hashrate"
+        "protocol/estimated-hashrates"
       ]
     },
     {
@@ -114,7 +107,7 @@
     {
       "behavior": "Worker limits and allocator model",
       "coverage": "asserted",
-      "assertion": "PC/ESP weights, worker-limit rejection/recovery, both cross-type recycling directions, user isolation, and 16000 seeded operations against an independent ordered-map model.",
+      "assertion": "PC/ESP weights, worker-limit rejection/recovery, ESP32 downgrade above mcu_pc_step_h, both cross-type recycling directions, user isolation, and 16000 seeded operations against an independent ordered-map model.",
       "cases": [
         "counters/worker-limit",
         "counters/weighted-worker-limit",
@@ -124,7 +117,8 @@
         "kolka/user-isolation",
         "internal/seeded-allocator",
         "kolka/reverse-mixed-reuse",
-        "kolka/worker-limit-recovery"
+        "kolka/worker-limit-recovery",
+        "kolka/esp32-downgrade"
       ]
     },
     {
@@ -137,7 +131,6 @@
         "sync/disconnected-worker",
         "sync/inflight-shares",
         "sync/inflight-rewards",
-        "sync/inflight-blocks",
         "sync/inflight-failed-retry",
         "sync/cleanup-missing-rewards",
         "sync/cleanup-missing-workers",
@@ -174,10 +167,9 @@
     {
       "behavior": "Startup network failures",
       "coverage": "asserted",
-      "assertion": "Invalid reward/ban bodies and missing mandatory tier fail within a deadline with matching diagnostics; master rejection/disconnect/invalid UTF-8 fail and bounded delayed greeting succeeds.",
+      "assertion": "Invalid reward curve/ban bodies fail within a deadline with matching diagnostics; master rejection/disconnect/invalid UTF-8 fail and bounded delayed greeting succeeds.",
       "cases": [
         "lifecycle/startup-invalid-rewards",
-        "lifecycle/startup-missing-tier",
         "lifecycle/startup-invalid-bans",
         "lifecycle/startup-master-reject",
         "lifecycle/startup-master-disconnect",
@@ -188,21 +180,20 @@
     {
       "behavior": "Bans and refresh operation",
       "coverage": "asserted",
-      "assertion": "Persist/load/corrupt-file fallback, pre-existing and newly saved IP bans, localhost exemption, direct production refresh updates ban enforcement, reward difficulty and caches.",
+      "assertion": "Persist/load/corrupt-file fallback, pre-existing and newly saved IP bans, localhost exemption, direct production curve refresh updates ban enforcement.",
       "cases": [
         "lifecycle/banned-user",
         "internal/bans-persistence",
         "lifecycle/preexisting-ip-ban",
         "lifecycle/ban-reconnect",
         "lifecycle/localhost-exemption",
-        "lifecycle/refreshed-bans",
-        "lifecycle/refreshed-rewards"
+        "lifecycle/refreshed-bans"
       ]
     },
     {
       "behavior": "Shutdown with active work",
       "coverage": "partial",
-      "assertion": "Final sync, logout and miner disconnect; held upload is cancelled and final snapshot conserves pending work. Remote exactly-once delivery after ambiguous acknowledgement is not guaranteed.",
+      "assertion": "Final sync, logout and miner disconnect; a held upload finishes before the final snapshot, which conserves pending work. Remote exactly-once delivery after ambiguous acknowledgement is not guaranteed.",
       "cases": [
         "lifecycle/shutdown-final-sync",
         "sync/shutdown-held-upload"

@@ -26,27 +26,27 @@ Scenarios: `protocol/good-bad-recovery`, `protocol/malformed-answer`, `protocol/
 
 ## Share and reward conservation
 
-**asserted** - Intervals 1/2/5, rejected shares across publication boundaries, per-share reward sum, partial disconnect/shutdown, warmup and chip eligibility. Reporting frequency must not discard earned work.
+**asserted** - Intervals 1/2/5, rejected shares across publication boundaries, per-share reward sum, partial disconnect/shutdown and warmup. Reporting frequency must not discard earned work.
 
-Scenarios: `counters/accepted-shares`, `counters/rejected-share-accounting`, `counters/reward-warmup`, `counters/chip-id-required`, `counters/chip-id-change`, `counters/interval-two-counts`, `counters/interval-five-counts`, `counters/interval-two-rewards`, `counters/interval-five-rewards`, `counters/partial-disconnect`, `counters/partial-shutdown`, `counters/publication-rejection-boundaries`.
+Scenarios: `counters/accepted-shares`, `counters/rejected-share-accounting`, `counters/reward-warmup`, `counters/interval-two-counts`, `counters/interval-five-counts`, `counters/interval-two-rewards`, `counters/interval-five-rewards`, `counters/partial-disconnect`, `counters/partial-shutdown`, `counters/publication-rejection-boundaries`.
 
-## Reward formula and block contents
+## Reward formula and blocks
 
-**asserted** - Independent formula vectors across all four threshold branches, distinct decay/divisor constants and fractional workers; actual mining reward inputs; forced blocks, hash chain, finder, algorithm, amount and epoch-second timestamps.
+**asserted** - Independent formula vectors across all four threshold branches, distinct decay/divisor constants and fractional workers; independent reward-curve evaluation of actual mining inputs; forced blocks and hash chain.
 
 Scenarios: `protocol/forced-block`, `internal/reward-vectors`, `counters/reward-formula-mining`, `protocol/hash-chain-block-details`.
 
 ## Difficulty mapping and adaptation
 
-**asserted** - All transition mappings and initial tier difficulties; fallback/override resolution; deviation threshold/minimum vectors; adjustment after four accepts and the exponential hashrate average.
+**asserted** - Tier transition mappings, fallback/override resolution and deviation threshold/minimum vectors (internal); initial difficulty 100, curve difficulty from the last hashrate and the exponential hashrate average.
 
-Scenarios: `lifecycle/difficulty-fallback`, `lifecycle/difficulty-upshift`, `lifecycle/difficulty-downshift`, `internal/tier-transitions`, `internal/adaptive-vectors`, `internal/fallback-and-sanitizers`, `lifecycle/adaptive-mining-average`, `lifecycle/all-tier-initial-jobs`.
+Scenarios: `internal/tier-transitions`, `internal/adaptive-vectors`, `internal/fallback-and-sanitizers`, `lifecycle/adaptive-mining-average`.
 
 ## Hashrate validation and estimation
 
-**asserted** - Zero/negative/nonfinite rejection, valid recovery, missing/malformed estimation and underreported-hashrate rejection with accepted overreports.
+**asserted** - Zero/negative/nonfinite rejection without a difficulty change, valid recovery and missing/malformed estimation.
 
-Scenarios: `protocol/invalid-hashrates`, `protocol/estimated-hashrates`, `protocol/modified-hashrate`.
+Scenarios: `protocol/invalid-hashrates`, `protocol/estimated-hashrates`.
 
 ## Miner metadata and serialization
 
@@ -56,15 +56,15 @@ Scenarios: `protocol/metadata-sanitization`, `protocol/metadata-defaults`, `prot
 
 ## Worker limits and allocator model
 
-**asserted** - PC/ESP weights, worker-limit rejection/recovery, both cross-type recycling directions, user isolation, and 16000 seeded operations against an independent ordered-map model.
+**asserted** - PC/ESP weights, worker-limit rejection/recovery, ESP32 downgrade above mcu_pc_step_h, both cross-type recycling directions, user isolation, and 16000 seeded operations against an independent ordered-map model.
 
-Scenarios: `counters/worker-limit`, `counters/weighted-worker-limit`, `kolka/pc-compaction`, `kolka/esp-compaction`, `kolka/mixed-reuse`, `kolka/user-isolation`, `internal/seeded-allocator`, `kolka/reverse-mixed-reuse`, `kolka/worker-limit-recovery`.
+Scenarios: `counters/worker-limit`, `counters/weighted-worker-limit`, `kolka/pc-compaction`, `kolka/esp-compaction`, `kolka/mixed-reuse`, `kolka/user-isolation`, `internal/seeded-allocator`, `kolka/reverse-mixed-reuse`, `kolka/worker-limit-recovery`, `kolka/esp32-downgrade`.
 
 ## Sync snapshots, retry and staging
 
 **asserted** - Multipart fields/metadata, failure retention, success subtraction, concurrent new-user work, cleanup failures, transport disconnect/timeouts, staging writes, retry and total preservation.
 
-Scenarios: `sync/payload-and-clearing`, `sync/failed-upload-retry`, `sync/disconnected-worker`, `sync/inflight-shares`, `sync/inflight-rewards`, `sync/inflight-blocks`, `sync/inflight-failed-retry`, `sync/cleanup-missing-rewards`, `sync/cleanup-missing-workers`, `sync/transport-disconnect-retry`, `sync/transport-timeout-retry`, `sync/staging-workers-write-failure`, `sync/staging-rewards-write-failure`.
+Scenarios: `sync/payload-and-clearing`, `sync/failed-upload-retry`, `sync/disconnected-worker`, `sync/inflight-shares`, `sync/inflight-rewards`, `sync/inflight-failed-retry`, `sync/cleanup-missing-rewards`, `sync/cleanup-missing-workers`, `sync/transport-disconnect-retry`, `sync/transport-timeout-retry`, `sync/staging-workers-write-failure`, `sync/staging-rewards-write-failure`.
 
 ## IP discovery and fallback
 
@@ -80,19 +80,19 @@ Scenarios: `lifecycle/startup-and-auth`, `internal/config-defaults-roundtrip`, `
 
 ## Startup network failures
 
-**asserted** - Invalid reward/ban bodies and missing mandatory tier fail within a deadline with matching diagnostics; master rejection/disconnect/invalid UTF-8 fail and bounded delayed greeting succeeds.
+**asserted** - Invalid reward curve/ban bodies fail within a deadline with matching diagnostics; master rejection/disconnect/invalid UTF-8 fail and bounded delayed greeting succeeds.
 
-Scenarios: `lifecycle/startup-invalid-rewards`, `lifecycle/startup-missing-tier`, `lifecycle/startup-invalid-bans`, `lifecycle/startup-master-reject`, `lifecycle/startup-master-disconnect`, `lifecycle/startup-master-invalid-utf8`, `lifecycle/startup-master-delay`.
+Scenarios: `lifecycle/startup-invalid-rewards`, `lifecycle/startup-invalid-bans`, `lifecycle/startup-master-reject`, `lifecycle/startup-master-disconnect`, `lifecycle/startup-master-invalid-utf8`, `lifecycle/startup-master-delay`.
 
 ## Bans and refresh operation
 
-**asserted** - Persist/load/corrupt-file fallback, pre-existing and newly saved IP bans, localhost exemption, direct production refresh updates ban enforcement, reward difficulty and caches.
+**asserted** - Persist/load/corrupt-file fallback, pre-existing and newly saved IP bans, localhost exemption, direct production curve refresh updates ban enforcement.
 
-Scenarios: `lifecycle/banned-user`, `internal/bans-persistence`, `lifecycle/preexisting-ip-ban`, `lifecycle/ban-reconnect`, `lifecycle/localhost-exemption`, `lifecycle/refreshed-bans`, `lifecycle/refreshed-rewards`.
+Scenarios: `lifecycle/banned-user`, `internal/bans-persistence`, `lifecycle/preexisting-ip-ban`, `lifecycle/ban-reconnect`, `lifecycle/localhost-exemption`, `lifecycle/refreshed-bans`.
 
 ## Shutdown with active work
 
-**partial** - Final sync, logout and miner disconnect; held upload is cancelled and final snapshot conserves pending work. Remote exactly-once delivery after ambiguous acknowledgement is not guaranteed.
+**partial** - Final sync, logout and miner disconnect; a held upload finishes before the final snapshot, which conserves pending work. Remote exactly-once delivery after ambiguous acknowledgement is not guaranteed.
 
 Scenarios: `lifecycle/shutdown-final-sync`, `sync/shutdown-held-upload`.
 

@@ -44,10 +44,8 @@ const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(8);
 /// fixture config or mock behavior before the production process starts.
 #[derive(Clone)]
 pub struct Options {
-    /// Make every accepted share a block (`block_chance = 1` for all tiers).
+    /// Make every accepted share a block (`block_probability = 1` in the curve).
     pub blocks: bool,
-    /// Narrow the AVR/MEGA hashrate bands so tier transitions can be triggered.
-    pub transition: bool,
     /// `maxWorkers` per user; 0 means unlimited.
     pub max_workers: u64,
     /// `maxSharesPerMinute`.
@@ -76,7 +74,6 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             blocks: false,
-            transition: false,
             max_workers: 0,
             rate: 60000,
             sync_secs: 3600,
@@ -124,7 +121,7 @@ impl Harness {
     ) -> Result<Self> {
         fs::create_dir_all(dir.join("config"))?;
         fs::create_dir_all(dir.join("sync"))?;
-        let mock = Mock::start(options.blocks, options.transition).await?;
+        let mock = Mock::start(options.blocks).await?;
         let port = unused_port()?;
         let dashboard_port = loop {
             let candidate = unused_port()?;

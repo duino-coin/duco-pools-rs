@@ -67,8 +67,6 @@ pub const CASES: &[Case] = &[
     Case::new("counters", "accepted-shares"),
     Case::new("counters", "rejected-share-accounting"),
     Case::new("counters", "reward-warmup"),
-    Case::new("counters", "chip-id-required"),
-    Case::new("counters", "chip-id-change"),
     Case::new("counters", "worker-limit"),
     Case::new("counters", "weighted-worker-limit"),
     Case::new("kolka", "pc-compaction"),
@@ -80,14 +78,10 @@ pub const CASES: &[Case] = &[
     Case::new("sync", "disconnected-worker"),
     Case::new("sync", "inflight-shares"),
     Case::new("sync", "inflight-rewards"),
-    Case::new("sync", "inflight-blocks"),
     Case::new("sync", "inflight-failed-retry"),
     Case::new("sync", "cleanup-missing-rewards"),
     Case::new("sync", "cleanup-missing-workers"),
     Case::new("lifecycle", "startup-and-auth"),
-    Case::new("lifecycle", "difficulty-fallback"),
-    Case::new("lifecycle", "difficulty-upshift"),
-    Case::new("lifecycle", "difficulty-downshift"),
     Case::new("lifecycle", "share-rate-limit"),
     Case::new("lifecycle", "banned-user"),
     Case::new("lifecycle", "shutdown-final-sync"),
@@ -109,7 +103,6 @@ pub fn options(case: &Case) -> Options {
         "forced-block"
             | "payload-and-clearing"
             | "inflight-rewards"
-            | "inflight-blocks"
             | "inflight-failed-retry"
             | "cleanup-missing-rewards"
             | "cleanup-missing-workers"
@@ -122,9 +115,6 @@ pub fn options(case: &Case) -> Options {
     }
     if case.name == "share-rate-limit" {
         o.rate = 2;
-    }
-    if matches!(case.name, "difficulty-upshift" | "difficulty-downshift") {
-        o.transition = true;
     }
     crate::expanded::options(case, &mut o);
     o
@@ -155,8 +145,6 @@ pub async fn run(case: &Case, h: &mut Harness) -> Result<()> {
         "accepted-shares" => accepted_shares(h).await,
         "rejected-share-accounting" => rejected_share_accounting(h).await,
         "reward-warmup" => reward_warmup(h).await,
-        "chip-id-required" => chip_id(h, ChipVariant::Missing).await,
-        "chip-id-change" => chip_id(h, ChipVariant::Changed).await,
         "worker-limit" => worker_limit(h, "AVR").await,
         "weighted-worker-limit" => worker_limit(h, "ESP32").await,
         // kolka
@@ -165,18 +153,14 @@ pub async fn run(case: &Case, h: &mut Harness) -> Result<()> {
         "mixed-reuse" => mixed_reuse(h).await,
         "user-isolation" => user_isolation(h).await,
         // sync
-        "payload-and-clearing" => sync_roundtrip(h, true).await,
-        "failed-upload-retry" => sync_roundtrip(h, false).await,
+        "payload-and-clearing" | "failed-upload-retry" => sync_roundtrip(h).await,
         "disconnected-worker" => disconnected_worker(h).await,
-        "inflight-shares" | "inflight-rewards" | "inflight-blocks" => inflight(case, h).await,
+        "inflight-shares" | "inflight-rewards" => inflight(case, h).await,
         "inflight-failed-retry" | "cleanup-missing-rewards" | "cleanup-missing-workers" => {
             inflight_completion(case, h).await
         }
         // lifecycle
         "startup-and-auth" => startup_and_auth(h).await,
-        "difficulty-fallback" => difficulty_fallback(h).await,
-        "difficulty-upshift" => difficulty_transition(h, true).await,
-        "difficulty-downshift" => difficulty_transition(h, false).await,
         "share-rate-limit" => share_rate_limit(h).await,
         "banned-user" => banned_user(h).await,
         "shutdown-final-sync" => shutdown_final_sync(h).await,
@@ -466,8 +450,7 @@ async fn invalid_frame(h: &Harness, invalid_utf8: bool) -> Result<()> {
     h.empty().await
 }
 
-/// With `block_chance = 1` a share is a BLOCK, is recorded as a pending block,
-/// and credits the block reward.
+/// With `block_chance = 1` a share is a BLOCK and credits the block reward.
 async fn forced_block(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "AVR", "block").await?;
     anyhow::ensure!(
@@ -475,7 +458,6 @@ async fn forced_block(h: &Harness) -> Result<()> {
         "block_chance=1 did not return BLOCK"
     );
     let s = published(h, "block", 1, 0).await?;
-    assert_eq_json(&s["verify"]["blocks"], 1, "pending blocks")?;
     close_float(
         s["verify"]["balances"]["alice"].as_f64().unwrap(),
         2.0,
@@ -553,36 +535,6 @@ async fn reward_warmup(h: &Harness) -> Result<()> {
         s["verify"]["balances"]["alice"].as_f64().unwrap(),
         block_rewards + reward,
         "reward accumulated",
-    )
-}
-
-enum ChipVariant {
-    /// Every answer has an empty chip ID.
-    Missing,
-    /// The eleventh answer switches to a different chip ID.
-    Changed,
-}
-
-/// A missing or changed chip ID makes the miner ineligible for regular rewards.
-/// The protocol still accepts the valid nonce, but one share is counted as
-/// rejected and the reward stays 0.
-async fn chip_id(h: &Harness, variant: ChipVariant) -> Result<()> {
-    let mut m = h.miner("alice", "AVR", "chip").await?;
-    for i in 0..11 {
-        let job = m.job().await?;
-        let chip = match variant {
-            ChipVariant::Missing => "",
-            ChipVariant::Changed if i == 10 => "changed-chip",
-            ChipVariant::Changed => "original-chip",
-        };
-        let reply = m.answer_fields(job.nonce.to_string(), "1000", chip).await?;
-        anyhow::ensure!(is_accepted(&reply), "Unexpected chip-ID feedback {reply}");
-    }
-    let s = published(h, "chip", 11, 1).await?;
-    close_float(
-        stat(&s, "chip").unwrap()["rw"].as_f64().unwrap(),
-        0.0,
-        "ineligible chip must not earn regular reward",
     )
 }
 
@@ -716,9 +668,7 @@ async fn user_isolation(h: &Harness) -> Result<()> {
 
 /// Checks the full sync payload, that a 503 keeps all state, and that the
 /// later 200 retry clears pending data and staging files.
-///
-/// `with_blocks` (`payload-and-clearing`) additionally checks the block count.
-async fn sync_roundtrip(h: &Harness, with_blocks: bool) -> Result<()> {
+async fn sync_roundtrip(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "AVR", "sync-worker").await?;
     m.share().await?;
     let before = published(h, "sync-worker", 1, 0).await?;
@@ -798,12 +748,6 @@ async fn sync_roundtrip(h: &Harness, with_blocks: bool) -> Result<()> {
         upload.parts["rewards"].json == before["verify"]["balances"],
         "Rewards payload differs from pending balances"
     );
-    if with_blocks {
-        anyhow::ensure!(
-            upload.query.get("bigBlocks").map(String::as_str) == Some("1"),
-            "Block count missing"
-        );
-    }
 
     // The mock answers 503 by default, which must keep both the in-memory
     // state and the recoverable staging files.
@@ -833,7 +777,6 @@ async fn sync_roundtrip(h: &Harness, with_blocks: bool) -> Result<()> {
         "successful sync clears pending data, preserves total",
         |s| {
             s["verify"]["shares_pending"] == 0
-                && s["verify"]["blocks"] == 0
                 && s["verify"]["balances"].as_object().unwrap().is_empty()
                 && s["verify"]["shares_total"] == 1
         },
@@ -881,8 +824,7 @@ async fn disconnected_worker(h: &Harness) -> Result<()> {
 /// Work accepted while an upload is in flight must survive that upload's
 /// success and appear in the next upload:
 /// * `inflight-shares`: the share count;
-/// * `inflight-rewards`: the reward delta;
-/// * `inflight-blocks`: the block count.
+/// * `inflight-rewards`: the reward delta.
 async fn inflight(case: &Case, h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "AVR", "inflight").await?;
     m.share().await?;
@@ -927,13 +869,6 @@ async fn inflight(case: &Case, h: &Harness) -> Result<()> {
                 expected,
                 "reward accepted during upload must remain pending",
             )?;
-        }
-        "inflight-blocks" => {
-            anyhow::ensure!(
-                next.query.get("bigBlocks").map(String::as_str) == Some("1"),
-                "Block found during upload was lost: expected next bigBlocks=1, actual {:?}",
-                next.query.get("bigBlocks")
-            );
         }
         _ => unreachable!(),
     }
@@ -988,20 +923,18 @@ async fn inflight_completion(case: &Case, h: &Harness) -> Result<()> {
         .await?;
     let (next_index, next) = h.upload_after(index + 1, |u| !u.completed).await?;
 
-    // Counters: everything pending, minus the snapshot if it was acknowledged.
-    for (query, pending) in [("blockIncrease", "shares_pending"), ("bigBlocks", "blocks")] {
-        let previous: u64 = snapshot.query[query].parse()?;
-        let acknowledged = if failed_upload { 0 } else { previous };
-        let expected = before["verify"][pending]
-            .as_u64()
-            .context("Pending count")?
-            - acknowledged;
-        anyhow::ensure!(
-            next.query[query] == expected.to_string(),
-            "{query} after {status}: expected {expected}, actual {}",
-            next.query[query]
-        );
-    }
+    // Share counter: everything pending, minus the snapshot if it was acknowledged.
+    let previous: u64 = snapshot.query["blockIncrease"].parse()?;
+    let acknowledged = if failed_upload { 0 } else { previous };
+    let expected = before["verify"]["shares_pending"]
+        .as_u64()
+        .context("Pending count")?
+        - acknowledged;
+    anyhow::ensure!(
+        next.query["blockIncrease"] == expected.to_string(),
+        "blockIncrease after {status}: expected {expected}, actual {}",
+        next.query["blockIncrease"]
+    );
     // Rewards: the same per user. Users with nothing left disappear.
     let mut expected_rewards = before["verify"]["balances"].clone();
     if !failed_upload {
@@ -1034,7 +967,6 @@ async fn inflight_completion(case: &Case, h: &Harness) -> Result<()> {
     let (_, empty) = h.upload_after(next_index + 1, |u| !u.completed).await?;
     anyhow::ensure!(
         empty.query["blockIncrease"] == "0"
-            && empty.query["bigBlocks"] == "0"
             && empty.parts["rewards"].json.as_object().unwrap().is_empty(),
         "Acknowledged work was uploaded again"
     );
@@ -1045,12 +977,12 @@ async fn inflight_completion(case: &Case, h: &Harness) -> Result<()> {
 
 // ---- lifecycle -----------------------------------------------------------------
 
-/// Startup fetches rewards, bans and IP, logs in to the master, and persists
+/// Startup fetches the reward curve, bans and IP, logs in to the master, and persists
 /// bans. `/ping` works, and `/data` requires the right key.
 async fn startup_and_auth(h: &Harness) -> Result<()> {
     let requests = h.mock.diagnostics();
     let gets = requests["get_requests"].as_array().unwrap();
-    for path in ["/poolrewards.json", "/bans.json", "/ip"] {
+    for path in ["/curve.json", "/bans.json", "/ip"] {
         anyhow::ensure!(
             gets.contains(&Value::String(path.into())),
             "Missing startup GET {path}"
@@ -1105,50 +1037,6 @@ async fn startup_and_auth(h: &Harness) -> Result<()> {
         );
     }
     h.state().await?;
-    Ok(())
-}
-
-/// An unknown tier falls back to NET (difficulty 13 in the fixture).
-async fn difficulty_fallback(h: &Harness) -> Result<()> {
-    let mut m = h.miner("alice", "UNKNOWN-TIER", "fallback").await?;
-    let job = m.job().await?;
-    anyhow::ensure!(
-        job.difficulty == 13,
-        "Unknown tier did not fall back to NET: {}",
-        job.difficulty
-    );
-    let response = m.answer(&job, true).await?;
-    anyhow::ensure!(is_accepted(&response), "Fallback job rejected: {response}");
-    Ok(())
-}
-
-/// With narrowed hashrate bands (`transition`), a too-fast AVR moves up to
-/// MEGA, and a too-slow MEGA moves down to AVR. The new tier then accepts the
-/// same rate.
-async fn difficulty_transition(h: &Harness, up: bool) -> Result<()> {
-    let (tier, rate, feedback, next_difficulty) = if up {
-        ("AVR", "300", "BAD,Too low starting difficulty", 2)
-    } else {
-        ("MEGA", "50", "BAD,Too high starting difficulty", 1)
-    };
-    let mut m = h.miner("alice", tier, "transition").await?;
-    let job = m.job().await?;
-    let reply = m.answer_fields(job.nonce.to_string(), rate, "chip").await?;
-    anyhow::ensure!(reply == feedback, "Wrong transition feedback {reply}");
-
-    let next = m.job().await?;
-    anyhow::ensure!(
-        next.difficulty == next_difficulty,
-        "Wrong next difficulty {}",
-        next.difficulty
-    );
-    let reply = m
-        .answer_fields(next.nonce.to_string(), rate, "chip")
-        .await?;
-    anyhow::ensure!(
-        is_accepted(&reply),
-        "New tier did not accept appropriate rate: {reply}"
-    );
     Ok(())
 }
 
