@@ -2,13 +2,12 @@
 use anyhow::{bail, Context};
 #[cfg(not(target_os = "windows"))]
 use flate2::read::GzDecoder;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::str::FromStr;
 use std::time::Duration;
-use flate2::read::GzDecoder;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
  const API_URL: &str = "https://api.github.com/repos/duino-coin/duco-pools-rs/releases/latest";
@@ -61,6 +60,10 @@ fn parse_tag(tag: &str) -> anyhow::Result<u32> {
     } else {
         0
     };
+    // create_version_code packs minor and patch into two digits each and must not overflow
+    if minor >= 100 || patch >= 100 || major > u32::MAX / 10_000 - 1 {
+        bail!("Unsupported release tag {tag}");
+    }
 
     Ok(create_version_code(major, minor, patch))
 }
@@ -237,10 +240,14 @@ async fn stage_download(
 ) -> anyhow::Result<()> {
     let mut file = tokio::fs::File::create(staging).await?;
     let mut hasher = Sha256::new();
-    let mut len = 0usize;
+    let mut len = 0u64;
     while let Some(chunk) = response.chunk().await? {
+        len += chunk.len() as u64;
+        // the archive is compressed, so it's never larger than the executable it holds
+        if len > MAX_EXECUTABLE_SIZE {
+            bail!("Downloaded update exceeds {MAX_EXECUTABLE_SIZE} bytes");
+        }
         hasher.update(&chunk);
-        len += chunk.len();
         file.write_all(&chunk).await?;
     }
     if len == 0 {
@@ -353,7 +360,7 @@ pub async fn fetch_latest_version(timeout: Duration) -> anyhow::Result<Option<Do
                     )
                     .send()
                     .await?
-                    .error_for_status()?;;
+                    .error_for_status()?;
 
                 let executable = std::env::current_exe()?;
                 let path = update_path(&executable)?;
@@ -395,50 +402,18 @@ pub async fn fetch_latest_version(timeout: Duration) -> anyhow::Result<Option<Do
     Ok(None)
 }
 
-#[derive(Serialize, Deserialize)]
+// only the fields the updater reads; GitHub sends several of the others as null
+// (e.g. a release without a title), which would fail the whole update check
+#[derive(Deserialize)]
 struct Asset {
     pub url: String,
-    pub id: i64,
     pub name: String,
-    pub label: Option<String>,
-    pub uploader: Author,
-    pub content_type: String,
-    pub state: String,
-    pub size: i64,
     pub digest: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-    pub browser_download_url: String,
 }
 
-#[derive(Serialize, Deserialize)]
-struct Author {
-    pub login: String,
-    pub id: i64,
-    pub node_id: String,
-    pub html_url: String,
-    pub organizations_url: String,
-    #[serde(rename = "type")]
-    pub r#type: String,
-}
-
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 struct Root {
-    pub url: String,
-    pub assets_url: String,
-    pub upload_url: String,
-    pub html_url: String,
-    pub id: i64,
-    pub author: Author,
-    pub node_id: String,
     pub tag_name: String,
-    pub target_commitish: String, // branch
-    pub name: String,
-    pub draft: bool,
-    pub prerelease: bool,
-    pub created_at: String,
-    pub updated_at: String,
-    pub published_at: String,
     pub assets: Vec<Asset>,
 }
 
