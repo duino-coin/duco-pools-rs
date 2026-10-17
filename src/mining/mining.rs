@@ -37,7 +37,7 @@ const PASSWORD_B64_BYTES: usize = MAX_PASSWORD_BYTES.div_ceil(3) * 4;
 
 // weight of the newest share in the hashrate average, ~ the last 9 shares
 const HASHRATE_EMA_WEIGHT: f32 = 0.2;
-// keeps the hashrate finite if the round trip estimate covers the whole share time
+// keeps the hashrate finite if a share is answered within the timer resolution
 const MIN_SHARE_TIME: f32 = 0.001;
 // accepted shares without a regular reward, the hashrate estimate settles meanwhile
 const WARMUP_SHARES: u64 = 10;
@@ -52,11 +52,9 @@ pub async fn handle(
     let mut random;
     let mut hex_buf = [0u8; 40]; // stack-allocated, reused every iteration
     let mut feedback_sent = Instant::now();
-    // smallest gap between our feedback and the next request, the gap is a round trip plus
-    // the miner's idle time, so its minimum is close to the round trip alone.
-    // it never grows: delaying requests can't shrink the measured share time
-    let mut rtt: Option<f32> = None;
-    // averages of the hashes and seconds per accepted share, their ratio is the hashrate
+    // averages of the hashes and seconds per accepted share, their ratio is the hashrate.
+    // the share time is the whole job to answer time, the work can't take longer, so the
+    // ratio is a hashrate the miner provably reaches (a round trip low), whatever it reports
     let mut avg_hashes = 0f32;
     let mut avg_share_time = 0f32;
     let mut diff = 1u32;
@@ -95,8 +93,6 @@ pub async fn handle(
             conn.read_to_string(&mut read).await?;
 
             conn.miner_stat.ping = feedback_sent.elapsed().as_secs_f32();
-            let ping = conn.miner_stat.ping;
-            rtt = Some(rtt.map_or(ping, |rtt| rtt.min(ping)));
 
             data_len = scan_fields(&read, &mut data);
         }
@@ -175,8 +171,7 @@ pub async fn handle(
         data_len = scan_fields(&read, &mut data);
         let answer_received = SystemTime::now();
 
-        conn.miner_stat.share_time =
-            (job_sent.elapsed().as_secs_f32() - rtt.unwrap_or(0f32)).max(MIN_SHARE_TIME);
+        conn.miner_stat.share_time = job_sent.elapsed().as_secs_f32().max(MIN_SHARE_TIME);
 
         let mut wrong_reported_hashrate = false;
         if data_len >= 2 {
@@ -281,8 +276,6 @@ pub async fn handle(
             }
         }
 
-        let hashrate_perc_diff_for_calc = perc_diff(hashrate, hashrate_calc);
-
         // TODO: determine if needed
         // if diff > DUE_DIFF_CACHE.load(Relaxed)
         //     && diff <= ESP8266NH_DIFF_CACHE.load(Relaxed)
@@ -293,18 +286,9 @@ pub async fn handle(
         //     conn.miner_stat.reject_shares = Some("BAD,Modified hashrate\n");
         // }
 
-        // we don't care whether they overreport their hashrate
-        if conn.miner_stat.share_time >= 1.5
-            && hashrate_perc_diff_for_calc > 15f32
-            && hashrate < hashrate_calc
-        {
-            // disabled for now..
-            // the difference is sometimes (currently) inexplicably high, therefore we rarely want to reject shares for it..
-            // if hashrate_perc_diff_for_calc >= 50f32 && false {
-            //     conn.miner_stat.reject_shares = Some("BAD,Modified hashrate\n");
-            // }
-            hashrate = hashrate_calc;
-        }
+        // a fast miner underreporting its hashrate solves every job far below the expected share time,
+        // so it would keep its low difficulty without this floor. overreporting doesn't benefit it
+        hashrate = hashrate.max(hashrate_calc);
 
         share_accepted = false;
         reward = 0f32;
@@ -491,10 +475,6 @@ async fn reject_password(conn: &mut Connection) -> Result<(), anyhow::Error> {
     conn.write("BAD,Password too long\n").await?;
     // used so we can handle closes centrally
     Err(anyhow::Error::from_boxed(Box::from("Shutting down.")))
-}
-
-fn perc_diff(hashrate: f32, hashrate_calc: f32) -> f32 {
-    (100f32 * ((hashrate - hashrate_calc) / ((hashrate + hashrate_calc) / 2f32)).abs()).floor()
 }
 
 fn check_workers(max: f32, config: &PoolConfig) -> bool {
