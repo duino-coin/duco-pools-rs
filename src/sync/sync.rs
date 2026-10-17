@@ -17,7 +17,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -294,8 +294,11 @@ pub async fn resync_curve(config: &PoolConfig) -> Result<(), Box<dyn std::error:
 }
 
 async fn update_curve(config: &PoolConfig) -> Result<String, Box<dyn std::error::Error>> {
+    // cloudflare ignores no-cache from clients, a unique query string misses the edge cache
+    let cache_bust = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let response_data = HTTP_CLIENT
-        .get(format!("{}/curve.json", config.server_sync_url))
+        .get(format!("{}/curve.json?t={cache_bust}", config.server_sync_url))
+        .header("Cache-Control", "no-cache")
         // bounded like the other requests, shutdown waits for a running sync
         .timeout(Duration::from_secs(config.timeout as u64))
         .send()
@@ -307,7 +310,7 @@ async fn update_curve(config: &PoolConfig) -> Result<String, Box<dyn std::error:
 
 
     let response_data_bans = HTTP_CLIENT
-        .get(format!("{}/bans.json", config.server_sync_url))
+        .get(format!("{}/bans.json?t={cache_bust}", config.server_sync_url))
         .timeout(Duration::from_secs(config.timeout as u64))
         .send()
         .await?
