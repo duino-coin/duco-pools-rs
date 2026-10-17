@@ -1,8 +1,9 @@
 use config::Config;
-use rand::distr::{Distribution, Uniform};
+use rand::distr::{Alphanumeric, Distribution};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::path::Path;
+use anyhow::bail;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PoolConfig {
@@ -69,9 +70,11 @@ fn default_shares() -> u16 {
 }
 
 fn generate_key() -> String {
-    let charset = Uniform::new_inclusive(char::from(33), char::from(126)).unwrap();
+    // alphanumeric only, so the key can be used in the dashboard's query string as is
     let mut rng = rand::rng();
-    let str: String = (0..32).map(|_| charset.sample(&mut rng)).collect();
+    let str: String = (0..32)
+        .map(|_| char::from(Alphanumeric.sample(&mut rng)))
+        .collect();
     str
 }
 
@@ -113,7 +116,7 @@ impl Default for PoolConfig {
             dashboard_key: generate_key(),
             update_restart_script: "".to_string(),
             auto_update: false,
-            update_check_time_seconds: 0,
+            update_check_time_seconds: 86400,
         }
     }
 }
@@ -127,11 +130,13 @@ pub fn load_config() -> Result<PoolConfig, Box<dyn Error>> {
             .build()?;
 
         let config = settings.try_deserialize::<PoolConfig>()?;
+        validate_config(&config)?;
         Ok(config)
     } else {
         std::fs::create_dir_all(path.parent().unwrap())?;
         let config = PoolConfig::default();
         save_config(&config);
+        validate_config(&config)?;
         Ok(config)
     }
 }
@@ -139,4 +144,15 @@ pub fn load_config() -> Result<PoolConfig, Box<dyn Error>> {
 pub fn save_config(config: &PoolConfig) {
     let string = serde_json::to_string_pretty(config).expect("Failed to convert config to str");
     let _ = std::fs::write("./config/config.json", string);
+}
+
+fn validate_config(config: &PoolConfig) -> anyhow::Result<()> {
+    if config.auto_update && config.update_check_time_seconds == 0 {
+        bail!("update_check_time_seconds must be greater than 0");
+    }
+    if config.update_miners_stats_every == 0 {
+        bail!("update_miners_stats_every must be greater than 0");
+    }
+
+    Ok(())
 }
