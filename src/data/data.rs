@@ -11,6 +11,7 @@ use tokio::time::Instant;
 
 const TIMEOUT: Duration = Duration::from_secs(90); // it's 90s in the js pools
 const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
+const BANS_PATH: &str = "./config/bans.json";
 #[derive(Debug, Clone)]
 pub struct ConnectionClosed;
 
@@ -192,21 +193,22 @@ impl Bans {
         }
     }
 
+    // runs once when BANS is first locked, so reading and creating the file may block
     pub fn load_bans() -> Result<Self, Box<dyn Error>> {
-        let path = "./config/bans.json";
-        if std::fs::exists(path)? {
-            let file_content = std::fs::read_to_string(path)?;
+        if std::fs::exists(BANS_PATH)? {
+            let file_content = std::fs::read_to_string(BANS_PATH)?;
             let bans: Bans =
                 serde_json::from_str::<Bans>(&file_content).unwrap_or_else(|_| Bans::new());
             return Ok(bans);
         }
         let bans = Bans::new();
-        bans.save_bans()?;
+        std::fs::write(BANS_PATH, serde_json::to_string(&bans)?)?;
         Ok(bans)
     }
 
-    pub fn save_bans(&self) -> Result<(), Box<dyn Error>> {
-        std::fs::write("./config/bans.json", serde_json::to_string(&self)?)?;
+    // called while holding the BANS lock on the runtime, so the write must not block a worker thread
+    pub async fn save_bans(&self) -> Result<(), Box<dyn Error>> {
+        tokio::fs::write(BANS_PATH, serde_json::to_string(&self)?).await?;
 
         Ok(())
     }

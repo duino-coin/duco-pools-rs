@@ -2,7 +2,7 @@ use crate::data::data::Connection;
 use crate::mining::mining::USR_WORKERS_ALLOC;
 use crate::{mining, BANS, CONFIG};
 use compact_str::CompactString;
-use log::{debug, warn};
+use log::{debug, error, warn};
 use std::sync::OnceLock;
 use tokio::process::Command;
 
@@ -64,7 +64,10 @@ pub async fn handle_connection(conn: &mut Connection) -> Result<(), anyhow::Erro
                     (true, false)
                 } else if data_len >= 2 && ban.banned_usernames.contains(data_split[1]) {
                     ban.banned_ips.insert(conn.miner_stat.ip.clone());
-                    ban.save_bans().expect("failed to save config bans.json");
+                    // the ban still applies for this run if the file can't be written
+                    if let Err(err) = ban.save_bans().await {
+                        error!("Failed to save bans.json: {err}");
+                    }
                     (true, true)
                 } else {
                     (false, false)
