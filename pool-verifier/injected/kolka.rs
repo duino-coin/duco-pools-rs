@@ -5,89 +5,92 @@
 mod verifier_tests {
     use super::*;
 
+    // the values of config/curve.json, spelled out so a changed default can't move the vectors
+    fn curve() -> Arc<Curve> {
+        Arc::new(Curve {
+            pc_base: 3.12,
+            mcu_base: 5.91,
+            mcu_pc_step_h: 195000.0,
+            mcu_pc_step_sharpness: 10.0,
+            slow_boost_h: 70.0,
+            arduino_h: 340.0,
+            cutoff_sharpness: 100.0,
+            cutoff_slope: -4.0,
+            arduino_bonus: 0.42,
+            arduino_bonus_width: 0.2,
+            pc_gpu_crossover_h: 2100000.0,
+            pc_gpu_crossover_sharpness: 0.9,
+            gpu_base: 0.7,
+            gpu_growth: 0.9,
+            gpu_growth_start: 0.9,
+            gpu_growth_softness: 0.2,
+            h_ref: 200000.0,
+            drop_low: 0.9393,
+            drop_high: 0.7456,
+            expected_sharetime: 10,
+            block_probability: 28110000,
+        })
+    }
+
+    fn close(actual: f32, expected: f32, label: &str) {
+        assert!(
+            (actual - expected).abs() <= expected.abs() * 1e-5,
+            "{label}: {actual} != {expected}"
+        );
+    }
+
     #[test]
     fn reward_vectors() {
-        let kolka = Kolka {
-            highest_pc_diff: 1000,
-            highest_esp_diff: 100,
-            highest_avr_diff: 10,
-            gpu_mining_percentage: 0.5,
-            pc_mining_percentage: 0.6,
-            esp_mining_percentage: 0.7,
-            avr_mining_percentage: 0.8,
-        };
+        let curve = curve();
 
-        // Values immediately below, at, and above each difficulty boundary select
-        // the expected device-class percentage.
-        for (difficulty, percentage) in [
-            (1, 0.8f64),
-            (10, 0.8),
-            (11, 0.7),
-            (100, 0.7),
-            (101, 0.6),
-            (1000, 0.6),
-            (1001, 0.5),
-        ] {
-            // Worker counts cross the two compounding boundaries. Half workers are
-            // included because ESP-class miners contribute a weight of 0.5.
-            for workers in [0.5f32, 1.0, 1.5, 2.0, 2.5, 3.0] {
-                for divisor in [100u32, 1000] {
-                    let exponent = match workers {
-                        x if x < 2.0 => 0,
-                        x if x < 3.0 => 1,
-                        _ => 2,
-                    };
-                    let expected = 2.0 * 1000f64.ln() / divisor as f64 * percentage.powi(exponent);
-                    let actual = v1(&kolka, 1000.0, difficulty, workers, divisor) as f64;
-                    assert!(
-                        (actual - expected).abs() < expected.abs() * 1e-6,
-                        "diff={difficulty}, workers={workers}, divisor={divisor}: \
-                         {actual} != {expected}"
-                    );
-                }
+        // A difficulty of 1728 averages 1728 * 50 = 86400 hashes per share, a whole
+        // day at 1 H/s, so a single worker's share pays exactly one daily reward.
+        let day = calculate_daily_reward(1.0, &curve) as f32;
+        assert!(day.is_finite() && day > 0.0, "daily reward {day}");
+        close(calculate_reward(1.0, 1.0, 1728, &curve), day, "one day");
+        close(calculate_reward(1.0, 1.0, 3456, &curve), 2.0 * day, "two days");
+
+        // h_ref itself still uses drop_low, anything faster drop_high. Only whole
+        // additional workers compound the drop, so ESP half workers round down.
+        for (hashrate, drop) in [(200_000f32, 0.9393f32), (200_001.0, 0.7456)] {
+            let single = calculate_reward(hashrate, 1.0, 1000, &curve);
+            assert!(single > 0.0, "hashrate={hashrate}: {single}");
+            for (workers, exponent) in [(0.5f32, 0), (1.0, 0), (1.5, 0), (2.0, 1), (2.5, 1), (3.0, 2)] {
+                close(
+                    calculate_reward(hashrate, workers, 1000, &curve),
+                    single * drop.powi(exponent),
+                    &format!("hashrate={hashrate}, workers={workers}"),
+                );
             }
         }
+
+        // A non-finite reward would stick to the balance, so it pays nothing.
+        assert_eq!(calculate_reward(f32::NAN, 1.0, 1000, &curve), 0.0);
+        assert_eq!(calculate_reward(0.0, 1.0, 1000, &curve), 0.0);
     }
 
     #[test]
-    fn tier_transitions() {
-        // The explicit table makes asymmetric and terminal transitions visible.
-        // In particular, not every tier's down-transition is the previous row.
-        for (tier, up, down) in [
-            ("AVR", "MEGA", "AVR"),
-            ("MEGA", "ARM", "AVR"),
-            ("ARM", "DUE", "MEGA"),
-            ("DUE", "ESP8266", "ARM"),
-            ("ESP8266", "ESP8266H", "ESP8266"),
-            ("ESP8266H", "ESP8266H", "ESP8266"),
-            ("ESP8266N", "ESP8266NH", "ESP8266N"),
-            ("ESP8266NH", "ESP8266NH", "ESP8266N"),
-            ("ESP32", "ESP32S", "ESP32"),
-            ("ESP32S", "ESP32S", "ESP32S"),
-            ("LOW", "MEDIUM", "LOW"),
-            ("MEDIUM", "NET", "LOW"),
-            ("NET", "EXTREME", "MEDIUM"),
-            ("EXTREME", "EXTREME", "NET"),
-            ("UNKNOWN", "UNKNOWN", "UNKNOWN"),
+    fn difficulty_vectors() {
+        // hashrate * expected_sharetime / 50, rounded half away from zero, at least 1
+        let curve = curve();
+        for (hashrate, expected) in [
+            (1000.0, 200),
+            (12.5, 3),
+            (12.4, 2),
+            (2.0, 1),
+            (0.0, 1),
+            (f64::MAX, u32::MAX),
         ] {
-            assert_eq!(v2(tier), up);
-            assert_eq!(v2_reverse(tier), down);
-        }
-    }
-
-    #[test]
-    fn adaptive_vectors() {
-        // Pin both sides of the target-time band: fast shares increase difficulty,
-        // values inside the band hold it, and slow shares decrease it.
-        for (share_time, expected) in [(8.99, 12800), (9.0, 10000), (10.0, 10000), (10.01, 7200)] {
             assert_eq!(
-                v3(share_time, 10, 100000.0),
+                calculate_difficulty(hashrate, &curve),
                 expected,
-                "share_time={share_time}"
+                "hashrate={hashrate}"
             );
         }
-        assert_eq!(v3(0.0, 1, 1.0), 5000);
-        // Hashrate is floored before scaling, which keeps this at 10,000.
-        assert_eq!(v3(9.0, 10, 100099.0), 10000);
+        let short = Arc::new(Curve {
+            expected_sharetime: 1,
+            ..*curve
+        });
+        assert_eq!(calculate_difficulty(1000.0, &short), 20);
     }
 }

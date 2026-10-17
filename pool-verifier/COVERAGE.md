@@ -38,9 +38,9 @@ Scenarios: `protocol/forced-block`, `internal/reward-vectors`, `counters/reward-
 
 ## Difficulty mapping and adaptation
 
-**asserted** - Tier transition mappings, fallback/override resolution and deviation threshold/minimum vectors (internal); initial difficulty 100, curve difficulty from the last hashrate and the exponential hashrate average.
+**asserted** - Curve difficulty rounding and minimum vectors (internal); initial difficulty 100, curve difficulty from the last hashrate and the exponential hashrate average.
 
-Scenarios: `internal/tier-transitions`, `internal/adaptive-vectors`, `internal/fallback-and-sanitizers`, `lifecycle/adaptive-mining-average`.
+Scenarios: `internal/difficulty-vectors`, `lifecycle/adaptive-mining-average`.
 
 ## Hashrate validation and estimation
 
@@ -52,7 +52,7 @@ Scenarios: `protocol/invalid-hashrates`, `protocol/estimated-hashrates`.
 
 **asserted** - Name/IoT sanitization, defaults, 48-byte IoT and 96-byte key limits (explicit `BAD,Password too long` rejection for both the job password and the legacy `rig:key` key), legacy keys, dashboard field types and numeric values.
 
-Scenarios: `protocol/metadata-sanitization`, `protocol/metadata-defaults`, `protocol/iot-boundaries`, `protocol/password-boundaries`, `protocol/legacy-key`, `lifecycle/dashboard-schema`.
+Scenarios: `internal/sanitizers`, `protocol/metadata-sanitization`, `protocol/metadata-defaults`, `protocol/iot-boundaries`, `protocol/password-boundaries`, `protocol/legacy-key`, `lifecycle/dashboard-schema`.
 
 ## Worker limits and allocator model
 

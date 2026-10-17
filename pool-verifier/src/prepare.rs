@@ -497,8 +497,8 @@ fn apply_mutation(stage: &Path, name: &str) -> Result<()> {
         // Doubles every regular reward.
         "reward" => (
             "src/kolka/kolka.rs",
-            "let mut output = hashrate.ln() / reward_div as f32;",
-            "let mut output = 2.0 * hashrate.ln() / reward_div as f32;",
+            "        * drop.powi((amount_of_workers - 1.0) as i32) as f32;",
+            "        * drop.powi((amount_of_workers - 1.0) as i32) as f32 * 2.0;",
         ),
         // Discards shares accepted while an upload is in flight.
         "pending" => (

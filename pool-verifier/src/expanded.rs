@@ -15,9 +15,8 @@ use tokio::time::{sleep, timeout};
 
 pub const CASES: &[Case] = &[
     Case::new("internal", "reward-vectors"),
-    Case::new("internal", "tier-transitions"),
-    Case::new("internal", "adaptive-vectors"),
-    Case::new("internal", "fallback-and-sanitizers"),
+    Case::new("internal", "difficulty-vectors"),
+    Case::new("internal", "sanitizers"),
     Case::new("internal", "seeded-allocator"),
     Case::new("internal", "config-defaults-roundtrip"),
     Case::new("internal", "bans-persistence"),
@@ -172,9 +171,8 @@ pub fn configure_mock(name: &str, mock: &Mock) {
 pub async fn run_internal(case: &Case, home: &Path, dir: &Path) -> Result<()> {
     let test = match case.name {
         "reward-vectors" => "kolka::kolka::verifier_tests::reward_vectors",
-        "tier-transitions" => "kolka::kolka::verifier_tests::tier_transitions",
-        "adaptive-vectors" => "kolka::kolka::verifier_tests::adaptive_vectors",
-        "fallback-and-sanitizers" => "mining::mining::verifier_tests::fallback_and_sanitizers",
+        "difficulty-vectors" => "kolka::kolka::verifier_tests::difficulty_vectors",
+        "sanitizers" => "mining::mining::verifier_tests::sanitizers",
         "seeded-allocator" => "mining::id_allocator::verifier_tests::seeded_sequences",
         "config-defaults-roundtrip" => "cfg::config::verifier_tests::defaults_and_roundtrip",
         "bans-persistence" => "data::data::verifier_tests::bans_persistence",

@@ -74,11 +74,9 @@
     {
       "behavior": "Difficulty mapping and adaptation",
       "coverage": "asserted",
-      "assertion": "Tier transition mappings, fallback/override resolution and deviation threshold/minimum vectors (internal); initial difficulty 100, curve difficulty from the last hashrate and the exponential hashrate average.",
+      "assertion": "Curve difficulty rounding and minimum vectors (internal); initial difficulty 100, curve difficulty from the last hashrate and the exponential hashrate average.",
       "cases": [
-        "internal/tier-transitions",
-        "internal/adaptive-vectors",
-        "internal/fallback-and-sanitizers",
+        "internal/difficulty-vectors",
         "lifecycle/adaptive-mining-average"
       ]
     },
@@ -96,6 +94,7 @@
       "coverage": "asserted",
       "assertion": "Name/IoT sanitization, defaults, 48-byte IoT and 96-byte key limits, legacy keys, dashboard field types and numeric values.",
       "cases": [
+        "internal/sanitizers",
         "protocol/metadata-sanitization",
         "protocol/metadata-defaults",
         "protocol/iot-boundaries",
