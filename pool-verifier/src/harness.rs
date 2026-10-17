@@ -305,6 +305,8 @@ impl Harness {
             tier: tier.into(),
             rig: rig.into(),
             transcript: self.transcript.clone(),
+            hashes: 0,
+            solve_time: Duration::ZERO,
         };
         anyhow::ensure!(miner.line().await? == "3.0", "Unexpected pool greeting");
         Ok(miner)
@@ -585,7 +587,7 @@ pub struct Job {
 /// broken job fails quickly instead of searching forever.
 pub fn solve(previous: &str, hash: &str, difficulty: u64) -> Result<u64> {
     anyhow::ensure!(
-        difficulty > 0 && difficulty <= 100_000,
+        difficulty > 0 && difficulty <= 1_000_000,
         "Unexpected test-job difficulty {difficulty}"
     );
     let limit = difficulty * 100;
@@ -609,6 +611,9 @@ pub struct Miner {
     pub tier: String,
     pub rig: String,
     transcript: Arc<Mutex<Vec<String>>>,
+    // totals over every solved job, their ratio is the hashrate the miner reports
+    hashes: u64,
+    solve_time: Duration,
 }
 
 impl Miner {
@@ -673,9 +678,13 @@ impl Miner {
             bail!("Expected job, got {line:?}");
         };
         let difficulty = difficulty.parse()?;
+        let started = Instant::now();
+        let nonce = solve(previous, hash, difficulty)?;
+        self.hashes += nonce;
+        self.solve_time += started.elapsed();
         Ok(Job {
             difficulty,
-            nonce: solve(previous, hash, difficulty)?,
+            nonce,
             previous: previous.into(),
             hash: hash.into(),
         })
@@ -688,7 +697,10 @@ impl Miner {
         } else {
             "0".into()
         };
-        self.answer_fields(nonce, "1000", "chip-verifier").await
+        // the measured hashrate, an underreported one would be raised by the pool
+        let hashrate = self.hashes as f64 / self.solve_time.as_secs_f64().max(1e-6);
+        self.answer_fields(nonce, &hashrate.to_string(), "chip-verifier")
+            .await
     }
 
     /// Sends `nonce,hashrate,Verifier,<rig>,chip,wallet-verifier` and returns

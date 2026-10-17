@@ -1025,7 +1025,12 @@ async fn dashboard_key(h: &Harness, enabled: bool) -> Result<()> {
 /// first job has difficulty 100.
 async fn dashboard_schema(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "AVR", "schema").await?;
-    m.share().await?;
+    let job = m.job().await?;
+    // a fixed reported hashrate, the published value is the reported one
+    let feedback = m
+        .answer_fields(job.nonce.to_string(), "1000", "chip-verifier")
+        .await?;
+    ensure_accepted(&feedback)?;
     let s = h
         .wait_state("schema published", |s| stat(s, "schema").is_some())
         .await?;

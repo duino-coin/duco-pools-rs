@@ -152,9 +152,11 @@ const CURVE: &str = include_str!("../../config/curve.json");
 /// The default `/curve.json` fixture.
 ///
 /// `blocks` makes every accepted share a block (`block_probability = 1`), the
-/// curve's only block setting.
+/// curve's only block setting. Miners report their real hashrate, so the share
+/// time is shortened to keep multi-share scenarios within their time limits.
 pub fn curve(blocks: bool) -> Value {
     let mut curve: Value = serde_json::from_str(CURVE).expect("config/curve.json is valid JSON");
+    curve["expected_sharetime"] = json!(1);
     if blocks {
         curve["block_probability"] = json!(1);
     }

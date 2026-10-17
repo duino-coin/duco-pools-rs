@@ -361,8 +361,6 @@ fn add_observation_surface(stage: &Path) -> Result<()> {
             "                            return Ok(warp::reply::json(&data_res));",
             r#"                            let mut combined = serde_json::to_value(&data_res).unwrap();
                             combined["verify"] = serde_json::json!({
-                                "due_cache": mining::mining::DUE_DIFF_CACHE.load(Relaxed),
-                                "esp_cache": mining::mining::ESP8266NH_DIFF_CACHE.load(Relaxed),
                                 "shares_total": mining::mining::VERIFY_SHARES_TOTAL.load(Relaxed),
                                 "shares_pending": mining::mining::GLOBAL_SHARES_INCREASE.load(Relaxed),
                                 "balances": serde_json::to_value(&*mining::mining::BALANCES_TO_UPDATE).unwrap(),
@@ -388,11 +386,11 @@ fn add_observation_surface(stage: &Path) -> Result<()> {
         // The pool has no lifetime share total. Count accepted shares next to
         // the pending counter, so `shares_total` is never decremented by a sync.
         mining.push_str("\npub static VERIFY_SHARES_TOTAL: AtomicU64 = AtomicU64::new(0);\n");
-        let pending_increment = "            GLOBAL_SHARES_INCREASE.fetch_add(\n                // config.update_miners_stats_every as u64,\n                1u64,\n                std::sync::atomic::Ordering::Relaxed,\n            );\n";
+        let pending_increment = "            GLOBAL_SHARES_INCREASE.fetch_add(\n                1u64,\n                std::sync::atomic::Ordering::Relaxed,\n            );\n";
         replace_once(
             mining,
             pending_increment,
-            &format!("{pending_increment}            VERIFY_SHARES_TOTAL.fetch_add(1, Relaxed);\n"),
+            &format!("{pending_increment}            VERIFY_SHARES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n"),
             "accepted share total",
         )?;
         // Record the inputs and results of the mining calculation at the end of
@@ -405,9 +403,9 @@ fn add_observation_surface(stage: &Path) -> Result<()> {
             "user": conn.miner_stat.username, "accepted": conn.miner_stat.accepted_shares,
             "rejected": conn.miner_stat.rejected_shares, "reward": reward,
             "hashrate_calc": hashrate_calc, "hashrate": hashrate, "difficulty": diff,
-            "tier": req_difficulty, "worker": conn.miner_stat.worker_slot.id(),
+            "worker": conn.miner_stat.worker_slot.id(),
             "avg_hashes": avg_hashes,
-            "avg_share_time": avg_share_time, "rtt": rtt,
+            "avg_share_time": avg_share_time,
             "share_time": conn.miner_stat.share_time, "ping": conn.miner_stat.ping,
             "hash": new_hash_str, "nonce": random, "last_min_shares": conn.miner_stat.last_min_shares
         }));
