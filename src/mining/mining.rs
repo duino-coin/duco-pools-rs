@@ -1,9 +1,9 @@
 use crate::cfg::config::PoolConfig;
 use crate::data::data::{ConnId, Connection};
+use crate::mining::block_hash::BlockHash;
 use crate::mining::id_allocator::WorkerAllocator;
 use crate::mining::stats::{MinerStat, MinerStatSlim};
 use crate::{kolka, CONFIG, CURVE_VALUES};
-use arc_swap::ArcSwap;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use compact_str::CompactString;
@@ -13,9 +13,9 @@ use rand::{rng, RngExt};
 use sha1::Digest;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64};
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 use std::time::{Instant, UNIX_EPOCH};
-// I hate that these are pub static, but I honestly can't be arsed to pass them as params..
+
 
 pub static USR_WORKERS_ALLOC: LazyLock<DashMap<CompactString, WorkerAllocator>> =
     LazyLock::new(DashMap::new);
@@ -24,9 +24,10 @@ pub static BALANCES_TO_UPDATE: LazyLock<DashMap<CompactString, f32>> = LazyLock:
 
 pub static MINER_STATS: LazyLock<DashMap<ConnId, MinerStatSlim>> = LazyLock::new(DashMap::new);
 
-static LAST_BLOCK_HASH: LazyLock<ArcSwap<String>> = LazyLock::new(|| {
+static LAST_BLOCK_HASH: LazyLock<BlockHash> = LazyLock::new(|| {
     let config = CONFIG.get().expect("config not initialised");
-    ArcSwap::from_pointee(config.initial_blockhash.clone())
+    // validate_config made sure it's 40 hex chars
+    BlockHash::new(config.initial_blockhash.as_bytes().try_into().unwrap())
 });
 
 pub static GLOBAL_SHARES_INCREASE: AtomicU64 = AtomicU64::new(0);
@@ -222,7 +223,7 @@ impl Session {
         }
 
         let last_block_hash = LAST_BLOCK_HASH.load();
-        let mut hasher = sha1::Sha1::new_with_prefix(last_block_hash.as_bytes());
+        let mut hasher = sha1::Sha1::new_with_prefix(last_block_hash);
 
         hasher.update(itoa::Buffer::new().format(self.random).as_bytes());
 
@@ -230,7 +231,8 @@ impl Session {
         hex::encode_to_slice(hasher.finalize(), &mut self.hex_buf).unwrap();
 
         out.clear();
-        out.push_str(last_block_hash.as_str());
+        // only ever holds hex, which is valid utf-8
+        out.push_str(std::str::from_utf8(&last_block_hash).unwrap());
         out.push(',');
         out.push_str(self.new_hash_str());
         out.push(',');
@@ -501,7 +503,7 @@ impl Session {
                 }
             }
 
-            LAST_BLOCK_HASH.store(Arc::new(self.new_hash_str().to_string()));
+            LAST_BLOCK_HASH.store(&self.hex_buf);
         }
 
         // after the reward and stats, so both use the difficulty of the job that was just solved

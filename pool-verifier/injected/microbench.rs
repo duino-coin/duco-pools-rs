@@ -6,7 +6,7 @@
 mod verifier_bench {
     use super::*;
     use crate::sync::sync::Curve;
-    use std::sync::Barrier;
+    use std::sync::{Arc, Barrier};
     use std::time::Duration;
 
     // shares solved before the timed run, well past WARMUP_SHARES so rewards are paid

@@ -472,7 +472,7 @@ fn add_observation_surface(stage: &Path) -> Result<()> {
                                 "shares_pending": mining::mining::GLOBAL_SHARES_INCREASE.load(Relaxed),
                                 "balances": serde_json::to_value(&*mining::mining::BALANCES_TO_UPDATE).unwrap(),
                                 "observations": serde_json::to_value(&*mining::mining::VERIFY_OBSERVATIONS).unwrap(),
-                                "last_hash": mining::mining::LAST_BLOCK_HASH.load().as_str(),
+                                "last_hash": std::str::from_utf8(&mining::mining::LAST_BLOCK_HASH.load()).unwrap(),
                             });
                             return Ok(warp::reply::json(&combined));"#,
             "read-only state probe",
