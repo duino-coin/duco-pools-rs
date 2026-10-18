@@ -395,21 +395,34 @@ fn add_observation_surface(stage: &Path) -> Result<()> {
         )?;
         // Record the inputs and results of the mining calculation at the end of
         // each share iteration. Values are captured, never recalculated.
+        // the calculated hashrate only lives in `judge`, so carry it over to `commit`
         replace_once(
             mining,
-            "        is_first_share = false;",
+            "    invalid_hashrate: bool,\n    answer_received: u64, // unix secs\n}",
+            "    invalid_hashrate: bool,\n    answer_received: u64, // unix secs\n    hashrate_calc: f32,\n}",
+            "observed hashrate field",
+        )?;
+        replace_once(
+            mining,
+            "            invalid_hashrate,\n            answer_received,\n        })",
+            "            invalid_hashrate,\n            answer_received,\n            hashrate_calc,\n        })",
+            "observed hashrate value",
+        )?;
+        replace_once(
+            mining,
+            "        self.is_first_share = false;",
             r#"
-        VERIFY_OBSERVATIONS.insert(conn.id.clone(), serde_json::json!({
-            "user": conn.miner_stat.username, "accepted": conn.miner_stat.accepted_shares,
-            "rejected": conn.miner_stat.rejected_shares, "reward": reward,
-            "hashrate_calc": hashrate_calc, "hashrate": hashrate, "difficulty": diff,
-            "worker": conn.miner_stat.worker_slot.id(),
-            "avg_hashes": avg_hashes,
-            "avg_share_time": avg_share_time,
-            "share_time": conn.miner_stat.share_time, "ping": conn.miner_stat.ping,
-            "hash": new_hash_str, "nonce": random, "last_min_shares": conn.miner_stat.last_min_shares
+        VERIFY_OBSERVATIONS.insert(id, serde_json::json!({
+            "user": stat.username, "accepted": stat.accepted_shares,
+            "rejected": stat.rejected_shares, "reward": judged.reward,
+            "hashrate_calc": judged.hashrate_calc, "hashrate": judged.hashrate, "difficulty": self.diff,
+            "worker": stat.worker_slot.id(),
+            "avg_hashes": self.avg_hashes,
+            "avg_share_time": self.avg_share_time,
+            "share_time": stat.share_time, "ping": stat.ping,
+            "hash": self.new_hash_str(), "nonce": self.random, "last_min_shares": stat.last_min_shares
         }));
-        is_first_share = false;"#,
+        self.is_first_share = false;"#,
             "mining observation",
         )
     })
