@@ -1,7 +1,7 @@
 use crate::cfg::config::PoolConfig;
 use crate::data::data::{ConnId, Connection};
 use crate::mining::id_allocator::WorkerAllocator;
-use crate::mining::stats::MinerStatSlim;
+use crate::mining::stats::{MinerStat, MinerStatSlim};
 use crate::{kolka, CONFIG, CURVE_VALUES};
 use arc_swap::ArcSwap;
 use base64::prelude::BASE64_STANDARD;
@@ -14,7 +14,7 @@ use sha1::Digest;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64};
 use std::sync::{Arc, LazyLock};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, UNIX_EPOCH};
 // I hate that these are pub static, but I honestly can't be arsed to pass them as params..
 
 pub static USR_WORKERS_ALLOC: LazyLock<DashMap<CompactString, WorkerAllocator>> =
@@ -42,138 +42,221 @@ const MIN_SHARE_TIME: f32 = 0.001;
 // accepted shares without a regular reward, the hashrate estimate settles meanwhile
 const WARMUP_SHARES: u64 = 10;
 
-// every local that lives across an .await is stored in the connection's future,
-// so scratch buffers are kept in the sync blocks/functions that use them
+// just the socket side of a session: reads, writes and their timing; everything in between
+// lives in `Session`, which never awaits, so none of it bloats the connection's future
 pub async fn handle(
     conn: &mut Connection,
     mut read: String, // holds the first JOB request, then reused for every job/answer line
     config: &PoolConfig,
 ) -> Result<(), anyhow::Error> {
-    let mut random;
-    let mut hex_buf = [0u8; 40]; // stack-allocated, reused every iteration
+    let mut session = Session::new();
     let mut feedback_sent = Instant::now();
-    // averages of the hashes and seconds per accepted share, their ratio is the hashrate.
-    // the share time is the whole job to answer time, the work can't take longer, so the
-    // ratio is a hashrate the miner provably reaches (a round trip low), whatever it reports
-    let mut avg_hashes = 0f32;
-    let mut avg_share_time = 0f32;
-    let mut diff = 1u32;
-    let mut reported_hashrate;
-    let mut hashrate_calc: f32;
-    let mut reward: f32;
-    let mut hashrate_is_estimated;
-    let mut hashrate: f32;
-    let mut is_first_share = true;
-
-    let mut data: [&str; 8] = [""; 8];
-    let mut data_len: usize;
-
-    // the handler already validated this line; scan it the same way (trimmed)
-    data_len = scan_fields(read.trim(), &mut data);
-
-    let mut share_accepted: bool;
 
     loop {
-        // set when the requested tier was already looked up for this share
-        if is_first_share {
-            if data_len >= 3 && data[2] == "ESP32" {
-                conn.miner_stat.is_req_diff_esp32 = true;
-            }
-
-            let mut alloc = USR_WORKERS_ALLOC
-                .entry(conn.miner_stat.username.clone())
-                .or_default();
-            let kolka_id = alloc.allocate(conn.miner_stat.is_req_diff_esp32);
-
-            conn.miner_stat.worker_slot = kolka_id;
-
-            debug!("{}, Assigned {}", conn.id, conn.miner_stat.worker_slot.id());
-        } else {
-            data = [""; 8];
+        if !session.is_first_share {
             conn.read_to_string(&mut read).await?;
 
             conn.miner_stat.ping = feedback_sent.elapsed().as_secs_f32();
-
-            data_len = scan_fields(&read, &mut data);
         }
-
-        if data_len >= 4 {
-            if !encode_password(data[3], &mut conn.miner_stat.password) {
-                return reject_password(conn).await;
-            }
+        // the handler already validated the first line; scan it the same way (trimmed)
+        let job_request = if session.is_first_share {
+            read.trim()
         } else {
-            conn.miner_stat.password.clear();
-        }
-
-        // IoT reading stuff
-        if data_len >= 5 {
-            if data[4].len() > 48 {
-                conn.miner_stat.iot_reading = CompactString::const_new("Error:data too long");
-            } else {
-                clean_iot_into(data[4], &mut conn.miner_stat.iot_reading);
-            }
-        }
-
-        let (user_workers, new_id) = USR_WORKERS_ALLOC
-            .get_mut(&conn.miner_stat.username)
-            .map(|mut alloc| {
-                let workers = alloc.active_workers();
-
-                let new_id = alloc.try_recycle(conn.miner_stat.worker_slot);
-                (workers, new_id)
-            })
-            .unwrap_or((0.0, None));
-
-        if check_workers(user_workers, config) {
-            conn.miner_stat.reject_shares = Some("BAD,Too many workers\n");
-        }
-        if let Some(id) = new_id {
-            conn.miner_stat.worker_slot = id;
-        }
-
-        if is_first_share {
-            diff = 100;
-        }
-
-        random = rand::rng().random_range(0u64..diff as u64 * 100u64) + 1;
-
-        #[cfg(feature = "bench")]
-        {
-            std::hint::black_box(random);
-            random = 1;
+            read.as_str()
+        };
+        if let Err(close) = session.on_job_request(conn.id, &mut conn.miner_stat, job_request, config) {
+            return close.send(conn).await;
         }
 
         // the request fields aren't needed anymore, so `read` is free for the job line
-        data = [""; 8];
-        {
-            // scoped so the guard (and the hash version it pins) isn't held across awaits
-            let last_block_hash = LAST_BLOCK_HASH.load();
-            let mut hasher = sha1::Sha1::new_with_prefix(last_block_hash.as_bytes());
-
-            hasher.update(itoa::Buffer::new().format(random).as_bytes());
-
-            hex::encode_to_slice(hasher.finalize(), &mut hex_buf)?;
-
-            read.clear();
-            read.push_str(last_block_hash.as_str());
-        }
-        let new_hash_str = std::str::from_utf8(&hex_buf)?;
-        read.push(',');
-        read.push_str(new_hash_str);
-        read.push(',');
-        read.push_str(itoa::Buffer::new().format(diff));
-        read.push('\n');
+        session.write_job(&mut read);
         conn.write(&read).await?;
 
         let job_sent = Instant::now();
         conn.read_to_string(&mut read).await?;
 
-        data_len = scan_fields(&read, &mut data);
-        let answer_received = SystemTime::now();
-
+        let answer_received = UNIX_EPOCH.elapsed()?.as_secs();
         conn.miner_stat.share_time = job_sent.elapsed().as_secs_f32().max(MIN_SHARE_TIME);
 
+        let judged = match session.judge(conn.id, &mut conn.miner_stat, &read, answer_received, config) {
+            Ok(judged) => judged,
+            Err(close) => return close.send(conn).await,
+        };
+        conn.write(judged.feedback).await?;
+
+        // only once the miner got its feedback, a failed write leaves the share uncredited
+        if let Err(close) = session.commit(conn.id, &mut conn.miner_stat, &read, &judged, config) {
+            return close.send(conn).await;
+        }
+        // because feedback_sent is only used to calculate the ping, we want to set it as late as possible
+        feedback_sent = Instant::now();
+    }
+}
+
+// the mining state of one connection that lives across jobs
+struct Session {
+    random: u64,
+    hex_buf: [u8; 40], // hex of the current job's hash
+    // averages of the nonce and the job to answer time of accepted shares; their ratio is the
+    // hashrate we measure ourselves, the hashrate the miner reports doesn't go into it;
+    // the nonce is the hash count of a miner scanning up from 0, miners splitting the range over
+    // threads get there with fewer hashes per share, but that evens out on average;
+    // the time includes a round trip, so the result comes out a bit low
+    avg_hashes: f32,
+    avg_share_time: f32,
+    diff: u32,
+    is_first_share: bool,
+}
+
+// what an answer earned, `commit` applies it once the feedback was sent
+struct Judged {
+    feedback: &'static str,
+    reward: f32,
+    share_accepted: bool,
+    block_found: bool,
+    hashrate: f32, // floored at the calculated one, steers the next difficulty
+    published_hashrate: f32,
+    invalid_hashrate: bool,
+    answer_received: u64, // unix secs
+}
+
+// a last reply, the connection is closed once it's sent
+struct Close(&'static str);
+
+impl Close {
+    async fn send(self, conn: &mut Connection) -> Result<(), anyhow::Error> {
+        conn.write(self.0).await?;
+        // used so we can handle closes centrally
+        Err(anyhow::Error::from_boxed(Box::from("Shutting down.")))
+    }
+}
+
+// explicit rejection instead of silently dropping the connection
+const PASSWORD_TOO_LONG: Close = Close("BAD,Password too long\n");
+
+impl Session {
+    fn new() -> Self {
+        Session {
+            random: 0,
+            hex_buf: [0u8; 40],
+            avg_hashes: 0f32,
+            avg_share_time: 0f32,
+            diff: 1,
+            is_first_share: true,
+        }
+    }
+
+    fn on_job_request(
+        &mut self,
+        id: ConnId,
+        stat: &mut MinerStat,
+        job_request: &str,
+        config: &PoolConfig,
+    ) -> Result<(), Close> {
+        let mut data: [&str; 8] = [""; 8];
+        let data_len = scan_fields(job_request, &mut data);
+
+        if self.is_first_share {
+            if data_len >= 3 && data[2] == "ESP32" {
+                stat.is_req_diff_esp32 = true;
+            }
+
+            let mut alloc = USR_WORKERS_ALLOC
+                .entry(stat.username.clone())
+                .or_default();
+            let kolka_id = alloc.allocate(stat.is_req_diff_esp32);
+
+            stat.worker_slot = kolka_id;
+
+            debug!("{}, Assigned {}", id, stat.worker_slot.id());
+        }
+
+        if data_len >= 4 {
+            if !encode_password(data[3], &mut stat.password) {
+                return Err(PASSWORD_TOO_LONG);
+            }
+        } else {
+            stat.password.clear();
+        }
+
+        // IoT reading stuff
+        if data_len >= 5 {
+            if data[4].len() > 48 {
+                stat.iot_reading = CompactString::const_new("Error:data too long");
+            } else {
+                clean_iot_into(data[4], &mut stat.iot_reading);
+            }
+        }
+
+        let (user_workers, new_id) = USR_WORKERS_ALLOC
+            .get_mut(&stat.username)
+            .map(|mut alloc| {
+                let workers = alloc.active_workers();
+
+                let new_id = alloc.try_recycle(stat.worker_slot);
+                (workers, new_id)
+            })
+            .unwrap_or((0.0, None));
+
+        if check_workers(user_workers, config) {
+            stat.reject_shares = Some("BAD,Too many workers\n");
+        }
+        if let Some(id) = new_id {
+            stat.worker_slot = id;
+        }
+        Ok(())
+    }
+
+    // writes "<last hash>,<new hash>,<diff>\n" into `out`
+    fn write_job(&mut self, out: &mut String) {
+        if self.is_first_share {
+            self.diff = 100;
+        }
+
+        self.random = rand::rng().random_range(0u64..self.diff as u64 * 100u64) + 1;
+
+        #[cfg(feature = "bench")]
+        {
+            std::hint::black_box(self.random);
+            self.random = 1;
+        }
+
+        let last_block_hash = LAST_BLOCK_HASH.load();
+        let mut hasher = sha1::Sha1::new_with_prefix(last_block_hash.as_bytes());
+
+        hasher.update(itoa::Buffer::new().format(self.random).as_bytes());
+
+        // can't fail, the buffer is exactly twice the digest length
+        hex::encode_to_slice(hasher.finalize(), &mut self.hex_buf).unwrap();
+
+        out.clear();
+        out.push_str(last_block_hash.as_str());
+        out.push(',');
+        out.push_str(self.new_hash_str());
+        out.push(',');
+        out.push_str(itoa::Buffer::new().format(self.diff));
+        out.push('\n');
+    }
+
+    fn new_hash_str(&self) -> &str {
+        // hex output is always valid utf-8
+        std::str::from_utf8(&self.hex_buf).unwrap()
+    }
+
+    // expects the miner's share_time to be set already
+    fn judge(
+        &mut self,
+        id: ConnId,
+        stat: &mut MinerStat,
+        answer: &str,
+        answer_received: u64,
+        config: &PoolConfig,
+    ) -> Result<Judged, Close> {
+        let mut data: [&str; 8] = [""; 8];
+        let data_len = scan_fields(answer, &mut data);
+
         let mut wrong_reported_hashrate = false;
+        let mut reported_hashrate;
         if data_len >= 2 {
             reported_hashrate = match data[1].parse::<f32>() {
                 Ok(rep) => rep,
@@ -191,88 +274,85 @@ pub async fn handle(
             || reported_hashrate.is_nan()
             || reported_hashrate.is_infinite();
         if invalid_hashrate {
-            conn.miner_stat.reject_shares = Some("BAD,Invalid data\n");
+            stat.reject_shares = Some("BAD,Invalid data\n");
         }
 
         // saturating: a client flooding answers within one minute must not wrap past the limit
-        conn.miner_stat.last_min_shares = conn.miner_stat.last_min_shares.saturating_add(1);
+        stat.last_min_shares = stat.last_min_shares.saturating_add(1);
 
         let nonce = match u64::from_str(data[0]) {
             Ok(ok) => ok,
             Err(err) => {
                 debug!("Nonce error: {err:?} ({:?})", data);
-                conn.write("BAD,No response to job\n").await?;
-                return Err(anyhow::Error::from_boxed(Box::from("Shutting down.")));
-                // used so we can handle closes centrally
+                return Err(Close("BAD,No response to job\n"));
                 // (some request a job and after receiving the job they immediately request another one)
             }
         };
 
         // only correct answers are real work, fast wrong ones would inflate the average
-        if nonce == random {
+        if nonce == self.random {
             // the first one seeds the averages
-            let weight = if avg_share_time > 0f32 {
+            let weight = if self.avg_share_time > 0f32 {
                 HASHRATE_EMA_WEIGHT
             } else {
                 1f32
             };
-            avg_hashes += (random as f32 - avg_hashes) * weight;
-            avg_share_time += (conn.miner_stat.share_time - avg_share_time) * weight;
+            self.avg_hashes += (self.random as f32 - self.avg_hashes) * weight;
+            self.avg_share_time += (stat.share_time - self.avg_share_time) * weight;
         }
-        hashrate_calc = if avg_share_time > 0f32 {
-            avg_hashes / avg_share_time
+        let hashrate_calc = if self.avg_share_time > 0f32 {
+            self.avg_hashes / self.avg_share_time
         } else {
-            random as f32 / conn.miner_stat.share_time
+            self.random as f32 / stat.share_time
         };
 
         // an ESP32 only counts as half a worker, so a miner that measures faster than a
         // microcontroller after the warmup is moved to a full worker slot.
         // the curve is loaded at each use and never kept across an await: a held guard
         // occupies one of arc-swap's few per-thread slots while the miner is idle
-        if conn.miner_stat.is_req_diff_esp32
-            && conn.miner_stat.accepted_shares >= WARMUP_SHARES
+        if stat.is_req_diff_esp32
+            && stat.accepted_shares >= WARMUP_SHARES
             && hashrate_calc as f64 > CURVE_VALUES.load().mcu_pc_step_h
         {
-            if let Some(mut alloc) = USR_WORKERS_ALLOC.get_mut(&conn.miner_stat.username) {
-                alloc.release(conn.miner_stat.worker_slot, true);
-                conn.miner_stat.worker_slot = alloc.allocate(false);
+            if let Some(mut alloc) = USR_WORKERS_ALLOC.get_mut(&stat.username) {
+                alloc.release(stat.worker_slot, true);
+                stat.worker_slot = alloc.allocate(false);
             }
-            conn.miner_stat.is_req_diff_esp32 = false;
-            debug!("{}, Downgraded ESP32 to {}", conn.id, conn.miner_stat.worker_slot.id());
+            stat.is_req_diff_esp32 = false;
+            debug!("{}, Downgraded ESP32 to {}", id, stat.worker_slot.id());
         }
 
         if wrong_reported_hashrate {
             reported_hashrate = hashrate_calc;
         }
 
-        {
-            let now_secs = UNIX_EPOCH.elapsed()?.as_secs();
-            // abs_diff: a wall clock that stepped back must neither underflow nor stall the reset
-            if now_secs.abs_diff(conn.miner_stat.last_share_reset) >= 60 {
-                conn.miner_stat.last_share_reset = now_secs;
-                conn.miner_stat.last_min_shares = 0;
-            }
+        // abs_diff: a wall clock that stepped back must neither underflow nor stall the reset
+        if answer_received.abs_diff(stat.last_share_reset) >= 60 {
+            stat.last_share_reset = answer_received;
+            stat.last_min_shares = 0;
         }
         #[cfg(not(feature = "bench"))]
         // if the pool was built with the bench feature enabled, we discard this codeblock
         {
-            if conn.miner_stat.last_min_shares > config.max_shares_per_minute {
-                conn.miner_stat.reject_shares = Some("BAD,Too low difficulty\n");
+            if stat.last_min_shares > config.max_shares_per_minute {
+                stat.reject_shares = Some("BAD,Too low difficulty\n");
             }
         }
 
-        hashrate_is_estimated = false;
+        let hashrate_is_estimated;
+        let mut hashrate;
         if reported_hashrate <= 0f32 {
             hashrate_is_estimated = true;
             hashrate = hashrate_calc;
         } else {
+            hashrate_is_estimated = false;
             hashrate = reported_hashrate;
         }
 
-        if is_first_share {
-            conn.miner_stat.this_miner_chipid.clear();
+        if self.is_first_share {
+            stat.this_miner_chipid.clear();
             if data_len >= 5 {
-                conn.miner_stat.this_miner_chipid.push_str(data[4]);
+                stat.this_miner_chipid.push_str(data[4]);
             }
         }
 
@@ -290,55 +370,80 @@ pub async fn handle(
         // so it would keep its low difficulty without this floor. overreporting doesn't benefit it
         hashrate = hashrate.max(hashrate_calc);
 
-        share_accepted = false;
-        reward = 0f32;
-        if let Some(response) = conn.miner_stat.reject_shares.take() {
-            conn.write(response).await?;
-
-            conn.miner_stat.rejected_shares += 1;
-        } else if nonce == random {
-            conn.miner_stat.accepted_shares += 1;
-            if conn.miner_stat.accepted_shares > WARMUP_SHARES {
+        let mut share_accepted = false;
+        let mut block_found = false;
+        let mut reward = 0f32;
+        let feedback = if let Some(response) = stat.reject_shares.take() {
+            stat.rejected_shares += 1;
+            response
+        } else if nonce == self.random {
+            stat.accepted_shares += 1;
+            if stat.accepted_shares > WARMUP_SHARES {
                 // why is this a thing?
                 // the difficulty directly correlates with the hashrate, so we can check the device type this way
                 if hashrate_calc as f64 <= CURVE_VALUES.load().mcu_pc_step_h {
                     #[allow(clippy::if_same_then_else)]
-                    if conn.miner_stat.this_miner_chipid.is_empty() {
-                        conn.miner_stat.rejected_shares += 1;
-                    } else if data_len >= 5 && data[4] != conn.miner_stat.this_miner_chipid.as_str()
-                    {
-                        conn.miner_stat.rejected_shares += 1;
+                    if stat.this_miner_chipid.is_empty() {
+                        stat.rejected_shares += 1;
+                    } else if data_len >= 5 && data[4] != stat.this_miner_chipid.as_str() {
+                        stat.rejected_shares += 1;
                     } else {
-                        reward = kolka::kolka::calculate_reward(hashrate_calc.max(1f32), conn.miner_stat.worker_slot.id(), diff, &CURVE_VALUES.load());
+                        reward = kolka::kolka::calculate_reward(hashrate_calc.max(1f32), stat.worker_slot.id(), self.diff, &CURVE_VALUES.load());
                     }
                 } else {
-                    reward = kolka::kolka::calculate_reward(hashrate_calc.max(1f32), conn.miner_stat.worker_slot.id(), diff, &CURVE_VALUES.load());
+                    reward = kolka::kolka::calculate_reward(hashrate_calc.max(1f32), stat.worker_slot.id(), self.diff, &CURVE_VALUES.load());
                 }
             }
 
+            share_accepted = true;
             if rng().random_range(0u32..CURVE_VALUES.load().block_probability) == 0 {
                 reward += config.block_reward;
-
-                conn.write("BLOCK\n").await?;
-                info!("Block found by {}", conn.miner_stat.username);
-                share_accepted = true;
+                block_found = true;
+                "BLOCK\n"
             } else {
-                conn.write("GOOD\n").await?;
-                share_accepted = true;
+                "GOOD\n"
             }
         } else {
-            conn.miner_stat.rejected_shares += 1;
-            conn.write("BAD,Incorrect result\n").await?;
+            stat.rejected_shares += 1;
+            "BAD,Incorrect result\n"
+        };
+
+        Ok(Judged {
+            feedback,
+            reward,
+            share_accepted,
+            block_found,
+            hashrate,
+            published_hashrate: if hashrate_is_estimated {
+                hashrate
+            } else {
+                reported_hashrate
+            },
+            invalid_hashrate,
+            answer_received,
+        })
+    }
+
+    fn commit(
+        &mut self,
+        id: ConnId,
+        stat: &mut MinerStat,
+        answer: &str,
+        judged: &Judged,
+        config: &PoolConfig,
+    ) -> Result<(), Close> {
+        if judged.block_found {
+            info!("Block found by {}", stat.username);
         }
 
-        if share_accepted {
+        if judged.share_accepted {
             // only clone the username key when the entry doesn't exist yet
-            match BALANCES_TO_UPDATE.get_mut(&conn.miner_stat.username) {
-                Some(mut balance) => *balance += reward,
+            match BALANCES_TO_UPDATE.get_mut(&stat.username) {
+                Some(mut balance) => *balance += judged.reward,
                 None => {
                     *BALANCES_TO_UPDATE
-                        .entry(conn.miner_stat.username.clone())
-                        .or_insert(0f32) += reward
+                        .entry(stat.username.clone())
+                        .or_insert(0f32) += judged.reward
                 }
             }
 
@@ -347,12 +452,15 @@ pub async fn handle(
                 std::sync::atomic::Ordering::Relaxed,
             );
         }
-        if conn.miner_stat.accepted_shares > 0
-            && conn
-                .miner_stat
+        if stat.accepted_shares > 0
+            && stat
                 .accepted_shares
                 .is_multiple_of(config.update_miners_stats_every as u64)
         {
+            // judge scanned it too, but its fields aren't kept while the feedback is written
+            let mut data: [&str; 8] = [""; 8];
+            let data_len = scan_fields(answer, &mut data);
+
             let (rig_part, key_part) = if data_len >= 4 {
                 match data[3].split_once(':') {
                     Some((r, k)) => (r, Some(k)),
@@ -365,8 +473,8 @@ pub async fn handle(
             // the only fallible step, done before the published entry is touched
             if let Some(key) = key_part {
                 // mining key backwards compatibility for old miners
-                if !encode_password(key, &mut conn.miner_stat.password) {
-                    return reject_password(conn).await;
+                if !encode_password(key, &mut stat.password) {
+                    return Err(PASSWORD_TOO_LONG);
                 }
             }
 
@@ -374,41 +482,36 @@ pub async fn handle(
                 software: if data_len >= 3 { Some(data[2]) } else { None },
                 rig: rig_part,
                 wallet_id: if data_len >= 6 { data[5] } else { "None" },
-                hashrate: if hashrate_is_estimated {
-                    hashrate
-                } else {
-                    reported_hashrate
-                },
-                difficulty: diff,
-                reward,
-                timestamp: answer_received.duration_since(UNIX_EPOCH)?.as_secs() as u32,
+                hashrate: judged.published_hashrate,
+                difficulty: self.diff,
+                reward: judged.reward,
+                timestamp: judged.answer_received as u32,
             };
 
-            // one guard for all fields; nothing below fails or awaits
-            match MINER_STATS.get_mut(&conn.id) {
+            // one guard for all fields; nothing below fails
+            match MINER_STATS.get_mut(&id) {
                 Some(mut e) => {
-                    e.update_from(&conn.miner_stat);
+                    e.update_from(stat);
                     published.write_into(&mut e);
                 }
                 None => {
-                    let mut stat = conn.miner_stat.convert_slim();
+                    let mut stat = stat.convert_slim();
                     published.write_into(&mut stat);
-                    MINER_STATS.insert(conn.id, stat);
+                    MINER_STATS.insert(id, stat);
                 }
             }
 
-            LAST_BLOCK_HASH.store(Arc::new(new_hash_str.to_string()));
+            LAST_BLOCK_HASH.store(Arc::new(self.new_hash_str().to_string()));
         }
 
         // after the reward and stats, so both use the difficulty of the job that was just solved
         // a rejected hashrate must not steer the next job (inf would make it unsolvable)
-        if !invalid_hashrate {
-            diff = kolka::kolka::calculate_difficulty(hashrate as f64, &CURVE_VALUES.load());
+        if !judged.invalid_hashrate {
+            self.diff = kolka::kolka::calculate_difficulty(judged.hashrate as f64, &CURVE_VALUES.load());
         }
 
-        is_first_share = false;
-        // because feedback_sent is only used to calculate the ping, we want to set it as late as possible
-        feedback_sent = Instant::now();
+        self.is_first_share = false;
+        Ok(())
     }
 }
 
@@ -468,13 +571,6 @@ fn encode_password(raw: &str, out: &mut CompactString) -> bool {
     // base64 output is always valid utf-8
     out.push_str(std::str::from_utf8(&buf[..len]).unwrap());
     true
-}
-
-// explicit rejection instead of silently dropping the connection
-async fn reject_password(conn: &mut Connection) -> Result<(), anyhow::Error> {
-    conn.write("BAD,Password too long\n").await?;
-    // used so we can handle closes centrally
-    Err(anyhow::Error::from_boxed(Box::from("Shutting down.")))
 }
 
 fn check_workers(max: f32, config: &PoolConfig) -> bool {
