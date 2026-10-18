@@ -9,11 +9,13 @@
 //!    `expanded`).
 //! 3. **Report** - write per-case and per-run JSON reports and pick an exit code.
 //!
-//! The opt-in `benchmark` suite has its own pipeline in `benchmark`.
+//! The opt-in `benchmark` and `microbench` suites have their own pipelines in
+//! `benchmark` and `microbench`
 
 mod benchmark;
 mod expanded;
 mod harness;
+mod microbench;
 mod mock;
 mod prepare;
 mod session;
@@ -41,12 +43,15 @@ const HELP: &str = "\
 Pool verifier
   cargo run --manifest-path pool-verifier/Cargo.toml -- [--list] [--suite NAME] [--slow]
 
-Suites: connections, protocol, counters, kolka, sync, lifecycle, internal; benchmark (opt-in, release CLI)
+Suites: connections, protocol, counters, kolka, sync, lifecycle, internal; benchmark, microbench (opt-in, release CLI)
 --case NAME filters one check; --mutation reward|pending|auth|release changes only the disposable copy for sensitivity validation.
 Repeat --suite to select multiple suites. --slow includes the real 90-second idle timeout.
 Benchmark: cargo run --release --manifest-path pool-verifier/Cargo.toml -- --suite benchmark [--record-baseline]
 Benchmarks use the pool bench feature. --record-baseline explicitly saves/replaces measured results; normal runs compare without overwriting.
 Options: --benchmark-samples N (5), --benchmark-shares N (10000 per client), --benchmark-warmup N (100), --benchmark-clients N (16).
+Microbench: cargo run --release --manifest-path pool-verifier/Cargo.toml -- --suite microbench [--against REV]
+Times the share logic without sockets, working tree against REV (main), alternating both in one run.
+Options: --microbench-samples N (15), --microbench-shares N (1000000).
 Exit codes: 0 pass, 1 test failure, 2 setup error, 130 interrupted.";
 
 #[tokio::main]
@@ -76,6 +81,8 @@ struct Cli {
     list: bool,
     /// Options only valid together with `--suite benchmark`.
     benchmark: benchmark::Args,
+    /// options that only go with `--suite microbench`
+    microbench: microbench::Args,
 }
 
 impl Cli {
@@ -98,7 +105,9 @@ impl Cli {
                     .push(args.next().context("--suite needs a suite name")?),
                 "--help" | "-h" => return Ok(None),
                 _ => {
-                    if !cli.benchmark.parse(&arg, &mut args)? {
+                    if !cli.benchmark.parse(&arg, &mut args)?
+                        && !cli.microbench.parse(&arg, &mut args)?
+                    {
                         bail!("Unknown argument {arg}; use --help");
                     }
                 }
@@ -109,6 +118,10 @@ impl Cli {
 
     fn wants_benchmark(&self) -> bool {
         self.suites.iter().any(|suite| suite == "benchmark")
+    }
+
+    fn wants_microbench(&self) -> bool {
+        self.suites.iter().any(|suite| suite == "microbench")
     }
 }
 
@@ -137,6 +150,26 @@ async fn execute() -> Result<i32> {
     anyhow::ensure!(
         !cli.benchmark.used,
         "Benchmark options require --suite benchmark"
+    );
+
+    if cli.wants_microbench() {
+        // builds its own two test executables, same as the benchmark
+        anyhow::ensure!(
+            cli.suites.iter().all(|suite| suite == "microbench")
+                && cli.mutation.is_none()
+                && cli.case.is_none()
+                && !cli.slow,
+            "Run --suite microbench separately without --mutation, --case, or --slow"
+        );
+        if cli.list {
+            microbench::list();
+            return Ok(EXIT_PASS);
+        }
+        return microbench::run(cli.microbench).await;
+    }
+    anyhow::ensure!(
+        !cli.microbench.used,
+        "Microbench options require --suite microbench"
     );
 
     let cases = select_cases(&cli)?;
@@ -184,6 +217,7 @@ fn print_list(cli: &Cli, cases: &[&Case]) {
     // An unfiltered listing also advertises the opt-in benchmark workloads.
     if cli.suites.is_empty() && cli.case.is_none() {
         benchmark::list();
+        microbench::list();
     }
 }
 

@@ -15,8 +15,12 @@
 //! 3. Mirror the finished stage into `work/source` and compile it there.
 //!
 //! None of these changes are copied back to the repository.
+//!
+//! the microbenchmark copies (`build_microbench`) skip step 2, apart from one
+//! appended file, `injected/microbench.rs`, and get built twice: from a git
+//! revision and from the working tree
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -69,6 +73,109 @@ pub fn build_benchmark(root: &Path, home: &Path, cancelled: Arc<AtomicBool>) -> 
         benchmark: true,
     };
     build_copy(root, home, &cancelled, &plan)
+}
+
+/// prepares and compiles the microbenchmark test executables, `[base, current]`
+///
+/// `base` is `revision` straight from git, `current` the working tree; both only get
+/// `injected/microbench.rs` appended, so what's timed is the production code
+///
+/// both sides get built from the same path, one after the other, and copied out;
+/// source paths end up in the binary (panic locations, log metadata), and a
+/// different code layout alone moves the timings by a few percent, so from one path
+/// identical sources give identical code; the copies' names have the same length
+/// too: the executable path sits on the initial stack, so a longer name shifts the
+/// stack alignment, which measurably pushed identical binaries apart
+pub fn build_microbench(
+    root: &Path,
+    home: &Path,
+    revision: &str,
+    cancelled: Arc<AtomicBool>,
+) -> Result<[PathBuf; 2]> {
+    fs::create_dir_all(home)?;
+    let target = cargo_target_dir(root, home, false);
+    let tree = home.join("base-tree");
+    if tree.exists() {
+        remove_owned(&tree, home)?;
+    }
+    export_revision(root, revision, &tree)?;
+    // Cargo.lock isn't tracked; both sides use the working tree's, so they build
+    // against the same dependency versions
+    fs::copy(root.join("Cargo.lock"), tree.join("Cargo.lock"))?;
+
+    let work = home.join("build");
+    fs::create_dir_all(&work)?;
+    let mut binaries = [PathBuf::new(), PathBuf::new()];
+    for (index, (binary, (side, side_root))) in binaries
+        .iter_mut()
+        .zip([("base", tree.as_path()), ("current", root)])
+        .enumerate()
+    {
+        let stage = stage_sources(side_root, &work, true)?;
+        patch_file(&stage, "src/mining/mining.rs", |text| {
+            text.push_str(include_str!("../injected/microbench.rs"));
+            Ok(())
+        })?;
+        let source = work.join("source");
+        mirror(&stage, &source, &work)?;
+        println!(
+            "Building {side} microbenchmark (log: {})",
+            work.join("internal-build.jsonl").display()
+        );
+        build_internal_tests(&work, &source, &target, &cancelled)?;
+        let built = fs::read_to_string(work.join("internal-binary.txt"))?;
+        *binary = home.join(format!("side-{index}{}", std::env::consts::EXE_SUFFIX));
+        fs::copy(built.trim(), &binary)?;
+    }
+    Ok(binaries)
+}
+
+/// writes the tracked pool sources of `revision` (`src/`, `Cargo.toml`, `build.rs`)
+/// into `tree`, without touching the repository's index or checkout
+fn export_revision(root: &Path, revision: &str, tree: &Path) -> Result<()> {
+    let git = |args: &[&str]| -> Result<Vec<u8>> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .context("Could not start git")?;
+        ensure!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(output.stdout)
+    };
+    let listing = git(&[
+        "ls-tree",
+        "-r",
+        "-z",
+        "--name-only",
+        revision,
+        "--",
+        "src",
+        "Cargo.toml",
+        "build.rs",
+    ])?;
+    for path in listing
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+    {
+        let path = std::str::from_utf8(path)?;
+        let destination = tree.join(path);
+        fs::create_dir_all(
+            destination
+                .parent()
+                .context("Exported path has no parent")?,
+        )?;
+        fs::write(
+            destination,
+            git(&["cat-file", "blob", &format!("{revision}:{path}")])?,
+        )?;
+    }
+    Ok(())
 }
 
 fn build_copy(root: &Path, home: &Path, cancelled: &AtomicBool, plan: &Plan) -> Result<PathBuf> {
@@ -250,8 +357,8 @@ fn stage_sources(root: &Path, work: &Path, benchmark: bool) -> Result<PathBuf> {
         fs::copy(root.join(name), stage.join(name))?;
     }
     if benchmark {
-        // The benchmark copy lives under `work/benchmark/`, which the verifier's
-        // own `[workspace]` does not exclude. An empty `[workspace]` table makes
+        // the benchmark copies live under `work/benchmark/` and `work/microbench/`,
+        // which the verifier's own `[workspace]` doesn't exclude; an empty `[workspace]` table makes
         // the copy its own workspace root.
         let path = stage.join("Cargo.toml");
         let mut manifest = fs::read_to_string(&path)?;

@@ -58,6 +58,37 @@ Artifacts are stored in `runs/benchmark-<timestamp>-<pid>/`. `benchmark.json` co
 
 These are end-to-end loopback measurements, including client validation and OS scheduling; they are not a guarantee of maximum deployed capacity. Keep other machine load and power settings consistent. Settings, platform, logical CPU count, Rust/Cargo versions, local Cargo configuration and measurement-harness changes must match the baseline. Compare only on the same machine. Throughput changes are reported without an arbitrary performance pass/fail threshold; exit 0 means measurement/comparison succeeded, not that performance improved. The suite cannot be mixed with functional suites, `--case`, `--slow`, or `--mutation`.
 
+## Share-logic microbenchmark (A/B)
+
+Most of the end-to-end benchmark's time per share is loopback round trips and OS scheduling, so small changes to the share logic disappear in its noise. The opt-in `microbench` suite times that logic directly, without sockets, and compares two revisions in one run instead of against a saved baseline:
+
+```text
+cargo run --release --manifest-path pool-verifier/Cargo.toml -- --suite microbench
+cargo run --release --manifest-path pool-verifier/Cargo.toml -- --suite microbench --against HEAD~1
+cargo run --manifest-path pool-verifier/Cargo.toml -- --suite microbench --list
+```
+
+The pool's release test executable is built twice: `base` from a git revision (`--against`, default `main`, resolved to a commit once per run) and `current` from the working tree, uncommitted changes included. Both use the working tree's `Cargo.lock` and are built from the same path, one after the other, because source paths end up in the binary and a different code layout alone moves timings by a few percent. With identical sources the two executables contain identical code. Their file names have the same length as well: the executable path sits on the initial stack, and in testing a longer name alone made the same binary about 5% faster. Each only gets `injected/microbench.rs` appended to `mining/mining.rs`: no endpoint redirection, observation surface, or `bench` feature, so the timed code is the production share logic. The base revision must already contain `mining::Session`, which both sides drive.
+
+Each sample of a workload runs once per side, in a fresh process, back to back. The side that goes first alternates between samples. Slow drift of the machine (clock speed, background load) therefore affects both sides alike. The environment is padded by 0-240 bytes, a different length in each sample and the same for both sides of a sample, so the samples cover several stack alignments. Every run starts from a fresh copy of its executable, because Windows picks an executable's load address once per file and boot: two identical copies otherwise kept speeds 2-4% apart for a whole run. Every sample warms up with 10 000 accepted shares, then times `--microbench-shares` whole shares (job request, job, answer, feedback, commit) on a fake clock. Building the answer line is inside the timed region on both sides.
+
+| Workload | What it exercises |
+| --- | --- |
+| `accepted` | PC miner (500 kH/s), every share accepted, stats published on every share |
+| `accepted-stats-every-10` | the same, stats published every 10th share |
+| `rejected` | wrong nonce after an accepted warmup |
+| `esp32` | ESP32 half worker below the MCU step (40 kH/s), chip-id check on every reward |
+| `contended` | one miner per logical CPU on one username, wall time per share across all of them |
+| `task-size` | `size_of_val` of the `handle_connection` future, the memory kept per connection across awaits; run once per side |
+
+| Option | Default | Allowed |
+| --- | ---: | ---: |
+| `--against` | `main` | any git revision |
+| `--microbench-samples` | 15 | 3-100 |
+| `--microbench-shares` | 1 000 000 | 10 000-10 000 000 |
+
+The result per workload is the median of the per-sample `current / base` ratios, plus the smallest and largest ratio. To see the noise floor on a machine, compare a clean working tree with `--against HEAD`. Artifacts are stored in `runs/microbench-<timestamp>-<pid>/microbench.json`, and builds are cached in `work/microbench`. The suite cannot be mixed with other suites, `--case`, `--slow`, or `--mutation`, and it doesn't cover reading and writing lines, timeouts or tokio scheduling. The end-to-end benchmark still covers those.
+
 ## Coverage
 
 [COVERAGE.md](COVERAGE.md) describes each behavior, its oracle, associated scenarios, and remaining limits. [coverage.json](coverage.json) is the machine-readable inventory; a verifier unit test ensures every functional scenario appears and all inventory IDs exist. **Asserted means a correctness check exists, not that the pool passes it.**

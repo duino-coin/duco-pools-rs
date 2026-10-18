@@ -182,7 +182,7 @@ impl Args {
     }
 }
 
-fn number(arg: &str, args: &mut impl Iterator<Item = String>) -> Result<usize> {
+pub(crate) fn number(arg: &str, args: &mut impl Iterator<Item = String>) -> Result<usize> {
     args.next()
         .with_context(|| format!("{arg} needs a positive integer"))?
         .parse()
@@ -317,16 +317,16 @@ fn percentile(values: &[f64], fraction: f64) -> f64 {
     values[((values.len() as f64 * fraction).ceil() as usize).saturating_sub(1)]
 }
 
-fn median(values: impl IntoIterator<Item = f64>) -> f64 {
+pub(crate) fn median(values: impl IntoIterator<Item = f64>) -> f64 {
     percentile(&values.into_iter().collect::<Vec<_>>(), 0.5)
 }
 
 /// Relative change as a percentage (`+10.0` means 10 % higher than `baseline`).
-fn change_percent(current: f64, baseline: f64) -> f64 {
+pub(crate) fn change_percent(current: f64, baseline: f64) -> f64 {
     (current / baseline - 1.0) * 100.0
 }
 
-fn command_output(root: &Path, name: &str, args: &[&str]) -> Result<String> {
+pub(crate) fn command_output(root: &Path, name: &str, args: &[&str]) -> Result<String> {
     let output = Command::new(name).args(args).current_dir(root).output()?;
     ensure!(
         output.status.success(),
