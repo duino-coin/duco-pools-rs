@@ -1,0 +1,4 @@
+[toolchain]
+# pinned so CI and release-verify.sh build the same bytes
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]
