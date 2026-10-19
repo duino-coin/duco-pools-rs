@@ -3,7 +3,6 @@
 /config/config-node.json
 /config/bans.json
 /pool.zip
-/Cargo.lock
 /miner/
 /dashboard
 /duino-coin-pools-js/
