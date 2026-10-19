@@ -35,15 +35,18 @@ flate2 = "1.1.10"
 [profile.profiling]
 inherits = "release"
 debug = true
+strip = false
 
 [profile.local]
 inherits = "release"
 debug-assertions = true
+strip = false
 
 [profile.release]
 lto = true
 codegen-units = 1
 panic = "unwind"
+strip = true
 
 [features]
 bench = []
