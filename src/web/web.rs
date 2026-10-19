@@ -31,16 +31,13 @@ struct StatsWithoutKeys<'a>(&'a DashMap<ConnId, MinerStatSlim>);
 
 impl Serialize for StatsWithoutKeys<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeMap;
-        let mut map = serializer.serialize_map(Some(self.0.len()))?;
-        for entry in self.0.iter() {
+        serializer.collect_map(self.0.iter().map(|entry| {
             let stat = MinerStatSlim {
                 password: CompactString::default(),
                 ..entry.value().clone()
             };
-            map.serialize_entry(entry.key(), &stat)?;
-        }
-        map.end()
+            (*entry.key(), stat)
+        }))
     }
 }
 

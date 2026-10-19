@@ -151,20 +151,14 @@ pub struct StatsWithContext<'a> {
     pub pool_name: &'a str,
 }
 
-// JSON bytes of one entry with every string empty and every number as short as possible
-// (`"<16 hex>":{"u":"","h":0.0,...,"al":"DUCO-S1","p":""}`), without the pool name
-const MIN_ENTRY_JSON_BYTES: usize = 178;
-
-impl StatsWithContext<'_> {
-    // never more than the serialized size, so it can pre-size the buffer without over-allocating
-    pub fn min_json_len(&self) -> usize {
-        2 + self.stats.len() * (MIN_ENTRY_JSON_BYTES + self.pool_name.len())
-    }
-}
 impl<'a> serde::Serialize for StatsWithContext<'a> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
-        let mut map = serializer.serialize_map(Some(self.stats.len()))?;
+        // found by Opus 5.5
+        // no length: DashMap::len() read-locks every shard, and a stale Some(0) makes serde_json
+        // close the object early, so an entry inserted meanwhile would produce invalid JSON.
+        // not collect_map, the context borrows from the entry guard
+        let mut map = serializer.serialize_map(None)?;
         for entry in self.stats.iter() {
             let ctx = MinerStatSlimContext {
                 stat: entry.value(),
@@ -180,25 +174,6 @@ impl<'a> serde::Serialize for StatsWithContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn min_json_len_is_exact_for_the_smallest_entry() {
-        let stats = dashmap::DashMap::new();
-        let ctx = StatsWithContext {
-            stats: &stats,
-            pool_name: "pool",
-        };
-        assert_eq!(ctx.min_json_len(), serde_json::to_vec(&ctx).unwrap().len());
-
-        stats.insert(ConnId(0), MinerStatSlim::default());
-        assert_eq!(ctx.min_json_len(), serde_json::to_vec(&ctx).unwrap().len());
-
-        stats.insert(
-            ConnId(u64::MAX),
-            MinerStat::new("::1".into(), "bob".into()).convert_slim(),
-        );
-        assert!(ctx.min_json_len() <= serde_json::to_vec(&ctx).unwrap().len());
-    }
 
     #[test]
     fn conn_id_keys_are_16_lowercase_hex_digits() {

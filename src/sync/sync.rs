@@ -8,7 +8,6 @@ use data::data::LoginInfos;
 use log::warn;
 use log::{debug, error, info};
 use reqwest::multipart;
-use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{HashSet};
 use std::process::exit;
@@ -65,11 +64,7 @@ impl RewardSnapshot {
 
 impl Serialize for RewardSnapshot {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(self.0.len()))?;
-        for (key, value) in &self.0 {
-            map.serialize_entry(key, value)?;
-        }
-        map.end()
+        serializer.collect_map(self.0.iter().map(|(key, value)| (key, value)))
     }
 }
 
@@ -384,9 +379,12 @@ pub async fn sync(
         stats: &mining::MINER_STATS,
         pool_name: &config.pool_name,
     };
-    // pre-sized with a lower bound: fewer reallocations, never more capacity than needed
-    let mut worker_content = Vec::with_capacity(workers_ctx.min_json_len());
+    // pre-sized from the previous sync plus some headroom, usually no reallocations
+    static LAST_WORKERS_JSON_LEN: AtomicUsize = AtomicUsize::new(0);
+    let last_len = LAST_WORKERS_JSON_LEN.load(Relaxed);
+    let mut worker_content = Vec::with_capacity(last_len + last_len / 8);
     serde_json::to_writer(&mut worker_content, &workers_ctx)?;
+    LAST_WORKERS_JSON_LEN.store(worker_content.len(), Relaxed);
 
     let worker_content = write_file(worker_path.clone(), worker_content).await?;
 
