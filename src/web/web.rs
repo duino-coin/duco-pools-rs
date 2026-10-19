@@ -22,8 +22,26 @@ struct HttpRes {
 #[derive(Serialize)]
 struct DataRes<'a> {
     connections: usize,
-    miner_stats: &'a DashMap<ConnId, MinerStatSlim>, // keys serialize as 16 hex chars
+    miner_stats: StatsWithoutKeys<'a>, // keys serialize as 16 hex chars
     workers: &'a DashMap<CompactString, WorkerAllocator>,
+}
+
+// MINER_STATS as-is, minus the mining keys (pw), blanked on a per-entry copy while serializing
+struct StatsWithoutKeys<'a>(&'a DashMap<ConnId, MinerStatSlim>);
+
+impl Serialize for StatsWithoutKeys<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for entry in self.0.iter() {
+            let stat = MinerStatSlim {
+                password: CompactString::default(),
+                ..entry.value().clone()
+            };
+            map.serialize_entry(entry.key(), &stat)?;
+        }
+        map.end()
+    }
 }
 
 pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<()> {
@@ -53,7 +71,7 @@ pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<(
                         if ct_eq(provided_key, &dash_key_clone) {
                             let data_res = DataRes {
                                 connections: CONNECTIONS.load(Relaxed),
-                                miner_stats: &mining::mining::MINER_STATS,
+                                miner_stats: StatsWithoutKeys(&mining::mining::MINER_STATS),
                                 workers: &mining::mining::USR_WORKERS_ALLOC,
                             };
                             return Ok(warp::reply::json(&data_res));
