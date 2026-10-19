@@ -1,17 +1,17 @@
 #!/usr/bin/env sh
-# Verifies a CI release by rebuilding it locally, then writes (and optionally signs) a manifest.
+# verifies a CI release by rebuilding it locally, then writes (and optionally signs) a manifest
 #
 #   ./release-verify.sh <tag>          wait for CI, download, rebuild, compare, write manifest
-#   ./release-verify.sh <tag> --sign   additionally sign the manifest with the SSH release key,
-#                                      upload it and publish the release if it is still a draft
+#   ./release-verify.sh <tag> --sign   also sign the manifest with the SSH release key, upload
+#                                      it and publish the release if it's still a draft
 #
-# The tag is checked out into a separate git worktree, so local changes never end up in the
-# rebuild. The hashes only match while both sides build the same way: the committed Cargo.lock,
-# the toolchain from rust-toolchain.toml and the cross version from .github/workflows/rust.yml
-# (keep the local cross at that version).
+# the tag gets checked out into its own git worktree, so local changes never end up in the
+# rebuild; hashes only match as long as both sides build the same way (committed Cargo.lock,
+# toolchain from rust-toolchain.toml, cross version from .github/workflows/rust.yml, so keep
+# the local cross at that version)
 #
-# Requires: git, gh (logged in), cross + podman, sha256sum, tar; ssh-keygen for --sign.
-# Environment:
+# needs: git, gh (logged in), cross + podman, sha256sum, tar; for --sign also ssh-keygen
+# environment:
 #   REPO          GitHub repository with the releases (default: duino-coin/duco-pools-rs)
 #   SIGNING_KEY   SSH key to sign with (default: ~/.ssh/release_sk)
 #   SSH_KEYGEN    ssh-keygen to sign with (default: the Windows system one if present)
@@ -94,6 +94,21 @@ done
 
 echo "== rebuilding locally"
 git worktree add --detach "$WORKTREE" "$COMMIT" >/dev/null
+if [ "$SIGN" -eq 1 ]; then
+    # never sign a build that trusts a different key than the one signing it (e.g. a swapped
+    # release_key.pub that got merged); only type and key are compared, not the comment
+    key_of() {
+        tr -d '\r' <"$1" | cut -d ' ' -f 1,2
+    }
+    if [ ! -f "$WORKTREE/src/updater/release_key.pub" ]; then
+        echo "$TAG has no src/updater/release_key.pub, not signing" >&2
+        exit 1
+    fi
+    if [ "$(key_of "$WORKTREE/src/updater/release_key.pub")" != "$(key_of "$SIGNING_KEY.pub")" ]; then
+        echo "release key embedded in $TAG differs from $SIGNING_KEY.pub, not signing" >&2
+        exit 1
+    fi
+fi
 podman machine start 2>/dev/null || true
 for target in $TARGETS; do
     (cd "$WORKTREE" && cross build --locked --release --target "$target")
