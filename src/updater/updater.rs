@@ -10,8 +10,17 @@ use std::str::FromStr;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
- const API_URL: &str = "https://api.github.com/repos/duino-coin/duco-pools-rs/releases/latest";
+// parts of the code was shoehorned in by Opus 5.5
+const API_URL: &str = "https://api.github.com/repos/duino-coin/duco-pools-rs/releases/latest";
 const BUILD_TARGET: &str = env!("BUILD_TARGET");
+// releases are only installed if manifest.json is signed by this key under SIGNATURE_NAMESPACE
+const RELEASE_KEY: &str = include_str!("release_key.pub");
+const SIGNATURE_NAMESPACE: &str = "duco-pool-rs-release";
+const MANIFEST_NAME: &str = "manifest.json";
+const SIGNATURE_NAME: &str = "manifest.json.sig";
+// the manifest lists a handful of assets and the signature is a small PEM block
+const MAX_MANIFEST_SIZE: u64 = 64 * 1024;
+const MAX_SIGNATURE_SIZE: u64 = 4 * 1024;
 // release archive as packaged by actions-rust-release
 #[cfg(not(target_os = "windows"))]
 const ARCHIVE_EXTENSION: &str = ".tar.gz";
@@ -231,8 +240,6 @@ fn check_digest(actual: &[u8], digest: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
-// writes the body to `staging` while hashing it; same checks and order as before
-// (empty download, then digest)
 async fn stage_download(
     mut response: reqwest::Response,
     staging: &Path,
@@ -257,6 +264,61 @@ async fn stage_download(
     file.flush().await?;
     file.sync_all().await?;
     Ok(())
+}
+
+async fn get_asset(client: &reqwest::Client, url: &str) -> anyhow::Result<reqwest::Response> {
+    Ok(client
+        .get(url)
+        .header("Accept", "application/octet-stream")
+        .header("User-Agent", "duco-pool-rs")
+        .send()
+        .await?
+        .error_for_status()?)
+}
+
+// reads a small asset (manifest, signature) into memory, at most `max` bytes
+async fn download_small(mut response: reqwest::Response, max: u64) -> anyhow::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if (bytes.len() + chunk.len()) as u64 > max {
+            bail!("Downloaded asset exceeds {max} bytes");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+// the signature must come from `release_key` and be made for SIGNATURE_NAMESPACE
+fn verify_manifest(
+    release_key: &str,
+    manifest: &[u8],
+    signature: &[u8],
+) -> anyhow::Result<Manifest> {
+    let release_key =
+        ssh_key::PublicKey::from_openssh(release_key.trim()).context("Invalid release key")?;
+    let signature = ssh_key::SshSig::from_pem(signature).context("Malformed manifest signature")?;
+    release_key
+        .verify(SIGNATURE_NAMESPACE, manifest, &signature)
+        .context("Manifest signature does not match the release key")?;
+    serde_json::from_slice(manifest).context("Malformed manifest")
+}
+
+async fn fetch_signed_manifest(
+    client: &reqwest::Client,
+    assets: &[Asset],
+) -> anyhow::Result<Manifest> {
+    let url = |name: &str| {
+        assets
+            .iter()
+            .find(|asset| asset.name == name)
+            .map(|asset| asset.url.as_str())
+            .with_context(|| format!("Release has no {name}"))
+    };
+    let manifest = get_asset(client, url(MANIFEST_NAME)?).await?;
+    let manifest = download_small(manifest, MAX_MANIFEST_SIZE).await?;
+    let signature = get_asset(client, url(SIGNATURE_NAME)?).await?;
+    let signature = download_small(signature, MAX_SIGNATURE_SIZE).await?;
+    verify_manifest(RELEASE_KEY, &manifest, &signature)
 }
 
 // pulls only the executable out of the verified release archive into `staging`
@@ -346,21 +408,26 @@ pub async fn fetch_latest_version(timeout: Duration) -> anyhow::Result<Option<Do
             "{}-{BUILD_TARGET}{ARCHIVE_EXTENSION}",
             env!("CARGO_PKG_NAME")
         );
-        for asset in response.assets {
+        for asset in &response.assets {
             if asset.name.eq_ignore_ascii_case(&archive_name) {
-                let download = client
-                    .get(asset.url)
-                    .header(
-                        "Accept",
-                        "application/octet-stream"
-                    )
-                    .header(
-                        "User-Agent",
-                        "duco-pool-rs"
-                    )
-                    .send()
-                    .await?
-                    .error_for_status()?;
+                // only the manifest is signed, the release around it (tag, assets) is not
+                let manifest = fetch_signed_manifest(&client, &response.assets).await?;
+                if manifest.tag != response.tag_name || parse_tag(&manifest.version)? != tag_version
+                {
+                    bail!(
+                        "Signed manifest is for {}, not {}",
+                        manifest.tag,
+                        response.tag_name
+                    );
+                }
+                let entry = manifest
+                    .assets
+                    .iter()
+                    .find(|entry| entry.asset == asset.name)
+                    .with_context(|| format!("Signed manifest does not list {}", asset.name))?;
+                let digest = format!("sha256:{}", entry.archive_sha256);
+
+                let download = get_asset(&client, &asset.url).await?;
 
                 let executable = std::env::current_exe()?;
                 let path = update_path(&executable)?;
@@ -370,7 +437,7 @@ pub async fn fetch_latest_version(timeout: Duration) -> anyhow::Result<Option<Do
                 // complete, so a partial or bad download is never installable
                 let archive = with_suffix(&path, ARCHIVE_EXTENSION);
 
-                let staged = stage_download(download, &archive, asset.digest.as_deref()).await;
+                let staged = stage_download(download, &archive, Some(&digest)).await;
                 if let Err(err) = staged {
                     let _ = tokio::fs::remove_file(&archive).await;
                     return Err(err).with_context(|| {
@@ -408,13 +475,26 @@ pub async fn fetch_latest_version(timeout: Duration) -> anyhow::Result<Option<Do
 struct Asset {
     pub url: String,
     pub name: String,
-    pub digest: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct Root {
     pub tag_name: String,
     pub assets: Vec<Asset>,
+}
+
+// manifest.json as written by release-verify.sh; only the fields the updater reads
+#[derive(Deserialize)]
+struct Manifest {
+    pub version: String,
+    pub tag: String,
+    pub assets: Vec<ManifestAsset>,
+}
+
+#[derive(Deserialize)]
+struct ManifestAsset {
+    pub asset: String,
+    pub archive_sha256: String,
 }
 
 // written by GPT-6
@@ -459,6 +539,79 @@ mod tests {
     fn digest_rejects_changed_content() {
         let err = verify_digest(b"abd", Some(ABC_DIGEST)).unwrap_err();
         assert!(err.to_string().contains("digest mismatch"));
+    }
+
+    // throwaway ed25519 key, only used by these tests
+    const TEST_KEY: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOoSP3h4oXDdRdeIDoHLuJKB0WdKMbM+BRXfK2CKgZuP test";
+    const TEST_MANIFEST: &str = r#"{
+  "version": "0.1.9",
+  "tag": "v0.1.9",
+  "commit": "0000000000000000000000000000000000000000",
+  "assets": [
+    {"target": "x86_64-unknown-linux-gnu", "asset": "duco-pool-rs-Linux-gnu-x86_64.tar.gz", "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "binary_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+  ]
+}
+"#;
+    // ssh-keygen -Y sign -f test_key -n duco-pool-rs-release manifest.json
+    const TEST_SIGNATURE: &str = "-----BEGIN SSH SIGNATURE-----
+U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg6hI/eHihcN1F14gOgcu4koHRZ0
+oxsz4FFd8rYIqBm48AAAAUZHVjby1wb29sLXJzLXJlbGVhc2UAAAAAAAAABnNoYTUxMgAA
+AFMAAAALc3NoLWVkMjU1MTkAAABAQQ0zQySNHWEKunSbd2BybTpylV1m3Dc4sft4J8bnmC
+VTPoTxMExrI0zpI8AznIvIjsNgScraewcntHRBZ4+8Cg==
+-----END SSH SIGNATURE-----
+";
+    // the same manifest signed by the same key, but under the namespace "other-namespace"
+    const OTHER_NAMESPACE_SIGNATURE: &str = "-----BEGIN SSH SIGNATURE-----
+U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg6hI/eHihcN1F14gOgcu4koHRZ0
+oxsz4FFd8rYIqBm48AAAAPb3RoZXItbmFtZXNwYWNlAAAAAAAAAAZzaGE1MTIAAABTAAAA
+C3NzaC1lZDI1NTE5AAAAQItj0hckXiD5jsp3KG6v/nUl03h2ckAINdNpzgECprhx4mlUQa
+4HWv7kESyS3xQu5In7Q3SaU6Gui9UdtZEl/Ag=
+-----END SSH SIGNATURE-----
+";
+
+    #[test]
+    fn release_key_is_a_security_key() {
+        let key = ssh_key::PublicKey::from_openssh(RELEASE_KEY.trim()).unwrap();
+        assert_eq!(key.algorithm(), ssh_key::Algorithm::SkEd25519);
+    }
+
+    #[test]
+    fn manifest_accepts_valid_signature() {
+        let manifest = verify_manifest(
+            TEST_KEY,
+            TEST_MANIFEST.as_bytes(),
+            TEST_SIGNATURE.as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(manifest.tag, "v0.1.9");
+        assert_eq!(manifest.assets[0].archive_sha256, "a".repeat(64));
+    }
+
+    #[test]
+    fn manifest_rejects_changed_content() {
+        let changed = TEST_MANIFEST.replace("aaaa", "cccc");
+        assert!(verify_manifest(TEST_KEY, changed.as_bytes(), TEST_SIGNATURE.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn manifest_rejects_other_namespace() {
+        let result = verify_manifest(
+            TEST_KEY,
+            TEST_MANIFEST.as_bytes(),
+            OTHER_NAMESPACE_SIGNATURE.as_bytes(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn manifest_rejects_other_key() {
+        let result = verify_manifest(
+            RELEASE_KEY,
+            TEST_MANIFEST.as_bytes(),
+            TEST_SIGNATURE.as_bytes(),
+        );
+        assert!(result.is_err());
     }
 
     #[test]
