@@ -1,0 +1,8 @@
+# files that decide what the updater trusts and installs; any change here can ship code to
+# every node, so the release key holder has to review it
+/src/updater/ @profpandaa
+/.github/ @profpandaa
+/release-verify.sh @profpandaa
+/rust-toolchain.toml @profpandaa
+/Cargo.toml @profpandaa
+/Cargo.lock @profpandaa
