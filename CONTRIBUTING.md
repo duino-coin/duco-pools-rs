@@ -69,14 +69,14 @@ Things need to be done before a pull request can be merged. Your CI also checks 
 - What is the impact of this change?
 - Are there any known issues or limitations?
 - Include any relevant context, such as related issues or discussions.
-- **Benchmarks:** A baseline (recorded pre-changes) and subsequent runs must be included, primarily when changes touch the hot path (mining threads). A single run is generally not enough to distinguish from noise. The rough values must be included in the PR.
+- **Benchmarks:** A baseline (recorded pre-changes) and subsequent runs must be included, primarily when changes touch the hot path (mining threads). This includes the benchmark and the microbench suite. A single run is generally not enough to distinguish from noise. The rough values must be included in the PR.
 - **No Clippy Warnings:** Address all warnings reported by the Clippy linter. You can check for warnings using `cargo clippy --release --all-targets`. Pre-existing warnings can be ignored.
 - **Passing Unit Tests:** All existing unit tests must pass successfully. You can run the tests with `cargo test`.
 
 #### Best Practice
 
 - **Writing Unit Tests:** When adding new features or modifying existing code, consider adding unit tests to prevent regressions in the future. Refer to the Rust documentation for guidance on writing tests: <https://doc.rust-lang.org/book/ch11-01-writing-tests.html>
-- **Benchmarking:** If your changes might impact performance, consider adding benchmarks to track performance regressions or improvements. Use the benchmark suite from `pool-verifier`. Don't forget to record a baseline beforehand.
+- **Benchmarking:** If your changes might impact performance, consider adding benchmarks to track performance regressions or improvements. Use the benchmark and microbench suite from `pool-verifier`. Don't forget to record a baseline beforehand.
 - **Clear and Concise Commit Messages:** Use clear and concise commit messages that describe the changes you've made.
 - **Code Style:** Adhere to consistent coding style throughout your contributions.
 - **Documentation:** If your changes introduce new functionality, consider updating the relevant documentation.

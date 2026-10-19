@@ -55,7 +55,7 @@ pub async fn handle(
 
     loop {
         if !session.is_first_share {
-            conn.read_to_string(&mut read).await?;
+            conn.read_to_string(&mut read, feedback_sent).await?;
 
             conn.miner_stat.ping = feedback_sent.elapsed().as_secs_f32();
         }
@@ -74,7 +74,7 @@ pub async fn handle(
         conn.write(&read).await?;
 
         let job_sent = Instant::now();
-        conn.read_to_string(&mut read).await?;
+        conn.read_to_string(&mut read, job_sent).await?;
 
         let answer_received = UNIX_EPOCH.elapsed()?.as_secs();
         conn.miner_stat.share_time = job_sent.elapsed().as_secs_f32().max(MIN_SHARE_TIME);
@@ -310,8 +310,8 @@ impl Session {
 
         // an ESP32 only counts as half a worker, so a miner that measures faster than a
         // microcontroller after the warmup is moved to a full worker slot.
-        // the curve is loaded at each use and never kept across an await: a held guard
-        // occupies one of arc-swap's few per-thread slots while the miner is idle
+        // the curve is only loaded where it's needed and never kept across an await: a held
+        // guard occupies one of arc-swap's few per-thread slots while the miner is idle
         if stat.is_req_diff_esp32
             && stat.accepted_shares >= WARMUP_SHARES
             && hashrate_calc as f64 > CURVE_VALUES.load().mcu_pc_step_h
@@ -380,25 +380,27 @@ impl Session {
             response
         } else if nonce == self.random {
             stat.accepted_shares += 1;
+            // one load for the whole share, not held across an await
+            let curve = CURVE_VALUES.load();
             if stat.accepted_shares > WARMUP_SHARES {
                 // why is this a thing?
                 // the difficulty directly correlates with the hashrate, so we can check the device type this way
-                if hashrate_calc as f64 <= CURVE_VALUES.load().mcu_pc_step_h {
+                if hashrate_calc as f64 <= curve.mcu_pc_step_h {
                     #[allow(clippy::if_same_then_else)]
                     if stat.this_miner_chipid.is_empty() {
                         stat.rejected_shares += 1;
                     } else if data_len >= 5 && data[4] != stat.this_miner_chipid.as_str() {
                         stat.rejected_shares += 1;
                     } else {
-                        reward = kolka::kolka::calculate_reward(hashrate_calc.max(1f32), stat.worker_slot.id(), self.diff, &CURVE_VALUES.load());
+                        reward = kolka::kolka::calculate_reward(hashrate_calc.max(1f32), stat.worker_slot.id(), self.diff, &curve);
                     }
                 } else {
-                    reward = kolka::kolka::calculate_reward(hashrate_calc.max(1f32), stat.worker_slot.id(), self.diff, &CURVE_VALUES.load());
+                    reward = kolka::kolka::calculate_reward(hashrate_calc.max(1f32), stat.worker_slot.id(), self.diff, &curve);
                 }
             }
 
             share_accepted = true;
-            if rng().random_range(0u32..CURVE_VALUES.load().block_probability) == 0 {
+            if rng().random_range(0u32..curve.block_probability) == 0 {
                 reward += config.block_reward;
                 block_found = true;
                 "BLOCK\n"

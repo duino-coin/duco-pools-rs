@@ -3,11 +3,13 @@ use compact_str::{CompactString, ToCompactString};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashSet;
 use std::error::Error;
+use std::future::Future;
 use std::net::{Shutdown, SocketAddr};
+use std::pin::Pin;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use tokio::time::Instant;
+use tokio::time::{Instant, Sleep};
 
 const TIMEOUT: Duration = Duration::from_secs(90); // it's 90s in the js pools
 const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
@@ -47,6 +49,8 @@ impl Serialize for ConnId {
 pub struct Connection {
     // unsplit: reads and writes are sequential, and BufReader passes writes through
     stream: BufReader<TcpStream>,
+    // reused timeout timer for wait_for_data(); may be set to an earlier read's deadline, but that doesn't matter
+    read_timer: Pin<Box<Sleep>>,
     pub id: ConnId,
     pub miner_stat: MinerStat,
 }
@@ -64,93 +68,143 @@ impl Connection {
     pub fn new(socket: TcpStream, addr: SocketAddr, username: CompactString, id: ConnId) -> Self {
         Connection {
             stream: BufReader::with_capacity(256, socket),
+            // never later than the deadline of any read on this connection
+            read_timer: Box::pin(tokio::time::sleep(TIMEOUT)),
             id,
             miner_stat: MinerStat::new(addr.ip().to_compact_string(), username),
         }
     }
 
     pub async fn write(&mut self, content: &str) -> Result<(), anyhow::Error> {
-        tokio::time::timeout(TIMEOUT, async {
-            self.stream.write_all(content.as_bytes()).await?;
-            Ok::<(), anyhow::Error>(())
-        })
-        .await??;
+        // first try to immediately write to the stream, so we can save a timeout timer
+        // should the stream not be ready (for whatever reaason) it returns a WouldBlock and we fall back to the timeout
+        let written = match self.stream.get_ref().try_write(content.as_bytes()) {
+            Ok(written) => written,
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => 0,
+            Err(err) => return Err(err.into()),
+        };
+        if written < content.len() {
+            tokio::time::timeout(
+                TIMEOUT,
+                self.stream.write_all(&content.as_bytes()[written..]),
+            )
+            .await??;
+        }
         Ok(())
     }
 
-    // GPT 5.3
-    pub async fn read_to_string(&mut self, output: &mut String) -> Result<(), anyhow::Error> {
-        const MAX_FRAME_BYTES: usize = 1024;
+    // GPT 5.3 + Opus 5.5
+    // `impl Future` is a workaround to a known rustc bug, where arguments are artificially bloated and use up more memory than needed
+    // -> see comment below about async fn
+    pub fn read_to_string<'a>(
+        &'a mut self,
+        output: &'a mut String,
+        waiting_since: std::time::Instant,
+    ) -> impl Future<Output = Result<(), anyhow::Error>> + 'a {
+        // the first read waits for TIMEOUT, any further reads (partial lines), wait for IDLE_TIMEOUT
+        let deadline = Instant::from_std(waiting_since) + TIMEOUT;
+        // not an async fn: that would keep a second copy of `waiting_since` in the future
+        async move {
+            const MAX_FRAME_BYTES: usize = 1024;
 
-        // Reuse the String's allocation without copying
-        let mut bytes = std::mem::take(output).into_bytes();
-        bytes.clear();
+            // Reuse the String's allocation without copying
+            let mut bytes = std::mem::take(output).into_bytes();
+            bytes.clear();
 
-        output.clear();
+            output.clear();
 
-        // One timer per wait: the first read waits for the whole deadline, later reads
-        // (rest of a partial line) wait IDLE_TIMEOUT but never past the deadline
-        let deadline = Instant::now() + TIMEOUT;
-        let mut first_read = true;
+            let mut first_read = true;
 
-        loop {
-            let step_deadline = if first_read {
-                deadline
-            } else {
-                deadline.min(Instant::now() + IDLE_TIMEOUT)
-            };
-            let received =
-                match tokio::time::timeout_at(step_deadline, self.stream.fill_buf()).await {
-                    Ok(Ok(received)) => received,
-                    Ok(Err(err)) => return Err(anyhow::Error::from(err)),
-                    // the overall deadline passed
-                    Err(elapsed) if step_deadline == deadline => return Err(elapsed.into()),
-                    // idle gap within a partial line
-                    Err(_) => break,
+            loop {
+                let received = if first_read {
+                    self.wait_for_data(deadline).await?;
+                    // data or EOF is there now, so this doesn't wait
+                    self.stream.fill_buf().await?
+                } else {
+                    let step_deadline = deadline.min(Instant::now() + IDLE_TIMEOUT);
+                    match tokio::time::timeout_at(step_deadline, self.stream.fill_buf()).await {
+                        Ok(Ok(received)) => received,
+                        Ok(Err(err)) => return Err(anyhow::Error::from(err)),
+                        // the overall deadline passed
+                        Err(elapsed) if step_deadline == deadline => return Err(elapsed.into()),
+                        Err(_) => break,
+                    }
                 };
 
-            if received.is_empty() {
-                break;
+                if received.is_empty() {
+                    break;
+                }
+
+                let newline = memchr::memchr(b'\n', received);
+                let consumed = newline.map_or(received.len(), |pos| pos + 1);
+
+                if consumed > MAX_FRAME_BYTES - bytes.len() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Message too long",
+                    )
+                    .into());
+                }
+
+                bytes.extend_from_slice(&received[..consumed]);
+                self.stream.consume(consumed);
+
+                if newline.is_some() {
+                    break;
+                }
+
+                first_read = false;
             }
 
-            let newline = memchr::memchr(b'\n', received);
-            let consumed = newline.map_or(received.len(), |pos| pos + 1);
-
-            if consumed > MAX_FRAME_BYTES - bytes.len() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Message too long",
-                )
-                .into());
-            }
-
-            bytes.extend_from_slice(&received[..consumed]);
-            self.stream.consume(consumed);
-
-            if newline.is_some() {
-                break;
-            }
-
-            first_read = false;
-        }
-
-        if bytes.last() == Some(&b'\n') {
-            bytes.pop();
-            if bytes.last() == Some(&b'\r') {
+            if bytes.last() == Some(&b'\n') {
                 bytes.pop();
+                if bytes.last() == Some(&b'\r') {
+                    bytes.pop();
+                }
+            }
+
+            if bytes.is_empty() {
+                return Err(ConnectionClosed.into());
+            }
+
+            // Validate once; reuse the byte buffer's allocation.
+            *output = String::from_utf8(bytes).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid UTF-8 data")
+            })?;
+
+            Ok(())
+        }
+    }
+
+    /// waits until the stream has data, eof, an error or until deadline passes
+    ///
+    /// saves constantly adding and removing a timer from tokio's timer wheel
+    /// `read_timer` can lag behind, but early fires are taken care of
+    /// optimization proposed by Opus 5.5
+    async fn wait_for_data(&mut self, deadline: Instant) -> Result<(), anyhow::Error> {
+        loop {
+            tokio::select! {
+                // poll based on order (first stream, then timer)
+                biased;
+
+                filled = self.stream.fill_buf() => {
+                    return filled.map(|_| ()).map_err(anyhow::Error::from);
+                }
+
+                () = self.read_timer.as_mut() => {
+                    if self.read_timer.deadline() >= deadline {
+                        // actual timeout from this write
+                        // because `Elapsed` has no public constructor, we hack one together with an already elapsed timeout_at..
+                        let elapsed = tokio::time::timeout_at(deadline, std::future::pending::<()>())
+                            .await
+                            .unwrap_err();
+                        return Err(elapsed.into());
+                    }
+                    // it was not our timeout, move it to the correct one
+                    self.read_timer.as_mut().reset(deadline);
+                }
             }
         }
-
-        if bytes.is_empty() {
-            return Err(ConnectionClosed.into());
-        }
-
-        // Validate once; reuse the byte buffer's allocation.
-        *output = String::from_utf8(bytes).map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid UTF-8 data")
-        })?;
-
-        Ok(())
     }
 }
 

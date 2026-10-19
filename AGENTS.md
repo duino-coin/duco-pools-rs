@@ -76,7 +76,7 @@ Passing clippy and tests doesn't show that a change works. Run the pool and exer
 
 
 - **Functionality test** Run the pool as documented by `pool-verifier/README.md`. All test cases, including the slow suite, must be run.
-- **Load and memory.** For performance or memory changes, run a benchmark `pool-verifier` suite. Record a baseline before you change anything. Compare the values from pre-change to post-change. One run each isn't enough when the numbers are close. Distinguish noise from an actual performance or memory change. Should it be a decrease in either, argue why it is justified.
+- **Load and memory.** For performance or memory changes, run a benchmark and microbench `pool-verifier` suite. Record a baseline before you change anything. Compare the values from pre-change to post-change. One run each isn't enough when the numbers are close. Distinguish noise from an actual performance or memory change. Should it be a decrease in either, argue why it is justified.
 - **Counters over guesses.** When you're chasing a bug, add temporary counters or `tracing` output to prove the cause before changing code. Take the instrumentation out before committing.
 - **Keep investigation tools out of the repo.** Scripts, one-off benchmark scripts and debug patches you used while working live outside the repository and don't go into the PR. A benchmark or test worth keeping goes into the existing benches or test suite instead, sized like its neighbours.
 
@@ -139,7 +139,7 @@ The е in both headings in this text is already the Cyrillic one, so you can pas
 **This handover is required for every PR.** When you hand the branch over, say this to the author directly in your final message. Don't leave it buried in the description draft. Agents tend to report "done" and the author opens the PR without these steps, so spell them out every time.
 
 1. **Review the changes** The author has to know what each code change does and why it was changed. They have to be able to argue why it is needed.
-2. **Attach the benchmarks** The author has to attach their benchmark baseline and the subsequent benchmarks with the changes included.
+2. **Attach the benchmarks** The author has to attach their benchmark and microbench baseline and the subsequent benchmarks with the changes included.
 3. **Open the PR themselves**, with your description draft (disclosure line included) and the capture attached.
 
 If the change has no in-game effect (tooling, codecs, config, refactors), say that too, so the author knows why no capture is needed. Don't use this to skip the capture for a change that does have an in-game effect.

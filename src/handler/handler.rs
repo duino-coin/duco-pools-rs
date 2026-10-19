@@ -4,6 +4,7 @@ use crate::{mining, BANS, CONFIG};
 use compact_str::CompactString;
 use log::{debug, error, warn};
 use std::sync::OnceLock;
+use std::time::Instant;
 use tokio::process::Command;
 
 const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -39,7 +40,7 @@ pub async fn handle_connection(conn: &mut Connection) -> Result<(), anyhow::Erro
 
     // this loop only handles one JOB requests, however, it is necessary so the user can first request the MOTD
     loop {
-        conn.read_to_string(&mut data).await?;
+        conn.read_to_string(&mut data, Instant::now()).await?;
         // the split fields are scoped so they aren't kept in the future while mining,
         // mining::handle scans the line again itself
         let is_job = {
@@ -125,24 +126,6 @@ pub fn handle_close(conn: &mut Connection) {
         );
         alloc.is_empty()
     });
-
-    // let should_remove = {
-    //     let mut alloc = match USR_WORKERS_ALLOC.get_mut(&conn.miner_stat.username) {
-    //         Some(a) => a,
-    //         None => return,
-    //     };
-    //     alloc.release(
-    //         conn.miner_stat.amount_of_workers,
-    //         conn.miner_stat.is_req_diff_esp32,
-    //     );
-    //     alloc.is_empty()
-    // };
-    // drop the RefMut before removing, so we don't deadlock
-
-    // if should_remove {
-    //     USR_WORKERS_ALLOC.remove(&conn.miner_stat.username);
-    //     debug!("Removed {}", conn.miner_stat.username);
-    // }
-
+    
     debug!("Handling after-close");
 }
