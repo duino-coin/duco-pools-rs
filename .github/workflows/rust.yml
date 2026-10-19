@@ -8,43 +8,76 @@ on:
 env:
   CARGO_TERM_COLOR: always
 jobs:
-  release:
-    name: Release - ${{ matrix.platform.os-name }}
+  build:
+    name: Build - ${{ matrix.platform.os-name }}
     strategy:
       matrix:
         platform:
           - os-name: Linux-x86_64
             runs-on: ubuntu-24.04
             target: x86_64-unknown-linux-musl
+            asset: Linux-musl-x86_64
 
           - os-name: Linux-aarch64
             runs-on: ubuntu-24.04
             target: aarch64-unknown-linux-musl
+            asset: Linux-musl-arm64
 
           - os-name: Linux-aarch64 gnu
             runs-on: ubuntu-24.04
             target: aarch64-unknown-linux-gnu
+            asset: Linux-gnu-arm64
 
           - os-name: Linux-x86_64 gnu
             runs-on: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            asset: Linux-gnu-x86_64
 
 
     runs-on: ${{ matrix.platform.runs-on }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+      # cross for every target, same version as the local rebuild in release-verify.sh,
+      # so both sides build in the same container and the hashes can match
       - name: Build binary
         uses: houseabsolute/actions-rust-cross@v1
         with:
           command: build
           target: ${{ matrix.platform.target }}
-          args: "--release"
-          strip: true
-      - name: Publish artifacts and release
-        uses: houseabsolute/actions-rust-release@v0
+          args: "--locked --release"
+          # keep in sync with rust-toolchain.toml
+          toolchain: 1.99.1
+          cross-version: v0.2.5
+          force-use-cross: true
+          use-rust-cache: false
+      - name: Package archive
+        run: |
+          archive="duco-pool-rs-${{ matrix.platform.asset }}.tar.gz"
+          tar czf "$archive" README.md -C "target/${{ matrix.platform.target }}/release" duco-pool-rs
+          sha256sum "$archive" > "$archive.sha256"
+      - name: Upload archive
+        uses: actions/upload-artifact@v7
         with:
-          executable-name: duco-pool-rs
-          target: ${{ matrix.platform.target }}
-          changes-file: ""
-          extra-files: ""
+          name: ${{ matrix.platform.asset }}
+          path: duco-pool-rs-${{ matrix.platform.asset }}.tar.gz*
+
+  # stays a draft until release-verify.sh has rebuilt, signed and published it
+  release:
+    name: Draft release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download archives
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/* --repo "${{ github.repository }}" \
+            --draft --verify-tag --title "${{ github.ref_name }}" --notes ""
