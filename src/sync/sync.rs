@@ -352,18 +352,11 @@ pub async fn sync(
     //         await get_ngrok_ip();
 
     // only refresh certain parts of the system info
-    let mut refresh_kind = RefreshKind::nothing();
-
-    let mut cpu_refresh = CpuRefreshKind::nothing();
-    cpu_refresh = cpu_refresh.with_cpu_usage();
-
-    let mut memory_refresh = MemoryRefreshKind::nothing();
-    memory_refresh = memory_refresh.with_ram();
-
-    refresh_kind = refresh_kind.with_cpu(cpu_refresh);
-    refresh_kind = refresh_kind.with_memory(memory_refresh);
-
-    sys.refresh_specifics(refresh_kind);
+    sys.refresh_specifics(
+        RefreshKind::nothing()
+            .with_cpu(CpuRefreshKind::nothing().with_cpu_usage())
+            .with_memory(MemoryRefreshKind::nothing().with_ram()),
+    );
     let cpu_usage = sys.global_cpu_usage();
 
     let mem_usage =
