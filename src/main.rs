@@ -18,7 +18,7 @@ use mimalloc::MiMalloc;
 use rand::{Rng, RngExt};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
 use arc_swap::ArcSwap;
 use sysinfo::System;
@@ -72,7 +72,6 @@ async fn main() {
         .init();
 
     let mut config = cfg::config::load_config().unwrap();
-    let sys = Arc::new(Mutex::new(System::new()));
 
     if config.guess_port {
         let port = get_rand(1000, 9999) as u32;
@@ -152,13 +151,11 @@ async fn main() {
         }));
     }
     CONFIG.get_or_init(|| config);
-    #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
-    let sys_clone = sys.clone();
     // stops the sync loop between syncs, aborting it could cut off an upload the server already took
     let sync_token = CancellationToken::new();
     #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
     let sync_stop = sync_token.clone();
-    // returns the last pool ip, so the final sync can fall back to it
+    // returns the last pool ip, so the final sync can fall back to it, and the System it refreshes
     let sync_thread = tokio::spawn(async move {
         info!("Starting sync thread..");
         #[cfg_attr(
@@ -166,13 +163,17 @@ async fn main() {
             allow(unused_mut)
         )]
         let mut last_ip = String::new();
+        #[cfg_attr(
+            not(any(feature = "dummy_sync", not(debug_assertions))),
+            allow(unused_mut)
+        )]
+        let mut sys = System::new();
         // only start a sync thread if: we want dummy syncs or we are in release mode
         #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
         {
             let config = crate::CONFIG.get().unwrap();
             let pool_reward_sync_factor = (3600f64 / config.sync_time as f64).ceil() as u64;
             let mut count = 0;
-            let sys = &sys_clone;
             loop {
                 if count >= pool_reward_sync_factor {
                     count = 0;
@@ -185,7 +186,7 @@ async fn main() {
                         }
                     };
                 }
-                match sync::sync::sync(sys, &last_ip).await {
+                match sync::sync::sync(&mut sys, &last_ip).await {
                     Ok(ip) => {
                         // just to be safe...
                         if !ip.is_empty() {
@@ -204,7 +205,7 @@ async fn main() {
                 }
             }
         }
-        last_ip
+        (last_ip, sys)
     });
 
     ctrlc::set_handler(move || {
@@ -223,12 +224,12 @@ async fn main() {
     }
     sync_token.cancel();
     // wait for a running sync, so the final one doesn't upload the same work again
-    #[cfg_attr(debug_assertions, allow(unused_variables))]
-    let last_ip = sync_thread.await.unwrap_or_default();
+    #[cfg_attr(debug_assertions, allow(unused_variables, unused_mut))]
+    let (last_ip, mut sys) = sync_thread.await.unwrap_or_default();
     // last sync before shutdown
     #[cfg(not(debug_assertions))]
     {
-        if let Err(err) = sync::sync::sync(&sys, &last_ip).await {
+        if let Err(err) = sync::sync::sync(&mut sys, &last_ip).await {
             error!("Final sync failed: {err}");
         }
         sync::sync::logout(crate::CONFIG.get().unwrap())

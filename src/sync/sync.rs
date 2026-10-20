@@ -20,7 +20,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
 
 static SYNC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -323,7 +322,7 @@ async fn update_curve(config: &PoolConfig) -> Result<String, Box<dyn std::error:
 
 #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
 pub async fn sync(
-    sys: &Arc<Mutex<System>>,
+    sys: &mut System,
     last_ip: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     info!("Starting sync..");
@@ -332,7 +331,6 @@ pub async fn sync(
         std::fs::create_dir_all(&config.base_sync_folder)?;
     }
 
-    let mut sys = sys.lock().await;
     let ip = match get_pool_ip(&config).await {
         Ok(ok) => ok,
         Err(err) => {
