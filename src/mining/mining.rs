@@ -128,7 +128,7 @@ impl Close {
     async fn send(self, conn: &mut Connection) -> Result<(), anyhow::Error> {
         conn.write(self.0).await?;
         // used so we can handle closes centrally
-        Err(anyhow::Error::from_boxed(Box::from("Shutting down.")))
+        Err(anyhow::anyhow!("Shutting down."))
     }
 }
 
