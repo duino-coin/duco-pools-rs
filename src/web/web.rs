@@ -1,20 +1,19 @@
 use crate::data::data::ConnId;
 use crate::mining::id_allocator::WorkerAllocator;
 use crate::mining::stats::MinerStatSlim;
-use crate::{mining, CONNECTIONS};
+use crate::{mining, CONFIG, CONNECTIONS};
 use compact_str::CompactString;
 use dashmap::DashMap;
 use log::info;
 use serde::Serialize;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::Arc;
 use tokio::task::JoinHandle;
 use warp::Filter;
 
 #[derive(Serialize)]
 struct HttpRes {
-    result: String,
+    result: &'static str,
     success: bool,
 }
 
@@ -41,31 +40,30 @@ impl Serialize for StatsWithoutKeys<'_> {
     }
 }
 
-pub async fn start_webserver(addr: SocketAddr, dash_key: String) -> JoinHandle<()> {
+pub async fn start_webserver(addr: SocketAddr) -> JoinHandle<()> {
     let ping = warp::path("ping")
         .and(warp::get())
         .and(warp::path::end())
         .map(|| {
             let res = HttpRes {
-                result: "Pong!".to_string(),
+                result: "Pong!",
                 success: true,
             };
             warp::reply::json(&res)
         });
 
+    let dash_key = CONFIG.get().unwrap().dashboard_key.as_str();
     let dash_enabled = dash_key.len() > 20;
-    let dash_key: Arc<str> = Arc::from(dash_key);
     let data = warp::path("data")
         // .and(warp::get())
         .and(warp::query::<std::collections::HashMap<String, String>>())
         .and(warp::path::end())
         .and_then(move |params: std::collections::HashMap<String, String>| {
-            let dash_key_clone = dash_key.clone();
             async move {
                 if dash_enabled {
                     if let Some(provided_key) = params.get("key") {
                         // if provided_key == &dash_key_clone {
-                        if ct_eq(provided_key, &dash_key_clone) {
+                        if ct_eq(provided_key, dash_key) {
                             let data_res = DataRes {
                                 connections: CONNECTIONS.load(Relaxed),
                                 miner_stats: StatsWithoutKeys(&mining::mining::MINER_STATS),

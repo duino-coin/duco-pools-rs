@@ -254,7 +254,7 @@ async fn start_tcp(mut rx: UnboundedReceiver<()>) {
     let addr: SocketAddr = format!("{}:{}", config.host, config.dashboard_port)
         .parse()
         .expect("failed to parse host:port");
-    let web_handle = web::web::start_webserver(addr, config.dashboard_key.clone()).await;
+    let web_handle = web::web::start_webserver(addr).await;
 
     let token = CancellationToken::new();
     let token_clone = token.clone();
