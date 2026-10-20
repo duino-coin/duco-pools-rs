@@ -207,29 +207,6 @@ impl Connection {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-#[allow(dead_code)] // only unused in debug/bench/local
-pub struct LoginInfos {
-    host: String,
-    port: u32,
-    version: String,
-    identifier: String,
-    name: String,
-}
-
-impl LoginInfos {
-    #[allow(dead_code)] // only unused in debug/bench/local
-    pub fn new(host: &str, port: u32, version: &str, identifier: &str, name: &str) -> Self {
-        LoginInfos {
-            host: host.to_string(),
-            port,
-            version: version.to_string(),
-            identifier: identifier.to_string(),
-            name: name.to_string(),
-        }
-    }
-}
-
-#[derive(Deserialize, Serialize, Debug)]
 pub struct Bans {
     #[serde(rename = "bannedUsernames")]
     pub banned_usernames: HashSet<CompactString>,

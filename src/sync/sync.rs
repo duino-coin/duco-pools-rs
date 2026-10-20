@@ -1,9 +1,8 @@
 use crate::cfg::config::PoolConfig;
 use crate::mining::{mining, stats};
-use crate::{data, BANS, CONFIG, CONNECTIONS, CURVE_VALUES};
+use crate::{BANS, CONFIG, CONNECTIONS, CURVE_VALUES};
 use compact_str::CompactString;
 use dashmap::DashMap;
-use data::data::LoginInfos;
 #[cfg(not(feature = "dummy_sync"))]
 use log::warn;
 use log::{debug, error, info};
@@ -196,6 +195,17 @@ pub async fn get_pool_ip(config: &&PoolConfig) -> Result<String, Box<dyn std::er
     let text = response.text().await?;
     Ok(text)
 }
+// payload of the PoolLogin message
+#[cfg(not(debug_assertions))]
+#[derive(Serialize)]
+struct LoginInfos<'a> {
+    host: &'a str,
+    port: u32,
+    version: &'a str,
+    identifier: &'a str,
+    name: &'a str,
+}
+
 #[cfg(not(debug_assertions))]
 pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
     debug!("Gathering login data..");
@@ -205,13 +215,13 @@ pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>
     } else {
         get_pool_ip(&config).await?
     };
-    let infos = LoginInfos::new(
-        &ip,
-        config.port,
-        &config.pool_version,
-        &config.pool_id,
-        &config.pool_name,
-    );
+    let infos = LoginInfos {
+        host: &ip,
+        port: config.port,
+        version: &config.pool_version,
+        identifier: &config.pool_id,
+        name: &config.pool_name,
+    };
     info!("Logging in..");
     let mut socket = TcpStream::connect(format!("{}:{}", config.server_ip, config.server_port))
         .await
