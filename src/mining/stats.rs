@@ -4,7 +4,7 @@ use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
 
 // Live per-connection state. The display-only fields (sft, id, wd, h, d, rw) aren't kept
-// here, they are written straight into the published MinerStatSlim (see mining::Published)
+// here, they are written straight into the published MinerStatSlim (see mining::Session::commit)
 // #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[derive(Debug, Default, Clone)]
 pub struct MinerStat {
@@ -49,10 +49,6 @@ impl MinerStat {
             ..Default::default()
         }
     }
-
-    pub fn convert_slim(&self) -> MinerStatSlim {
-        MinerStatSlim::new(self)
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -94,27 +90,9 @@ pub struct MinerStatSlim {
 }
 
 impl MinerStatSlim {
-    // The display-only fields (software, id, timestamp, wallet_id, hashrate, difficulty, reward) start
-    // empty/zero, the caller writes them (mining::Published) before publishing
-    pub fn new(miner_stat: &MinerStat) -> MinerStatSlim {
-        MinerStatSlim {
-            username: miner_stat.username.clone(),
-            share_time: miner_stat.share_time,
-            accepted_shares: miner_stat.accepted_shares,
-            rejected_shares: miner_stat.rejected_shares,
-            this_miner_chipid: miner_stat.this_miner_chipid.clone(),
-            password: miner_stat.password.clone(),
-            last_min_shares: miner_stat.last_min_shares,
-            iot_reading: miner_stat.iot_reading.clone(),
-            ping: miner_stat.ping,
-            ip: miner_stat.ip.clone(),
-            amount_of_workers: miner_stat.worker_slot.id(),
-            ..MinerStatSlim::default()
-        }
-    }
-
-    // Same result as `new` for the fields taken from the live state, but reuses the existing
-    // string buffers instead of reallocating. The display-only fields are left as they are
+    // Copies the fields taken from the live state, reusing the existing string buffers;
+    // the display-only fields (software, id, timestamp, wallet_id, hashrate, difficulty, reward)
+    // are left as they are, the caller writes them (mining::Session::commit)
     pub fn update_from(&mut self, miner_stat: &MinerStat) {
         fn set(dst: &mut CompactString, src: &CompactString) {
             if dst != src {
@@ -182,23 +160,5 @@ mod tests {
         let json = serde_json::to_value(&stats).unwrap();
         assert!(json.get("00ab0000000000ff").is_some(), "{json}");
         assert_eq!(ConnId(0x0f).to_string(), "000000000000000f");
-    }
-
-    #[test]
-    fn update_from_matches_new() {
-        let mut stat = MinerStat::new("127.0.0.1".into(), "alice".into());
-        let mut slim = MinerStatSlim::new(&stat);
-
-        stat.iot_reading = "an-iot-reading-that-is-longer-than-24-bytes".into();
-        stat.password = "cGFzc3dvcmQ=".into();
-        stat.accepted_shares = 12;
-        stat.ping = 0.25;
-        stat.this_miner_chipid = "chip".into();
-        slim.update_from(&stat);
-
-        assert_eq!(
-            serde_json::to_value(&slim).unwrap(),
-            serde_json::to_value(MinerStatSlim::new(&stat)).unwrap()
-        );
     }
 }

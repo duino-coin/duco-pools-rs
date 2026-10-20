@@ -482,27 +482,33 @@ impl Session {
                 }
             }
 
-            let published = Published {
-                software: if data_len >= 3 { Some(data[2]) } else { None },
-                rig: rig_part,
-                wallet_id: if data_len >= 6 { data[5] } else { "None" },
-                hashrate: judged.published_hashrate,
-                difficulty: self.diff,
-                reward: judged.reward,
-                timestamp: judged.answer_received as u32,
-            };
+            let wallet_id = if data_len >= 6 { data[5] } else { "None" };
+            {
+                // one guard for all fields; nothing below fails
+                let mut e = MINER_STATS.entry(id).or_default();
+                e.update_from(stat);
 
-            // one guard for all fields; nothing below fails
-            match MINER_STATS.get_mut(&id) {
-                Some(mut e) => {
-                    e.update_from(stat);
-                    published.write_into(&mut e);
+                if data_len >= 3 {
+                    clean_name_into(data[2], &mut e.software);
+                } else {
+                    e.software.clear();
                 }
-                None => {
-                    let mut stat = stat.convert_slim();
-                    published.write_into(&mut stat);
-                    MINER_STATS.insert(id, stat);
+                if e.software.is_empty() {
+                    e.software.push_str("Unknown miner");
                 }
+
+                e.wallet_id.clear();
+                e.wallet_id.push_str(wallet_id.trim_end_matches("\n"));
+
+                clean_name_into(rig_part, &mut e.id);
+                if e.id.is_empty() {
+                    e.id.push_str("None");
+                }
+
+                e.hashrate = judged.published_hashrate;
+                e.difficulty = self.diff;
+                e.reward = judged.reward;
+                e.timestamp = judged.answer_received as u32; // u32 lasts until 2106
             }
 
             LAST_BLOCK_HASH.store(&self.hex_buf);
@@ -516,48 +522,6 @@ impl Session {
 
         self.is_first_share = false;
         Ok(())
-    }
-}
-
-// fields that only exist for the published stats, written straight into the MINER_STATS entry
-struct Published<'a> {
-    software: Option<&'a str>, // raw field, None if the answer had no software field
-    rig: &'a str,              // raw rig part (before the legacy ':key')
-    wallet_id: &'a str,
-    hashrate: f32,
-    difficulty: u32,
-    reward: f32,
-    timestamp: u32, // unix secs of the last accepted share, u32 lasts until 2106
-}
-
-impl Published<'_> {
-    fn write_into(&self, stat: &mut MinerStatSlim) {
-        match self.software {
-            Some(software) => {
-                clean_name_into(software, &mut stat.software);
-                if stat.software.is_empty() {
-                    stat.software.push_str("Unknown miner");
-                }
-            }
-            None => {
-                stat.software.clear();
-                stat.software.push_str("Unknown miner");
-            }
-        }
-
-        stat.wallet_id.clear();
-        stat.wallet_id
-            .push_str(self.wallet_id.trim_end_matches("\n"));
-
-        clean_name_into(self.rig, &mut stat.id);
-        if stat.id.is_empty() {
-            stat.id.push_str("None");
-        }
-
-        stat.hashrate = self.hashrate;
-        stat.difficulty = self.difficulty;
-        stat.reward = self.reward;
-        stat.timestamp = self.timestamp;
     }
 }
 
