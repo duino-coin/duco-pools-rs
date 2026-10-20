@@ -318,9 +318,13 @@ async fn start_tcp(mut rx: UnboundedReceiver<()>) {
 
 // closes that happen all the time and aren't worth an info line
 fn is_routine_close(err: &anyhow::Error) -> bool {
-    use std::io::ErrorKind::{ConnectionAborted, ConnectionReset, TimedOut};
+    use std::io::ErrorKind::{ConnectionAborted, ConnectionReset, InvalidData, TimedOut};
     match err.downcast_ref::<std::io::Error>() {
-        Some(io_err) => matches!(io_err.kind(), ConnectionReset | ConnectionAborted | TimedOut),
+        // InvalidData: a line over the frame limit ("Message too long")
+        Some(io_err) => matches!(
+            io_err.kind(),
+            ConnectionReset | ConnectionAborted | TimedOut | InvalidData
+        ),
         None => {
             err.is::<ConnectionClosed>()
                 || err.is::<tokio::time::error::Elapsed>()
