@@ -114,6 +114,13 @@ pub fn options(case: &Case, o: &mut Options) {
         "startup-missing-field" => o.config["host"] = Value::Null,
         // `/data` blanks the mining keys; these read them from the sync upload instead
         "password-boundaries" | "legacy-key" => o.sync_secs = 1,
+        // the upload is held while miners submit shares; the pool's request timeout
+        // must not end it before the scenario releases it
+        "inflight-shares"
+        | "inflight-rewards"
+        | "inflight-failed-retry"
+        | "cleanup-missing-rewards"
+        | "cleanup-missing-workers" => o.config["timeout"] = json!(30),
         _ => {}
     }
     if is_startup_failure(case.name) {
