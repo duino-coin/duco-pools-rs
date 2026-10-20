@@ -111,8 +111,6 @@ impl Connection {
             let mut bytes = std::mem::take(output).into_bytes();
             bytes.clear();
 
-            output.clear();
-
             let mut first_read = true;
 
             loop {
@@ -206,7 +204,7 @@ impl Connection {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Default)]
 pub struct Bans {
     #[serde(rename = "bannedUsernames")]
     pub banned_usernames: HashSet<CompactString>,
@@ -215,22 +213,15 @@ pub struct Bans {
 }
 
 impl Bans {
-    pub fn new() -> Self {
-        Bans {
-            banned_usernames: HashSet::new(),
-            banned_ips: HashSet::new(),
-        }
-    }
-
     // runs once when BANS is first locked, so reading and creating the file may block
     pub fn load_bans() -> Result<Self, Box<dyn Error>> {
         if std::fs::exists(BANS_PATH)? {
             let file_content = std::fs::read_to_string(BANS_PATH)?;
             let bans: Bans =
-                serde_json::from_str::<Bans>(&file_content).unwrap_or_else(|_| Bans::new());
+                serde_json::from_str::<Bans>(&file_content).unwrap_or_else(|_| Bans::default());
             return Ok(bans);
         }
-        let bans = Bans::new();
+        let bans = Bans::default();
         std::fs::write(BANS_PATH, serde_json::to_string(&bans)?)?;
         Ok(bans)
     }
@@ -240,11 +231,5 @@ impl Bans {
         tokio::fs::write(BANS_PATH, serde_json::to_string(&self)?).await?;
 
         Ok(())
-    }
-}
-
-impl Default for Bans {
-    fn default() -> Self {
-        Bans::new()
     }
 }

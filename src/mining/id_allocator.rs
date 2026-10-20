@@ -44,7 +44,7 @@ impl WorkerSlot {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct WorkerAllocator {
     // High-water mark in half-steps. Next fresh slot = next_slot + step.
     next_slot: u32,
@@ -55,13 +55,6 @@ pub struct WorkerAllocator {
     active_half_steps: u32,
 }
 impl WorkerAllocator {
-    pub fn new() -> Self {
-        WorkerAllocator {
-            next_slot: 0,
-            free_slots: Vec::new(),
-            active_half_steps: 0,
-        }
-    }
     // Allocate the lowest available ID.
     // Returns the f32 ID (e.g. 1.0, 1.5, 2.0, ...).
     pub fn allocate(&mut self, is_esp32: bool) -> WorkerSlot {
@@ -125,52 +118,7 @@ impl WorkerAllocator {
 
         self.free_slots.insert(position, packed);
     }
-    // pub fn allocate(&mut self, is_esp32: bool) -> f32 {
-    //     let step = if is_esp32 { 1u32 } else { 2 };
-    //     self.active_half_steps += step;
-    //     // Grab the smallest recycled slot if one exists
-    //     let slot = if let Some(encoded) = self.free_slots.pop() {
-    //         slot_of(encoded)
-    //     } else {
-    //         // Advance the high-water mark
-    //         self.next_slot += step;
-    //         self.next_slot
-    //     };
-    //     slot as f32 / 2.0
-    // }
 
-    // pub fn release(&mut self, id: f32, is_esp32: bool) {
-    //     let step = if is_esp32 { 1u32 } else { 2 };
-    //     self.active_half_steps = self.active_half_steps.saturating_sub(step);
-    //     let slot = (id * 2.0) as u32;
-    //     let encoded = encode(slot, is_esp32);
-    //     let pos = self
-    //         .free_slots
-    //         .binary_search_by_key(&std::cmp::Reverse(slot), |&e| std::cmp::Reverse(slot_of(e)))
-    //         .unwrap_or_else(|p| p);
-    //     self.free_slots.insert(pos, encoded);
-    //     self.compact();
-    // }
-
-    // pub fn try_recycle(&mut self, current_id: f32, is_esp32: bool) -> Option<f32> {
-    //     let current_slot = (current_id * 2.0) as u32;
-    //     // Is there a free slot lower than ours?
-    //     let lowest_free = slot_of(*self.free_slots.last()?);
-    //     if lowest_free >= current_slot {
-    //         return None; // nothing lower available
-    //     }
-    //     // Take the lower slot
-    //     self.free_slots.pop();
-    //     // Put our current slot back (sorted insert)
-    //     let encoded = encode(current_slot, is_esp32);
-    //     let pos = self
-    //         .free_slots
-    //         .binary_search_by_key(&std::cmp::Reverse(current_slot), |&e| std::cmp::Reverse(slot_of(e)))
-    //         .unwrap_or_else(|p| p);
-    //     self.free_slots.insert(pos, encoded);
-    //     self.compact();
-    //     Some(lowest_free as f32 / 2.0)
-    // }
     // Shrink the high-water mark by popping free slots off the top.
     fn compact(&mut self) {
         while let Some(&encoded) = self.free_slots.first() {
@@ -190,11 +138,6 @@ impl WorkerAllocator {
         self.active_half_steps == 0
     }
 }
-impl Default for WorkerAllocator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -202,7 +145,7 @@ mod tests {
 
     #[test]
     fn recycles_lowest_slot_first() {
-        let mut alloc = WorkerAllocator::new();
+        let mut alloc = WorkerAllocator::default();
         let a = alloc.allocate(false);
         let b = alloc.allocate(false);
         let c = alloc.allocate(false);
@@ -217,7 +160,7 @@ mod tests {
 
     #[test]
     fn mixed_steps_preserve_half_slots() {
-        let mut alloc = WorkerAllocator::new();
+        let mut alloc = WorkerAllocator::default();
         let pc = alloc.allocate(false);
         let esp = alloc.allocate(true);
         assert_eq!(pc.id(), 1.0);
@@ -229,7 +172,7 @@ mod tests {
 
     #[test]
     fn compact_keeps_fresh_allocations_low_after_releasing_highest_slot() {
-        let mut alloc = WorkerAllocator::new();
+        let mut alloc = WorkerAllocator::default();
 
         assert_eq!(alloc.allocate(false).id(), 1.0);
         assert_eq!(alloc.allocate(false).id(), 2.0);

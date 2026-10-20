@@ -53,7 +53,7 @@ impl Drop for ConnectionCounterGuard {
 // and it's cleaner than cloning hundreds of arcs..
 pub static BANS: LazyLock<Mutex<Bans>> = LazyLock::new(|| Mutex::new(Bans::load_bans().unwrap()));
 
-pub static CURVE_VALUES: LazyLock<ArcSwap<Curve>> = LazyLock::new(|| ArcSwap::from_pointee(Curve::new()));
+pub static CURVE_VALUES: LazyLock<ArcSwap<Curve>> = LazyLock::new(|| ArcSwap::from_pointee(Curve::default()));
 
 
 pub static CONFIG: OnceLock<PoolConfig> = OnceLock::new();

@@ -1,8 +1,7 @@
 use crate::sync::sync::Curve;
-use std::sync::Arc;
 
 // based on the values provided by the master server, this function calculates the estimated daily reward that should be given to a device of this hashrate
-pub fn calculate_daily_reward(hashrate: f64, curve: &Arc<Curve>) -> f64 {
+pub fn calculate_daily_reward(hashrate: f64, curve: &Curve) -> f64 {
 
     let phi = curve.gpu_base
         * (1.0
@@ -28,12 +27,12 @@ pub fn calculate_daily_reward(hashrate: f64, curve: &Arc<Curve>) -> f64 {
         / (1.0 + (hashrate / curve.pc_gpu_crossover_h).powf(curve.pc_gpu_crossover_sharpness)))
 }
 
-pub fn calculate_difficulty(hashrate: f64, curve: &Arc<Curve>) -> u32 {
+pub fn calculate_difficulty(hashrate: f64, curve: &Curve) -> u32 {
     let diff = hashrate * curve.expected_sharetime as f64 / 50.0;
     (diff.round() as u32).max(1)
 }
 
-pub fn calculate_reward(hashrate: f32, amount_of_workers: f32, difficulty: u32, curve: &Arc<Curve>) -> f32 {
+pub fn calculate_reward(hashrate: f32, amount_of_workers: f32, difficulty: u32, curve: &Curve) -> f32 {
     let drop = if hashrate as f64 > curve.h_ref { curve.drop_high } else { curve.drop_low };
 
     // the nonce is within `difficulty * 100`, so the average lies at roughly `difficulty * 50`

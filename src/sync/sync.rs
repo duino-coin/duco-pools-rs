@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 static SYNC_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -129,12 +129,6 @@ pub struct Curve {
 }
 impl Default for Curve {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Curve {
-    pub fn new() -> Curve {
         Curve {
             pc_base: 0.0,
             mcu_base: 0.0,
@@ -159,7 +153,9 @@ impl Curve {
             block_probability: 28110000,
         }
     }
+}
 
+impl Curve {
     // serde_json only yields finite numbers, so this checks what the reward and
     // difficulty calculations divide by, and what would panic or flood the pool
     fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -183,7 +179,7 @@ impl Curve {
     }
 }
 #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
-pub async fn get_pool_ip(config: &&PoolConfig) -> Result<String, Box<dyn std::error::Error>> {
+pub async fn get_pool_ip(config: &PoolConfig) -> Result<String, Box<dyn std::error::Error>> {
     debug!("Getting ip..");
     let client = &*HTTP_CLIENT;
     let request = client.get("https://api.ipify.org/");
@@ -213,7 +209,7 @@ pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>
         // ip = "".to_string();
         return Err(Box::from("Ngrok not implemented"));
     } else {
-        get_pool_ip(&config).await?
+        get_pool_ip(config).await?
     };
     let infos = LoginInfos {
         host: &ip,
@@ -271,10 +267,14 @@ pub async fn logout(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error
 
 // the master server answers each step with one unterminated message
 #[cfg(not(debug_assertions))]
+const MASTER_REPLY_MAX_BYTES: usize = 8 * 1024;
+
+#[cfg(not(debug_assertions))]
 async fn read_master_reply(socket: &mut TcpStream) -> Result<String, Box<dyn std::error::Error>> {
-    let mut reader = BufReader::new(socket);
-    let received: Vec<u8> = reader.fill_buf().await?.to_vec();
-    reader.consume(received.len());
+    // one read, at most as much as the BufReader it replaces could take in
+    let mut received = vec![0u8; MASTER_REPLY_MAX_BYTES];
+    let len = socket.read(&mut received).await?;
+    received.truncate(len);
 
     let data = String::from_utf8(received).map_err(|_| {
         std::io::Error::new(
@@ -337,11 +337,10 @@ pub async fn sync(
 ) -> Result<String, Box<dyn std::error::Error>> {
     info!("Starting sync..");
     let config = CONFIG.get().unwrap();
-    if !std::fs::exists(&config.base_sync_folder)? {
-        std::fs::create_dir_all(&config.base_sync_folder)?;
-    }
+    // succeeds if the folder already exists
+    std::fs::create_dir_all(&config.base_sync_folder)?;
 
-    let ip = match get_pool_ip(&config).await {
+    let ip = match get_pool_ip(config).await {
         Ok(ok) => ok,
         Err(err) => {
             if last_ip.is_empty() {
@@ -456,13 +455,13 @@ pub async fn sync(
                     if shrink_maps {
                         mining::BALANCES_TO_UPDATE.shrink_to_fit();
                     }
-                    info!("Successfully synced {}", SYNC_COUNT.load(Ordering::Relaxed));
+                    info!("Successfully synced {sync_count}");
                     tokio::fs::remove_file(&reward_path).await?; // so we don't accidentally sync the same thing twice
                     tokio::fs::remove_file(&worker_path).await?;
                 } else {
                     warn!(
                         "Failed to sync {} ({status} from {final_url}): {}",
-                        SYNC_COUNT.load(Ordering::Relaxed),
+                        sync_count,
                         body
                     );
                 }
