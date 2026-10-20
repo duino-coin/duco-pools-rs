@@ -4,6 +4,7 @@
 #[cfg(test)]
 mod verifier_tests {
     use super::*;
+    use std::sync::Arc;
 
     // the values of config/curve.json, spelled out so a changed default can't move the vectors
     fn curve() -> Arc<Curve> {

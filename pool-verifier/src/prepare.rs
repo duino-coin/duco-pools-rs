@@ -565,7 +565,7 @@ fn add_control_channel(stage: &Path) -> Result<()> {
                 });
             }
             if matches!(line.as_deref(), Ok("shutdown")) {
-                let _ = verify_shutdown.send("s".to_owned());
+                let _ = verify_shutdown.send(());
                 break;
             }
         }

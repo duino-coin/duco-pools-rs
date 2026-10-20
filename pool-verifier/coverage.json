@@ -92,7 +92,7 @@
     {
       "behavior": "Miner metadata and serialization",
       "coverage": "asserted",
-      "assertion": "Name/IoT sanitization, defaults, 48-byte IoT and 96-byte key limits, legacy keys, dashboard field types and numeric values.",
+      "assertion": "Name/IoT sanitization, defaults, 48-byte IoT and 96-byte key limits, legacy keys (blanked on `/data`, base64 in the sync upload), dashboard field types and numeric values.",
       "cases": [
         "internal/sanitizers",
         "protocol/metadata-sanitization",

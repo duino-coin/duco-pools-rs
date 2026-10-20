@@ -50,7 +50,7 @@ Scenarios: `protocol/invalid-hashrates`, `protocol/estimated-hashrates`.
 
 ## Miner metadata and serialization
 
-**asserted** - Name/IoT sanitization, defaults, 48-byte IoT and 96-byte key limits (explicit `BAD,Password too long` rejection for both the job password and the legacy `rig:key` key), legacy keys, dashboard field types and numeric values.
+**asserted** - Name/IoT sanitization, defaults, 48-byte IoT and 96-byte key limits (explicit `BAD,Password too long` rejection for both the job password and the legacy `rig:key` key), legacy keys (blanked on `/data`, base64 in the sync upload), dashboard field types and numeric values.
 
 Scenarios: `internal/sanitizers`, `protocol/metadata-sanitization`, `protocol/metadata-defaults`, `protocol/iot-boundaries`, `protocol/password-boundaries`, `protocol/legacy-key`, `lifecycle/dashboard-schema`.
 

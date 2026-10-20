@@ -29,7 +29,7 @@ mod verifier_tests {
         // half-step ever allocated after trimming free slots at the top.
         for seed in [1u64, 17, 0x12345678, 0xdeadbeef] {
             let mut random = seed;
-            let mut alloc = WorkerAllocator::new();
+            let mut alloc = WorkerAllocator::default();
             let mut active: Vec<Active> = vec![];
             let mut free = BTreeMap::<u32, u32>::new();
             let mut high = 0;

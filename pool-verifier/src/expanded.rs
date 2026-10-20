@@ -6,7 +6,7 @@
 //! cases run against a separate release pool process, like those in `suites`.
 
 use crate::harness::{ensure_accepted, is_accepted, stat, Harness, Options, WAIT};
-use crate::mock::{Fault, Mock};
+use crate::mock::{Fault, Mock, Upload};
 use crate::suites::Case;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -112,6 +112,8 @@ pub fn options(case: &Case, o: &mut Options) {
             .initial_files
             .push(("config/config.json".into(), "{".into())),
         "startup-missing-field" => o.config["host"] = Value::Null,
+        // `/data` blanks the mining keys; these read them from the sync upload instead
+        "password-boundaries" | "legacy-key" => o.sync_secs = 1,
         _ => {}
     }
     if is_startup_failure(case.name) {
@@ -724,10 +726,14 @@ async fn metadata(h: &Harness, variant: Metadata) -> Result<()> {
             stats["sft"] == "Unknown miner" && stats["id"] == "None" && stats["wd"] == "None",
             "defaults: {stats}"
         ),
-        Metadata::LegacyKey => anyhow::ensure!(
-            stats["id"] == "rig" && stats["pw"] == "bGVnYWN5", // base64("legacy")
-            "legacy key: {stats}"
-        ),
+        Metadata::LegacyKey => {
+            anyhow::ensure!(
+                stats["id"] == "rig" && stats["pw"] == "",
+                "legacy key on the dashboard: {stats}"
+            );
+            let uploaded = uploaded_stat(h, "rig", "bGVnYWN5").await?; // base64("legacy")
+            anyhow::ensure!(uploaded["id"] == "rig", "legacy key upload: {uploaded}");
+        }
         Metadata::Sanitized => anyhow::ensure!(
             stats["sft"] == "Miner.(x)-" && stats["id"] == "rig.(x)-",
             "sanitization: {stats}"
@@ -778,9 +784,10 @@ async fn password_boundaries(h: &Harness) -> Result<()> {
                 .wait_state("password encoded", |s| stat(s, "password").is_some())
                 .await?;
             anyhow::ensure!(
-                stat(&s, "password").unwrap()["pw"] == "YWFh".repeat(32), // base64("aaa") x 32
-                "base64 boundary"
+                stat(&s, "password").unwrap()["pw"] == "",
+                "password on the dashboard"
             );
+            uploaded_stat(h, "password", &"YWFh".repeat(32)).await?; // base64("aaa") x 32
             m.close().await?;
         } else {
             // Over-long passwords get an explicit rejection before the disconnect.
@@ -807,9 +814,10 @@ async fn password_boundaries(h: &Harness) -> Result<()> {
                 .wait_state("legacy key encoded", |s| stat(s, "rig").is_some())
                 .await?;
             anyhow::ensure!(
-                stat(&s, "rig").unwrap()["pw"] == "YmJi".repeat(32), // base64("bbb") x 32
-                "legacy key base64 boundary"
+                stat(&s, "rig").unwrap()["pw"] == "",
+                "legacy key on the dashboard"
             );
+            uploaded_stat(h, "rig", &"YmJi".repeat(32)).await?; // base64("bbb") x 32
             m.close().await?;
         } else {
             let line = m.line().await?;
@@ -822,6 +830,25 @@ async fn password_boundaries(h: &Harness) -> Result<()> {
         h.empty().await?;
     }
     Ok(())
+}
+
+/// Waits for a sync upload whose workers file has the stats entry of `rig` with
+/// mining key `pw`; the master server still gets the keys `/data` blanks
+async fn uploaded_stat(h: &Harness, rig: &str, pw: &str) -> Result<Value> {
+    let find = |u: &Upload| -> Option<Value> {
+        u.parts
+            .get("workers")?
+            .json
+            .as_object()?
+            .values()
+            .find(|v| v["id"] == rig && v["pw"] == pw)
+            .cloned()
+    };
+    let (_, upload) = h
+        .upload_after(0, |u| find(u).is_some())
+        .await
+        .with_context(|| format!("mining key of {rig} in a sync upload"))?;
+    Ok(find(&upload).unwrap())
 }
 
 /// The first job builds on the configured initial hash, and the job after a
