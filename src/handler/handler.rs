@@ -83,7 +83,8 @@ pub async fn handle_connection(conn: &mut Connection) -> Result<(), anyhow::Erro
             }
 
             if data_split[0] == "JOB" {
-                if data_len == 1 || (data_len > 1 && data_split[1].is_empty()) {
+                // a missing username field is "" as well
+                if data_split[1].is_empty() {
                     conn.write("BAD,No username specified\n").await?;
                     return Ok(());
                 }
