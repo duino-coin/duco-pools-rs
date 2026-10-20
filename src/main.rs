@@ -44,18 +44,8 @@ impl ConnectionCounterGuard {
 
 impl Drop for ConnectionCounterGuard {
     fn drop(&mut self) {
-        let _ =
-            CONNECTIONS.fetch_update(
-                Relaxed,
-                Relaxed,
-                |v| {
-                    if v > 0 {
-                        Some(v - 1)
-                    } else {
-                        Some(0)
-                    }
-                },
-            );
+        // can't underflow, every guard incremented the counter in `new`
+        CONNECTIONS.fetch_sub(1, Relaxed);
     }
 }
 
