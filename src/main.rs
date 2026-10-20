@@ -88,23 +88,15 @@ async fn main() {
         );
         let restart_delay = (config.auto_restart * 60) as u64;
         let script_path = config.restart_script.clone();
-        let tx_clone = tx.clone();
+        let restart_tx = tx.clone();
         restarter = Some(tokio::spawn(async move {
-            let tx = tx_clone;
             loop {
-                let mut is_error = false;
                 tokio::time::sleep(Duration::from_secs(restart_delay)).await;
 
                 match Command::new(&script_path).spawn() {
-                    Ok(_) => {}
-                    Err(err) => {
-                        is_error = true;
-                        error!("Failed to run restart script: {}", err);
-                    }
-                };
-                // don't exit if the replacement server couldn't be spawned
-                if !is_error {
-                    tx.send("s".to_owned()).unwrap();
+                    Ok(_) => restart_tx.send(()).unwrap(),
+                    // don't exit if the replacement server couldn't be spawned
+                    Err(err) => error!("Failed to run restart script: {}", err),
                 }
             }
         }));
@@ -141,7 +133,7 @@ async fn main() {
                                 "Update {} is ready; shutting down before replacement",
                                 update.version
                             );
-                                if update_shutdown.send("s".to_owned()).is_ok() {
+                                if update_shutdown.send(()).is_ok() {
                                     helper.detach();
                                 }
                             }
@@ -217,17 +209,17 @@ async fn main() {
 
     ctrlc::set_handler(move || {
         // the receiver is gone once shutdown has started
-        let _ = tx.send("s".to_owned());
+        let _ = tx.send(());
     })
     .expect("Failed to handle ctrl-c");
 
     start_tcp(rx).await;
     // Stop background work before the final sync/logout on any shutdown request.
-    if restarter.is_some() {
-        restarter.take().unwrap().abort();
+    if let Some(restarter) = restarter {
+        restarter.abort();
     }
-    if update_thread.is_some() {
-        update_thread.take().unwrap().abort();
+    if let Some(update_thread) = update_thread {
+        update_thread.abort();
     }
     sync_token.cancel();
     // wait for a running sync, so the final one doesn't upload the same work again
@@ -245,7 +237,7 @@ async fn main() {
     }
 }
 
-async fn start_tcp(mut rx: UnboundedReceiver<String>) {
+async fn start_tcp(mut rx: UnboundedReceiver<()>) {
     // set max open file descriptors to the maximum the platform allows, so we can handle *a lot* of sockets
     rlimit::increase_nofile_limit(u64::MAX).expect("failed to increase nofile limit");
     info!("Starting tcp server...");
