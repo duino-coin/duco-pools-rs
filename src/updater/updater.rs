@@ -214,20 +214,12 @@ async fn spawn_update_restart_in(
 }
 
 #[cfg(test)]
-fn verify_digest(bytes: &[u8], digest: Option<&str>) -> anyhow::Result<()> {
-    check_digest(&Sha256::digest(bytes), digest)
+fn verify_digest(bytes: &[u8], expected_hex: &str) -> anyhow::Result<()> {
+    check_digest(&Sha256::digest(bytes), expected_hex)
 }
 
-// `actual` is the SHA-256 of the downloaded bytes
-fn check_digest(actual: &[u8], digest: Option<&str>) -> anyhow::Result<()> {
-    let digest = digest.context("Release asset has no digest")?;
-    let (algorithm, expected_hex) = digest
-        .split_once(':')
-        .context("Malformed asset digest: expected sha256:<hex>")?;
-    if algorithm != "sha256" {
-        bail!("Unsupported asset digest algorithm: {algorithm}");
-    }
-
+// `actual` is the SHA-256 of the downloaded bytes, `expected_hex` the one from the signed manifest
+fn check_digest(actual: &[u8], expected_hex: &str) -> anyhow::Result<()> {
     let mut expected = [0u8; 32];
     hex::decode_to_slice(expected_hex, &mut expected)
         .context("Invalid SHA-256 digest: expected 64 hexadecimal characters")?;
@@ -243,7 +235,7 @@ fn check_digest(actual: &[u8], digest: Option<&str>) -> anyhow::Result<()> {
 async fn stage_download(
     mut response: reqwest::Response,
     staging: &Path,
-    digest: Option<&str>,
+    expected_sha256: &str,
 ) -> anyhow::Result<()> {
     let mut file = tokio::fs::File::create(staging).await?;
     let mut hasher = Sha256::new();
@@ -260,7 +252,7 @@ async fn stage_download(
     if len == 0 {
         bail!("Downloaded update is empty");
     }
-    check_digest(&hasher.finalize(), digest)?;
+    check_digest(&hasher.finalize(), expected_sha256)?;
     file.flush().await?;
     file.sync_all().await?;
     Ok(())
@@ -425,7 +417,6 @@ pub async fn fetch_latest_version(timeout: Duration) -> anyhow::Result<Option<Do
                     .iter()
                     .find(|entry| entry.asset == asset.name)
                     .with_context(|| format!("Signed manifest does not list {}", asset.name))?;
-                let digest = format!("sha256:{}", entry.archive_sha256);
 
                 let download = get_asset(&client, &asset.url).await?;
 
@@ -437,7 +428,7 @@ pub async fn fetch_latest_version(timeout: Duration) -> anyhow::Result<Option<Do
                 // complete, so a partial or bad download is never installable
                 let archive = with_suffix(&path, ARCHIVE_EXTENSION);
 
-                let staged = stage_download(download, &archive, Some(&digest)).await;
+                let staged = stage_download(download, &archive, &entry.archive_sha256).await;
                 if let Err(err) = staged {
                     let _ = tokio::fs::remove_file(&archive).await;
                     return Err(err).with_context(|| {
@@ -513,31 +504,26 @@ mod tests {
         "config/update-restart.sh"
     };
 
-    const ABC_DIGEST: &str =
-        "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    const ABC_DIGEST: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
     #[test]
     fn digest_accepts_known_sha256_and_uppercase_hex() {
-        verify_digest(b"abc", Some(ABC_DIGEST)).unwrap();
-        let uppercase = format!(
-            "sha256:{}",
-            ABC_DIGEST.strip_prefix("sha256:").unwrap().to_uppercase()
-        );
-        verify_digest(b"abc", Some(&uppercase)).unwrap();
+        verify_digest(b"abc", ABC_DIGEST).unwrap();
+        verify_digest(b"abc", &ABC_DIGEST.to_uppercase()).unwrap();
     }
 
     #[test]
     fn digest_hashes_raw_binary_bytes() {
         verify_digest(
             b"\x00\xff\x80duco\x00",
-            Some("sha256:8debd935adad84ee40200a35769f16d1c55598b955a6787103559eb4d71a769e"),
+            "8debd935adad84ee40200a35769f16d1c55598b955a6787103559eb4d71a769e",
         )
         .unwrap();
     }
 
     #[test]
     fn digest_rejects_changed_content() {
-        let err = verify_digest(b"abd", Some(ABC_DIGEST)).unwrap_err();
+        let err = verify_digest(b"abd", ABC_DIGEST).unwrap_err();
         assert!(err.to_string().contains("digest mismatch"));
     }
 
@@ -615,34 +601,18 @@ C3NzaC1lZDI1NTE5AAAAQItj0hckXiD5jsp3KG6v/nUl03h2ckAINdNpzgECprhx4mlUQa
     }
 
     #[test]
-    fn digest_rejects_missing_digest() {
-        let err = verify_digest(b"abc", None).unwrap_err();
-        assert!(err.to_string().contains("no digest"));
-    }
-
-    #[test]
-    fn digest_rejects_unsupported_algorithm() {
-        let digest = ABC_DIGEST.replacen("sha256", "sha512", 1);
-        let err = verify_digest(b"abc", Some(&digest)).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Unsupported asset digest algorithm"));
-    }
-
-    #[test]
     fn digest_rejects_malformed_values() {
         for digest in [
             String::new(),
-            "sha256".into(),
-            "sha256:".into(),
-            format!("sha256:{}", "a".repeat(63)),
-            format!("sha256:{}", "a".repeat(65)),
-            format!("sha256:{}", "g".repeat(64)),
+            "a".repeat(63),
+            "a".repeat(65),
+            "g".repeat(64),
+            format!("sha256:{ABC_DIGEST}"),
             format!("{ABC_DIGEST}:extra"),
             format!("{ABC_DIGEST} "),
         ] {
             assert!(
-                verify_digest(b"abc", Some(&digest)).is_err(),
+                verify_digest(b"abc", &digest).is_err(),
                 "Accepted {digest:?}"
             );
         }
