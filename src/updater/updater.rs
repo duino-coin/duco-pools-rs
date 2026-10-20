@@ -53,22 +53,10 @@ pub const VERSION_CODE: u32 = create_version_code(VERSION_MAJOR, VERSION_MINOR, 
 // VERSION_MAJOR * 10_000 + VERSION_MINOR * 100 + VERSION_PATCH;
 
 fn parse_tag(tag: &str) -> anyhow::Result<u32> {
-    let tag_split = tag.split('.').collect::<Vec<&str>>();
-    let major = if !tag_split.is_empty() {
-        u32::from_str(tag_split[0])?
-    } else {
-        0
-    };
-    let minor = if tag_split.len() >= 2 {
-        u32::from_str(tag_split[1])?
-    } else {
-        0
-    };
-    let patch = if tag_split.len() >= 3 {
-        u32::from_str(tag_split[2])?
-    } else {
-        0
-    };
+    let mut parts = tag.split('.');
+    // split always yields the major part, a missing minor or patch counts as 0
+    let mut next = || parts.next().map_or(Ok(0), u32::from_str);
+    let (major, minor, patch) = (next()?, next()?, next()?);
     // create_version_code packs minor and patch into two digits each and must not overflow
     if minor >= 100 || patch >= 100 || major > u32::MAX / 10_000 - 1 {
         bail!("Unsupported release tag {tag}");
@@ -392,7 +380,7 @@ pub async fn fetch_latest_version(timeout: Duration) -> anyhow::Result<Option<Do
         .error_for_status()?
         .json::<Root>()
         .await?;
-    let tag_version = parse_tag(&response.tag_name.replace("v", ""))?;
+    let tag_version = parse_tag(response.tag_name.trim_start_matches('v'))?;
 
     if tag_version > VERSION_CODE {
         // exact match, so the .sha256 sidecar or a target sharing our prefix is never picked
