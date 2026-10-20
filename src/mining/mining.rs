@@ -511,15 +511,8 @@ fn encode_password(raw: &str, out: &mut CompactString) -> bool {
 }
 
 fn check_workers(max: f32, config: &PoolConfig) -> bool {
-    // u64 can't be lower than zero
-    if config.max_workers == 0 {
-        return false;
-    }
-
-    if max > config.max_workers as f32 {
-        return true;
-    }
-    false
+    // 0 disables the limit
+    config.max_workers != 0 && max > config.max_workers as f32
 }
 
 const fn build_allowed() -> [bool; 128] {
