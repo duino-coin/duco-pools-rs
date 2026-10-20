@@ -362,15 +362,11 @@ impl Session {
             if stat.accepted_shares > WARMUP_SHARES {
                 // why is this a thing?
                 // the difficulty directly correlates with the hashrate, so we can check the device type this way
-                if hashrate_calc as f64 <= curve.mcu_pc_step_h {
-                    #[allow(clippy::if_same_then_else)]
-                    if stat.this_miner_chipid.is_empty() {
-                        stat.rejected_shares += 1;
-                    } else if data_len >= 5 && data[4] != stat.this_miner_chipid.as_str() {
-                        stat.rejected_shares += 1;
-                    } else {
-                        reward = kolka::kolka::calculate_reward(hashrate_calc.max(1f32), stat.worker_slot.id(), self.diff, &curve);
-                    }
+                let chipid_mismatch = hashrate_calc as f64 <= curve.mcu_pc_step_h
+                    && (stat.this_miner_chipid.is_empty()
+                        || (data_len >= 5 && data[4] != stat.this_miner_chipid.as_str()));
+                if chipid_mismatch {
+                    stat.rejected_shares += 1;
                 } else {
                     reward = kolka::kolka::calculate_reward(hashrate_calc.max(1f32), stat.worker_slot.id(), self.diff, &curve);
                 }
