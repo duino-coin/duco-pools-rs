@@ -257,24 +257,9 @@ impl Session {
         let mut data: [&str; 8] = [""; 8];
         let data_len = scan_fields(answer, &mut data);
 
-        let mut wrong_reported_hashrate = false;
-        let mut reported_hashrate;
-        if data_len >= 2 {
-            reported_hashrate = match data[1].parse::<f32>() {
-                Ok(rep) => rep,
-                Err(_) => {
-                    wrong_reported_hashrate = true;
-                    0f32
-                }
-            };
-        } else {
-            wrong_reported_hashrate = true;
-            reported_hashrate = 0f32;
-        }
-
-        let invalid_hashrate = (reported_hashrate <= 0f32 && !wrong_reported_hashrate)
-            || reported_hashrate.is_nan()
-            || reported_hashrate.is_infinite();
+        // a missing field is "", which doesn't parse either
+        let reported = data[1].parse::<f32>().ok();
+        let invalid_hashrate = reported.is_some_and(|rep| rep <= 0f32 || !rep.is_finite());
         if invalid_hashrate {
             stat.reject_shares = Some("BAD,Invalid data\n");
         }
@@ -324,9 +309,15 @@ impl Session {
             debug!("{}, Downgraded ESP32 to {}", id, stat.worker_slot.id());
         }
 
-        if wrong_reported_hashrate {
-            reported_hashrate = hashrate_calc;
-        }
+        let reported_hashrate = reported.unwrap_or(hashrate_calc);
+        let published_hashrate = if reported_hashrate <= 0f32 {
+            hashrate_calc
+        } else {
+            reported_hashrate
+        };
+        // a fast miner underreporting its hashrate solves every job far below the expected share time,
+        // so it would keep its low difficulty without this floor. overreporting doesn't benefit it
+        let hashrate = published_hashrate.max(hashrate_calc);
 
         // abs_diff: a wall clock that stepped back must neither underflow nor stall the reset
         if answer_received.abs_diff(stat.last_share_reset) >= 60 {
@@ -339,16 +330,6 @@ impl Session {
             if stat.last_min_shares > config.max_shares_per_minute {
                 stat.reject_shares = Some("BAD,Too low difficulty\n");
             }
-        }
-
-        let hashrate_is_estimated;
-        let mut hashrate;
-        if reported_hashrate <= 0f32 {
-            hashrate_is_estimated = true;
-            hashrate = hashrate_calc;
-        } else {
-            hashrate_is_estimated = false;
-            hashrate = reported_hashrate;
         }
 
         if self.is_first_share {
@@ -367,10 +348,6 @@ impl Session {
         // {
         //     conn.miner_stat.reject_shares = Some("BAD,Modified hashrate\n");
         // }
-
-        // a fast miner underreporting its hashrate solves every job far below the expected share time,
-        // so it would keep its low difficulty without this floor. overreporting doesn't benefit it
-        hashrate = hashrate.max(hashrate_calc);
 
         let mut share_accepted = false;
         let mut block_found = false;
@@ -418,11 +395,7 @@ impl Session {
             share_accepted,
             block_found,
             hashrate,
-            published_hashrate: if hashrate_is_estimated {
-                hashrate
-            } else {
-                reported_hashrate
-            },
+            published_hashrate,
             invalid_hashrate,
             answer_received,
         })
