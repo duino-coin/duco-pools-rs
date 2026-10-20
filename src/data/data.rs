@@ -168,9 +168,7 @@ impl Connection {
             }
 
             // Validate once; reuse the byte buffer's allocation.
-            *output = String::from_utf8(bytes).map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid UTF-8 data")
-            })?;
+            *output = String::from_utf8(bytes)?;
 
             Ok(())
         }

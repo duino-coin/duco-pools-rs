@@ -10,7 +10,7 @@ mod updater;
 mod web;
 
 use crate::cfg::config::PoolConfig;
-use crate::data::data::{Bans, ConnId, Connection};
+use crate::data::data::{Bans, ConnId, Connection, ConnectionClosed};
 use compact_str::CompactString;
 use env_logger::Target;
 use log::{debug, error, info, LevelFilter};
@@ -279,13 +279,8 @@ async fn start_tcp(mut rx: UnboundedReceiver<()>) {
                                 {
                                     Ok(_) => {}
                                     Err(err) => {
-                                        let err_str = err.to_string();
                                         debug!("Connection closed: {:?}", err);
-                                        // this is impl seriously is horrendous
-                                        if !err_str.contains("Connection reset by peer") && !err_str.contains("Connection timed out")
-                                            && !err_str.contains("Shutting down") && !err_str.contains("os error 10054") && !err_str.contains("os error 10053") && !err_str.contains("Connection closed")
-                                            && !err_str.contains("deadline") && !err_str.contains("Invalid UTF")
-                                        {
+                                        if !is_routine_close(&err) {
                                             info!("Connection closed: {:?}", err);
                                         }
                                     }
@@ -319,6 +314,19 @@ async fn start_tcp(mut rx: UnboundedReceiver<()>) {
     web_handle.abort();
     tcp.abort();
     token.cancel();
+}
+
+// closes that happen all the time and aren't worth an info line
+fn is_routine_close(err: &anyhow::Error) -> bool {
+    use std::io::ErrorKind::{ConnectionAborted, ConnectionReset, TimedOut};
+    match err.downcast_ref::<std::io::Error>() {
+        Some(io_err) => matches!(io_err.kind(), ConnectionReset | ConnectionAborted | TimedOut),
+        None => {
+            err.is::<ConnectionClosed>()
+                || err.is::<tokio::time::error::Elapsed>()
+                || err.is::<std::string::FromUtf8Error>()
+        }
+    }
 }
 
 fn get_rand(min: usize, max: usize) -> usize {

@@ -1,5 +1,5 @@
 use crate::cfg::config::PoolConfig;
-use crate::data::data::{ConnId, Connection};
+use crate::data::data::{ConnId, Connection, ConnectionClosed};
 use crate::mining::block_hash::BlockHash;
 use crate::mining::id_allocator::WorkerAllocator;
 use crate::mining::stats::{MinerStat, MinerStatSlim};
@@ -128,7 +128,7 @@ impl Close {
     async fn send(self, conn: &mut Connection) -> Result<(), anyhow::Error> {
         conn.write(self.0).await?;
         // used so we can handle closes centrally
-        Err(anyhow::anyhow!("Shutting down."))
+        Err(ConnectionClosed.into())
     }
 }
 
