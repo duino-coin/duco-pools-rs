@@ -26,7 +26,6 @@
   "updateMinersStatsEvery": 1,
   "blockProbability": 1000000,
   "blockReward": 28.11,
-  "max_shares_per_minute": 80,
   "restart_script": "",
   "firewall_cmd": "",
   "dashboard_key": "random_key",
