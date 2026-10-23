@@ -60,11 +60,23 @@ Scenarios: `internal/sanitizers`, `protocol/metadata-sanitization`, `protocol/me
 
 Scenarios: `counters/worker-limit`, `counters/weighted-worker-limit`, `kolka/pc-compaction`, `kolka/esp-compaction`, `kolka/mixed-reuse`, `kolka/user-isolation`, `internal/seeded-allocator`, `kolka/reverse-mixed-reuse`, `kolka/worker-limit-recovery`, `kolka/esp32-downgrade`.
 
+## Chip ID reward eligibility
+
+**asserted** - At or below mcu_pc_step_h, a share after the warmup earns a regular reward only with the chip ID of the first share; a changed, empty or initially empty one counts as rejected and earns only block rewards. Above the limit the chip ID is not checked.
+
+Scenarios: `counters/chip-id-mismatch`.
+
 ## Sync snapshots, retry and staging
 
-**asserted** - Multipart fields/metadata, failure retention, success subtraction, concurrent new-user work, cleanup failures, transport disconnect/timeouts, staging writes, retry and total preservation.
+**asserted** - Multipart fields/metadata, failure retention (503, and 200 with `success: false` or a non-JSON body), success subtraction, concurrent new-user work, cleanup failures, transport disconnect/timeouts, staging writes, retry and total preservation.
 
-Scenarios: `sync/payload-and-clearing`, `sync/failed-upload-retry`, `sync/disconnected-worker`, `sync/inflight-shares`, `sync/inflight-rewards`, `sync/inflight-failed-retry`, `sync/cleanup-missing-rewards`, `sync/cleanup-missing-workers`, `sync/transport-disconnect-retry`, `sync/transport-timeout-retry`, `sync/staging-workers-write-failure`, `sync/staging-rewards-write-failure`.
+Scenarios: `sync/payload-and-clearing`, `sync/failed-upload-retry`, `sync/disconnected-worker`, `sync/inflight-shares`, `sync/inflight-rewards`, `sync/inflight-failed-retry`, `sync/cleanup-missing-rewards`, `sync/cleanup-missing-workers`, `sync/transport-disconnect-retry`, `sync/transport-timeout-retry`, `sync/staging-workers-write-failure`, `sync/staging-rewards-write-failure`, `sync/rejected-sync-reply`.
+
+## Pending rewards across restarts
+
+**asserted** - Rewards a failed final sync left in the staging file are pending again after a restart, go out with the startup upload and are acknowledged exactly once; a corrupt file stops startup.
+
+Scenarios: `sync/pending-rewards-reload`, `lifecycle/startup-corrupt-rewards`.
 
 ## IP discovery and fallback
 

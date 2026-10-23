@@ -5,7 +5,7 @@
 //! run one test appended under `#[cfg(test)]` (see `injected/`). All other
 //! cases run against a separate release pool process, like those in `suites`.
 
-use crate::harness::{ensure_accepted, is_accepted, stat, Harness, Options, WAIT};
+use crate::harness::{ensure_accepted, is_accepted, stat, Harness, Miner, Options, WAIT};
 use crate::mock::{Fault, Mock, Upload};
 use crate::suites::Case;
 use anyhow::{Context, Result};
@@ -28,6 +28,7 @@ pub const CASES: &[Case] = &[
     Case::new("counters", "partial-shutdown"),
     Case::new("counters", "publication-rejection-boundaries"),
     Case::new("counters", "reward-formula-mining"),
+    Case::new("counters", "chip-id-mismatch"),
     Case::new("protocol", "fragmented-frames"),
     Case::new("protocol", "frame-boundaries"),
     Case::new("protocol", "empty-frame"),
@@ -62,6 +63,9 @@ pub const CASES: &[Case] = &[
     Case::new("lifecycle", "startup-master-disconnect"),
     Case::new("lifecycle", "startup-master-invalid-utf8"),
     Case::new("lifecycle", "startup-master-delay"),
+    Case::new("lifecycle", "startup-corrupt-rewards"),
+    Case::new("sync", "pending-rewards-reload"),
+    Case::new("sync", "rejected-sync-reply"),
     Case::new("sync", "transport-disconnect-retry"),
     Case::new("sync", "transport-timeout-retry"),
     Case::new("sync", "ip-fallback"),
@@ -76,6 +80,10 @@ pub const CASES: &[Case] = &[
     Case::slow("connections", "active-job-timeout"),
     Case::slow("lifecycle", "rate-window-reset"),
 ];
+
+/// `sync/rewards_verifier.json` as a failed final sync of an earlier run left it.
+/// Both values are exact in `f32`.
+const PENDING_REWARDS: &str = r#"{"alice":0.25,"carol":1.5}"#;
 
 /// Scenarios that expect the pool to refuse to start. They are launched without
 /// waiting for readiness. (`startup-master-delay` starts successfully;
@@ -114,6 +122,13 @@ pub fn options(case: &Case, o: &mut Options) {
             .initial_files
             .push(("config/config.json".into(), "{".into())),
         "startup-missing-field" => o.config["host"] = Value::Null,
+        // left behind by a failed final sync of an earlier run
+        "pending-rewards-reload" => o
+            .initial_files
+            .push(("sync/rewards_verifier.json".into(), PENDING_REWARDS.into())),
+        "startup-corrupt-rewards" => o
+            .initial_files
+            .push(("sync/rewards_verifier.json".into(), "{".into())),
         // every share is a block with the saved curve, not with the master's
         "saved-curve-fallback" => o.initial_files.push((
             "config/curve.json".into(),
@@ -235,6 +250,7 @@ pub async fn run(case: &Case, h: &mut Harness) -> Result<()> {
         "partial-shutdown" => partial_batch(h, true).await,
         "publication-rejection-boundaries" => publication_rejection_boundaries(h).await,
         "reward-formula-mining" => reward_formula_mining(h).await,
+        "chip-id-mismatch" => chip_id_mismatch(h).await,
         // protocol
         "fragmented-frames" => fragmented_frames(h).await,
         "frame-boundaries" => frame_boundaries(h).await,
@@ -267,6 +283,8 @@ pub async fn run(case: &Case, h: &mut Harness) -> Result<()> {
         "refreshed-bans" => ban(h, Ban::Refreshed).await,
         "rate-window-reset" => rate_window_reset(h).await,
         // sync
+        "pending-rewards-reload" => pending_rewards_reload(h).await,
+        "rejected-sync-reply" => rejected_sync_reply(h).await,
         "transport-disconnect-retry" => transport_retry(h, Fault::Disconnect).await,
         "transport-timeout-retry" => transport_retry(h, Fault::Delay(4500)).await,
         "ip-fallback" => ip_fallback(h).await,
@@ -338,6 +356,7 @@ async fn startup_failure(h: &mut Harness, name: &str) -> Result<()> {
         "startup-ip-disconnect" | "startup-master-invalid-utf8" => "failed to login",
         "startup-master-reject" | "startup-master-disconnect" => "Unknown error",
         "startup-without-curve" => "failed to load the saved curve",
+        "startup-corrupt-rewards" => "failed to load pending rewards",
         // startup-invalid-config, startup-missing-field
         _ => "panicked",
     };
@@ -539,6 +558,78 @@ fn curve_reward(curve: &Value, hashrate: f64, difficulty: u64, worker: f64) -> R
     let previous_workers = (worker - 1.0).trunc();
     let share_seconds = difficulty as f64 * 50.0 / h;
     Ok(daily * share_seconds / 86_400.0 * drop.powf(previous_workers))
+}
+
+/// At or below `mcu_pc_step_h`, a share after the warmup earns a regular reward
+/// only with the chip ID the miner sent with its first share. A changed or empty
+/// one, or an empty one from the start, still gets its feedback, but counts as
+/// rejected and earns nothing beyond a block. Above the limit the chip ID
+/// doesn't matter.
+async fn chip_id_mismatch(h: &mut Harness) -> Result<()> {
+    // No loopback hashrate reaches this limit, so every miner counts as a microcontroller.
+    h.mock.shared.curve.lock().unwrap()["mcu_pc_step_h"] = json!(1e30);
+    h.refresh().await?;
+    // alice sends a chip ID with her first share, bob an empty one; both warm up in parallel
+    let warmup = |mut m: Miner, chip: &'static str| {
+        tokio::spawn(async move {
+            for _ in 0..10 {
+                chip_share(&mut m, chip).await?;
+            }
+            Ok::<_, anyhow::Error>(m)
+        })
+    };
+    let alice = warmup(h.miner("alice", "AVR", "chip").await?, "chip-verifier");
+    let bob = warmup(h.miner("bob", "AVR", "no-chip").await?, "");
+    let (mut alice, mut bob) = (alice.await??, bob.await??);
+
+    let (reward, block) = chip_reward(h, &mut alice, "chip-verifier", 11, 0).await?;
+    anyhow::ensure!(
+        reward > block,
+        "Matching chip ID earned no reward: {reward}"
+    );
+    let (reward, block) = chip_reward(h, &mut alice, "other-chip", 12, 1).await?;
+    near(reward, block, "changed chip ID earned a regular reward")?;
+    let (reward, block) = chip_reward(h, &mut alice, "", 13, 2).await?;
+    near(reward, block, "empty chip ID earned a regular reward")?;
+    let (reward, block) = chip_reward(h, &mut bob, "", 11, 1).await?;
+    near(
+        reward,
+        block,
+        "no chip ID on the first share, but a regular reward",
+    )?;
+
+    // Every measured hashrate exceeds this limit, from the very next share on.
+    h.mock.shared.curve.lock().unwrap()["mcu_pc_step_h"] = json!(1.0);
+    h.refresh().await?;
+    let (reward, block) = chip_reward(h, &mut alice, "other-chip", 14, 2).await?;
+    anyhow::ensure!(
+        reward > block,
+        "Chip ID checked above mcu_pc_step_h: {reward}"
+    );
+    Ok(())
+}
+
+/// Solves one job and answers it with `chip` as the chip ID; the share must be accepted.
+async fn chip_share(m: &mut Miner, chip: &str) -> Result<String> {
+    let job = m.job().await?;
+    let reply = m.answer_fields(job.nonce.to_string(), "1000", chip).await?;
+    ensure_accepted(&reply)?;
+    Ok(reply)
+}
+
+/// Mines one share with `chip`, waits for the counters it should leave, and
+/// returns its reward and the block reward (2.0 for a block) included in it.
+async fn chip_reward(
+    h: &Harness,
+    m: &mut Miner,
+    chip: &str,
+    accepted: u64,
+    rejected: u64,
+) -> Result<(f64, f64)> {
+    let reply = chip_share(m, chip).await?;
+    let o = observation(h, &m.username, accepted, rejected).await?;
+    let block = if reply == "BLOCK" { 2.0 } else { 0.0 };
+    Ok((o["reward"].as_f64().context("reward")?, block))
 }
 
 // ---- protocol ------------------------------------------------------------------
@@ -1193,6 +1284,105 @@ async fn rate_window_reset(h: &Harness) -> Result<()> {
 }
 
 // ---- sync ----------------------------------------------------------------------
+
+/// Rewards a failed final sync left in `rewards_<pool>.json` are pending again
+/// after a restart: the startup upload carries them, and a successful sync
+/// acknowledges them exactly once.
+async fn pending_rewards_reload(h: &Harness) -> Result<()> {
+    let expected: Value = serde_json::from_str(PENDING_REWARDS)?;
+    // Upload 0 is the startup sync, answered with the default 503.
+    let (_, startup) = h.upload_after(0, |u| u.completed).await?;
+    anyhow::ensure!(
+        startup.parts["rewards"].json == expected && startup.query["blockIncrease"] == "0",
+        "Startup upload without the saved rewards: {startup:?}"
+    );
+    let state = h.state().await?;
+    anyhow::ensure!(
+        state["verify"]["balances"] == expected,
+        "Saved rewards not pending: {}",
+        state["verify"]["balances"]
+    );
+
+    let index = h.mock.uploads().len();
+    h.mock.status(200);
+    let (index, upload) = h
+        .upload_after(index, |u| u.completed && u.status == 200)
+        .await?;
+    anyhow::ensure!(
+        upload.parts["rewards"].json == expected,
+        "Saved rewards changed before acknowledgement: {}",
+        upload.parts["rewards"].json
+    );
+    h.wait_state("saved rewards acknowledged", |s| {
+        s["verify"]["balances"].as_object().unwrap().is_empty()
+    })
+    .await?;
+    let (_, next) = h.upload_after(index + 1, |u| u.completed).await?;
+    anyhow::ensure!(
+        next.parts["rewards"].json.as_object().unwrap().is_empty(),
+        "Saved rewards uploaded again: {}",
+        next.parts["rewards"].json
+    );
+    Ok(())
+}
+
+/// The master answers a rejected sync with HTTP 200 and `success: false`; a
+/// body that isn't JSON doesn't acknowledge anything either. Both keep all
+/// pending work for the next upload, only `success: true` clears it.
+async fn rejected_sync_reply(h: &Harness) -> Result<()> {
+    let mut m = h.miner("alice", "AVR", "rejected-reply").await?;
+    m.share().await?;
+    observation(h, "alice", 1, 0).await?;
+    // Every upload after this one is built after the share.
+    let (index, _) = h
+        .upload_after(1, |u| {
+            u.completed && u.query.get("blockIncrease").map(String::as_str) == Some("1")
+        })
+        .await?;
+    let before = h.state().await?["verify"].clone();
+    h.mock.respond(
+        "/pool_sync/",
+        200,
+        json!({ "success": false, "message": "rejected" }).to_string(),
+    );
+    h.mock
+        .respond("/pool_sync/", 200, "<html>maintenance</html>");
+
+    // The sync loop is sequential, so each upload starts after the previous
+    // reply was handled.
+    let mut cursor = index + 1;
+    for reply in ["success: false", "non-JSON body"] {
+        let (rejected, _) = h
+            .upload_after(cursor, |u| u.completed && u.status == 200)
+            .await?;
+        let (next, upload) = h.upload_after(rejected + 1, |_| true).await?;
+        anyhow::ensure!(
+            upload.query["blockIncrease"] == "1"
+                && upload.parts["rewards"].json == before["balances"],
+            "200 with {reply} acknowledged work: {upload:?}"
+        );
+        cursor = next;
+    }
+    let after = h.state().await?;
+    for key in ["shares_total", "shares_pending", "balances"] {
+        anyhow::ensure!(
+            before[key] == after["verify"][key],
+            "Rejected sync reply changed {key}"
+        );
+    }
+    anyhow::ensure!(
+        h.dir.join("sync/rewards_verifier.json").exists(),
+        "Rejected sync reply removed the staged rewards"
+    );
+
+    h.mock.status(200);
+    h.wait_state("accepted sync acknowledged", |s| {
+        s["verify"]["shares_pending"] == 0
+            && s["verify"]["balances"].as_object().unwrap().is_empty()
+    })
+    .await?;
+    Ok(())
+}
 
 /// A dropped or timed-out sync connection keeps all pending state. The next
 /// successful attempt uploads it and clears it.

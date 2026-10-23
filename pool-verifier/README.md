@@ -1,6 +1,6 @@
 # Pool verifier
 (vibe-coded (read: I didn't read the code, but verified it against a known-working build of the pools) with GPT-6 Astra) <br/>
-A standalone Rust CLI that checks the current Rust pool working tree against isolated loopback services. It contains **96 scenarios**: 90 process scenarios and 6 injected internal-test scenarios. The default runs 93; `--slow` includes three real-time checks. These are functional checks, not exhaustive proof. An additional opt-in benchmark suite measures throughput against a saved, measured baseline using the pool's `bench` feature.
+A standalone Rust CLI that checks the current Rust pool working tree against isolated loopback services. It contains **100 scenarios**: 94 process scenarios and 6 injected internal-test scenarios. The default runs 97; `--slow` includes three real-time checks. These are functional checks, not exhaustive proof. An additional opt-in benchmark suite measures throughput against a saved, measured baseline using the pool's `bench` feature.
 
 ## Run
 
@@ -100,7 +100,7 @@ Coverage includes:
 - Full accounting with stats intervals 1, 2 and 5, reward warmup, chip eligibility, partial disconnect/shutdown and rejection boundaries.
 - Independent reward formula vectors, an independent reward-curve evaluation of real mining, tier mappings, adaptive thresholds, curve difficulty and the hashrate average.
 - Worker limits/recovery, both mixed-slot reuse directions and 16,000 seeded allocator operations against a separate ordered-map model.
-- Multipart sync, immutable snapshots, in-flight work, transport failure/retry, staging-file failures, cached IPs and shutdown during an upload.
+- Multipart sync, immutable snapshots, in-flight work, transport failure/retry, rejected sync replies, staging-file failures, cached IPs, pending rewards reloaded after a restart and shutdown during an upload.
 - Configuration creation/defaults/persistence, dashboard authentication/schema, startup failures, ban persistence/enforcement and directly triggered reward/ban refresh.
 
 Deployment/updater/restart helper execution, real firewall effects, sustained production load, build features other than the opt-in benchmark suite's `bench` feature, and inactive branches are excluded. The actual hourly refresh scheduler is unverified: refresh tests call its production operation directly. Windows runs do not establish Linux/macOS coverage. See the inventory for partial coverage and OS failure paths that are not injected.

@@ -121,9 +121,17 @@
       ]
     },
     {
+      "behavior": "Chip ID reward eligibility",
+      "coverage": "asserted",
+      "assertion": "At or below mcu_pc_step_h, a share after the warmup earns a regular reward only with the chip ID of the first share; a changed, empty or initially empty one counts as rejected and earns only block rewards. Above the limit the chip ID is not checked.",
+      "cases": [
+        "counters/chip-id-mismatch"
+      ]
+    },
+    {
       "behavior": "Sync snapshots, retry and staging",
       "coverage": "asserted",
-      "assertion": "Multipart fields/metadata, failure retention, success subtraction, concurrent new-user work, cleanup failures, transport disconnect/timeouts, staging writes, retry and total preservation.",
+      "assertion": "Multipart fields/metadata, failure retention (503, and 200 with `success: false` or a non-JSON body), success subtraction, concurrent new-user work, cleanup failures, transport disconnect/timeouts, staging writes, retry and total preservation.",
       "cases": [
         "sync/payload-and-clearing",
         "sync/failed-upload-retry",
@@ -136,7 +144,17 @@
         "sync/transport-disconnect-retry",
         "sync/transport-timeout-retry",
         "sync/staging-workers-write-failure",
-        "sync/staging-rewards-write-failure"
+        "sync/staging-rewards-write-failure",
+        "sync/rejected-sync-reply"
+      ]
+    },
+    {
+      "behavior": "Pending rewards across restarts",
+      "coverage": "asserted",
+      "assertion": "Rewards a failed final sync left in the staging file are pending again after a restart, go out with the startup upload and are acknowledged exactly once; a corrupt file stops startup.",
+      "cases": [
+        "sync/pending-rewards-reload",
+        "lifecycle/startup-corrupt-rewards"
       ]
     },
     {
