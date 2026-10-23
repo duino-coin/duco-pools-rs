@@ -57,7 +57,6 @@ pub const CASES: &[Case] = &[
     Case::new("lifecycle", "refreshed-bans"),
     Case::new("lifecycle", "startup-invalid-config"),
     Case::new("lifecycle", "startup-missing-field"),
-    Case::new("lifecycle", "startup-invalid-rewards"),
     Case::new("lifecycle", "startup-ip-disconnect"),
     Case::new("lifecycle", "startup-master-reject"),
     Case::new("lifecycle", "startup-master-disconnect"),
@@ -149,7 +148,6 @@ pub fn options(case: &Case, o: &mut Options) {
 pub fn configure_mock(name: &str, mock: &Mock) {
     let master = || mock.shared.master_reply.lock().unwrap();
     match name {
-        "startup-invalid-rewards" => mock.respond("/curve.json", 200, "{"),
         // Enough faults to exhaust the pool's IP-lookup retries.
         "startup-ip-disconnect" => {
             for _ in 0..4 {
@@ -315,11 +313,10 @@ fn master_login(h: &Harness) -> Result<Value> {
 
 // ---- Startup -------------------------------------------------------------------
 
-/// Invalid config, reward curve, IP lookup or master login must stop startup
+/// Invalid config, IP lookup or master login must stop startup
 /// with a recognizable diagnostic.
 async fn startup_failure(h: &mut Harness, name: &str) -> Result<()> {
     let diagnostic = match name {
-        "startup-invalid-rewards" => "failed to update pool rewards",
         "startup-ip-disconnect" | "startup-master-invalid-utf8" => "failed to login",
         "startup-master-reject" | "startup-master-disconnect" => "Unknown error",
         // startup-invalid-config, startup-missing-field

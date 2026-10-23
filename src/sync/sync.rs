@@ -27,6 +27,8 @@ use tokio::net::TcpStream;
 
 static SYNC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+const CURVE_PATH: &str = "./config/curve.json";
+
 // shrinking write-locks every shard of the maps, so only do it every n syncs (~5 min by default)
 const SHRINK_EVERY_N_SYNCS: usize = 20;
 
@@ -190,24 +192,25 @@ impl Default for Curve {
 impl Curve {
     // serde_json only yields finite numbers, so this checks what the reward and
     // difficulty calculations divide by, and what would panic or flood the pool
-    fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn parse(content: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+        let curve: Curve = serde_json::from_slice(content)?;
         let divisors = [
-            ("mcu_pc_step_h", self.mcu_pc_step_h),
-            ("arduino_h", self.arduino_h),
-            ("cutoff_sharpness", self.cutoff_sharpness),
-            ("arduino_bonus_width", self.arduino_bonus_width),
-            ("pc_gpu_crossover_h", self.pc_gpu_crossover_h),
-            ("gpu_growth_start", self.gpu_growth_start),
-            ("gpu_growth_softness", self.gpu_growth_softness),
+            ("mcu_pc_step_h", curve.mcu_pc_step_h),
+            ("arduino_h", curve.arduino_h),
+            ("cutoff_sharpness", curve.cutoff_sharpness),
+            ("arduino_bonus_width", curve.arduino_bonus_width),
+            ("pc_gpu_crossover_h", curve.pc_gpu_crossover_h),
+            ("gpu_growth_start", curve.gpu_growth_start),
+            ("gpu_growth_softness", curve.gpu_growth_softness),
         ];
         if let Some((name, _)) = divisors.iter().find(|(_, value)| *value <= 0.0) {
             return Err(format!("curve: {name} must be positive").into());
         }
         // block_probability is the exclusive bound of a random range
-        if self.expected_sharetime == 0 || self.block_probability == 0 {
+        if curve.expected_sharetime == 0 || curve.block_probability == 0 {
             return Err("curve: expected_sharetime and block_probability must be positive".into());
         }
-        Ok(())
+        Ok(curve)
     }
 }
 #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
@@ -324,17 +327,23 @@ async fn read_master_reply(
     Ok(data)
 }
 
+// the last curve resync_curve fetched, so the pool can start while the master is unreachable
+pub fn load_saved_curve() -> Result<(), Box<dyn std::error::Error>> {
+    let pool_rewards = Curve::parse(&std::fs::read(CURVE_PATH)?)?;
+    CURVE_VALUES.store(Arc::new(pool_rewards));
+    Ok(())
+}
+
 pub async fn resync_curve(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
     // cloudflare ignores no-cache from clients, a unique query string misses the edge cache
     let cache_bust = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let curve_content = fetch_curve(config, cache_bust).await?;
-    let pool_rewards: Curve = serde_json::from_str(&curve_content)?;
     // keeps the previous curve if the new one is unusable
-    pool_rewards.validate()?;
+    let pool_rewards = Curve::parse(curve_content.as_bytes())?;
 
     CURVE_VALUES.store(Arc::new(pool_rewards));
     // only a validated curve replaces the one on disk
-    tokio::fs::write("./config/curve.json", &curve_content).await?;
+    tokio::fs::write(CURVE_PATH, &curve_content).await?;
     info!("Successfully updated curve settings");
 
     // the curve is in use already, a failed bans sync only keeps the previous bans

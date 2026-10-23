@@ -80,9 +80,9 @@ Scenarios: `lifecycle/startup-and-auth`, `internal/config-defaults-roundtrip`, `
 
 ## Startup network failures
 
-**asserted** - An invalid reward curve body fails within a deadline with a matching diagnostic; master rejection/disconnect/invalid UTF-8 fail and bounded delayed greeting succeeds.
+**asserted** - Master rejection/disconnect/invalid UTF-8 fail and bounded delayed greeting succeeds.
 
-Scenarios: `lifecycle/startup-invalid-rewards`, `lifecycle/startup-master-reject`, `lifecycle/startup-master-disconnect`, `lifecycle/startup-master-invalid-utf8`, `lifecycle/startup-master-delay`.
+Scenarios: `lifecycle/startup-master-reject`, `lifecycle/startup-master-disconnect`, `lifecycle/startup-master-invalid-utf8`, `lifecycle/startup-master-delay`.
 
 ## Bans and refresh operation
 
