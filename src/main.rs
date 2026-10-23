@@ -209,8 +209,11 @@ async fn main() {
     });
 
     ctrlc::set_handler(move || {
-        // the receiver is gone once shutdown has started
-        let _ = tx.send(());
+        // the receiver is gone once shutdown has started, so a second ctrl-c skips the final sync and logout
+        if tx.send(()).is_err() {
+            error!("Forced shutdown, pending rewards weren't synced");
+            std::process::exit(1);
+        }
     })
     .expect("Failed to handle ctrl-c");
 

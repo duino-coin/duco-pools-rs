@@ -219,11 +219,11 @@ pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>
         name: &config.pool_name,
     };
     info!("Logging in..");
-    let mut socket = TcpStream::connect(format!("{}:{}", config.server_ip, config.server_port))
-        .await
-        .unwrap();
+    let timeout = Duration::from_secs(config.timeout as u64);
+    let address = format!("{}:{}", config.server_ip, config.server_port);
+    let mut socket = tokio::time::timeout(timeout, TcpStream::connect(address)).await??;
     debug!("Connected to server");
-    let data = read_master_reply(&mut socket).await?;
+    let data = read_master_reply(&mut socket, config).await?;
     if data.starts_with(&config.server_version) {
         let info_str = serde_json::to_string(&infos)?;
         debug!("Sending {info_str}");
@@ -233,7 +233,7 @@ pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>
         socket.flush().await?;
     }
     debug!("Waiting for response..");
-    let data = read_master_reply(&mut socket).await?;
+    let data = read_master_reply(&mut socket, config).await?;
     if data == "LoginOK" {
         info!("Successfully logged in");
     } else {
@@ -244,16 +244,18 @@ pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>
 }
 #[cfg(not(debug_assertions))]
 pub async fn logout(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
-    let mut socket =
-        TcpStream::connect(format!("{}:{}", config.server_ip, config.server_port)).await?;
-    let data = read_master_reply(&mut socket).await?;
+    // bounded like login, this runs after ctrl-c, so a silent master must not hang the shutdown
+    let timeout = Duration::from_secs(config.timeout as u64);
+    let address = format!("{}:{}", config.server_ip, config.server_port);
+    let mut socket = tokio::time::timeout(timeout, TcpStream::connect(address)).await??;
+    let data = read_master_reply(&mut socket, config).await?;
     // the greeting comes first, the logout reply only after our request
     if data.starts_with(&config.server_version) {
         socket
             .write_all(format!("PoolLogout,{}", config.pool_id).as_bytes())
             .await?;
         socket.flush().await?;
-        let data = read_master_reply(&mut socket).await?;
+        let data = read_master_reply(&mut socket, config).await?;
         if data == "LogoutOK" {
             info!("Successfully logged out");
             return Ok(());
@@ -270,10 +272,14 @@ pub async fn logout(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error
 const MASTER_REPLY_MAX_BYTES: usize = 8 * 1024;
 
 #[cfg(not(debug_assertions))]
-async fn read_master_reply(socket: &mut TcpStream) -> Result<String, Box<dyn std::error::Error>> {
+async fn read_master_reply(
+    socket: &mut TcpStream,
+    config: &PoolConfig,
+) -> Result<String, Box<dyn std::error::Error>> {
     // one read, at most as much as the BufReader it replaces could take in
     let mut received = vec![0u8; MASTER_REPLY_MAX_BYTES];
-    let len = socket.read(&mut received).await?;
+    let timeout = Duration::from_secs(config.timeout as u64);
+    let len = tokio::time::timeout(timeout, socket.read(&mut received)).await??;
     received.truncate(len);
 
     let data = String::from_utf8(received).map_err(|_| {
