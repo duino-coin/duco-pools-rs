@@ -8,7 +8,9 @@ use log::warn;
 use log::{debug, error, info};
 use reqwest::multipart;
 use serde::{Deserialize, Serialize, Serializer};
-use std::collections::{HashSet};
+#[cfg(all(not(feature = "dummy_sync"), not(debug_assertions)))]
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::process::exit;
 #[cfg(any(all(not(feature = "dummy_sync"), not(debug_assertions)), test))]
 use std::sync::atomic::AtomicU64;
@@ -34,11 +36,31 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .expect("failed to build http client")
 });
 
-// writes the file on the blocking pool and hands the buffer back, so it doesn't have to be copied
+// writes the file on the blocking pool and hands the buffer back, so it doesn't have to be copied;
+// staged next to it and renamed over it, so a crash never leaves a cut-off file behind
 async fn write_file(path: String, content: Vec<u8>) -> std::io::Result<Vec<u8>> {
-    tokio::task::spawn_blocking(move || std::fs::write(&path, &content).map(|_| content))
-        .await
-        .map_err(std::io::Error::other)?
+    tokio::task::spawn_blocking(move || {
+        let staging = format!("{path}.tmp");
+        std::fs::write(&staging, &content)?;
+        std::fs::rename(&staging, &path).map(|_| content)
+    })
+    .await
+    .map_err(std::io::Error::other)?
+}
+
+// a final sync that failed leaves its rewards file behind, they go out with the next sync
+#[cfg(all(not(feature = "dummy_sync"), not(debug_assertions)))]
+pub fn load_pending_rewards(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let path = format!("{}/rewards_{}.json", config.base_sync_folder, config.pool_name);
+    if !std::fs::exists(&path)? {
+        return Ok(());
+    }
+    let rewards: HashMap<CompactString, f32> = serde_json::from_slice(&std::fs::read(&path)?)?;
+    info!("Loaded pending rewards of {} users from {path}", rewards.len());
+    for (username, reward) in rewards {
+        *mining::BALANCES_TO_UPDATE.entry(username).or_insert(0f32) += reward;
+    }
+    Ok(())
 }
 
 // Keep the uploaded values alongside the keys already needed for acknowledgement.

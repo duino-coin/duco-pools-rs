@@ -154,6 +154,10 @@ async fn main() {
         }));
     }
     CONFIG.get_or_init(|| config);
+    // before any share is accepted or synced
+    #[cfg(all(not(feature = "dummy_sync"), not(debug_assertions)))]
+    sync::sync::load_pending_rewards(CONFIG.get().unwrap())
+        .expect("failed to load pending rewards");
     // stops the sync loop between syncs, aborting it could cut off an upload the server already took
     let sync_token = CancellationToken::new();
     #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
