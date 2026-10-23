@@ -15,7 +15,6 @@ static GREETING: OnceLock<String> = OnceLock::new();
 //const CMD: &str = "csf -td ${ip}"; //csf
 //const CMD: &str = "iptables -A INPUT -s ${ip} -j DROP"; //iptables
 //const CMD: &str = "sudo ufw deny from ${ip} to any"; //ufw
-// const CMD: &str = ""; //none
 async fn ban_ip(ip: &str) -> Result<(), anyhow::Error> {
     let firewall_cmd = &CONFIG.get().unwrap().firewall_cmd;
     if !firewall_cmd.is_empty() {
@@ -122,7 +121,6 @@ pub fn handle_close(conn: &mut Connection) {
 
     USR_WORKERS_ALLOC.remove_if_mut(&conn.miner_stat.username, |_, alloc| {
         alloc.release(
-            // conn.miner_stat.amount_of_workers,
             conn.miner_stat.worker_slot,
             conn.miner_stat.is_req_diff_esp32,
         );

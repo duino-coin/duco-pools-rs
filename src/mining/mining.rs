@@ -343,16 +343,6 @@ impl Session {
             }
         }
 
-        // TODO: determine if needed
-        // if diff > DUE_DIFF_CACHE.load(Relaxed)
-        //     && diff <= ESP8266NH_DIFF_CACHE.load(Relaxed)
-        //     && hashrate_perc_diff_for_calc > 15f32
-        //     && hashrate < hashrate_calc // only underreporting keeps a lower difficulty (overreporting the hashrate doesn't benefit the user)
-        //     && conn.miner_stat.share_time >= 1.5
-        // {
-        //     conn.miner_stat.reject_shares = Some("BAD,Modified hashrate\n");
-        // }
-
         let mut share_accepted = false;
         let mut block_found = false;
         let mut reward = 0f32;

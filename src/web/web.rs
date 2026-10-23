@@ -71,14 +71,12 @@ pub async fn start_webserver(addr: SocketAddr) -> JoinHandle<()> {
     let dash_key = CONFIG.get().unwrap().dashboard_key.as_str();
     let dash_enabled = dash_key.len() > 20;
     let data = warp::path("data")
-        // .and(warp::get())
         .and(warp::query::<std::collections::HashMap<String, String>>())
         .and(warp::path::end())
-        .and_then(move |params: std::collections::HashMap<String, String>| {
-            async move {
+        .and_then(
+            move |params: std::collections::HashMap<String, String>| async move {
                 if dash_enabled {
                     if let Some(provided_key) = params.get("key") {
-                        // if provided_key == &dash_key_clone {
                         if ct_eq(provided_key, dash_key) {
                             let data_res = DataRes {
                                 connections: CONNECTIONS.load(Relaxed),
@@ -90,8 +88,8 @@ pub async fn start_webserver(addr: SocketAddr) -> JoinHandle<()> {
                     }
                 }
                 Err(warp::reject::not_found())
-            }
-        });
+            },
+        );
 
     info!("Binding webserver to to {addr:?}");
     let route = ping.or(data);

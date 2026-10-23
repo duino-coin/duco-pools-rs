@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use anyhow::{bail, Context};
 #[cfg(not(target_os = "windows"))]
 use flate2::read::GzDecoder;

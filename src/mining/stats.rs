@@ -16,10 +16,6 @@ pub struct MinerStat {
     pub accepted_shares: u64,
     // r
     pub rejected_shares: u64,
-    // al
-    // pub algorithm: CompactString,
-    // p
-    // pub pool_name: CompactString,
     // k
     pub this_miner_chipid: CompactString, // this_miner_chipid (whatever this is)
     // pw
