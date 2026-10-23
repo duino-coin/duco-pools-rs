@@ -1,6 +1,6 @@
 # Pool verifier
 (vibe-coded (read: I didn't read the code, but verified it against a known-working build of the pools) with GPT-6 Astra) <br/>
-A standalone Rust CLI that checks the current Rust pool working tree against isolated loopback services. It contains **92 scenarios**: 86 process scenarios and 6 injected internal-test scenarios. The default runs 89; `--slow` includes three real-time checks. These are functional checks, not exhaustive proof. An additional opt-in benchmark suite measures throughput against a saved, measured baseline using the pool's `bench` feature.
+A standalone Rust CLI that checks the current Rust pool working tree against isolated loopback services. It contains **96 scenarios**: 90 process scenarios and 6 injected internal-test scenarios. The default runs 93; `--slow` includes three real-time checks. These are functional checks, not exhaustive proof. An additional opt-in benchmark suite measures throughput against a saved, measured baseline using the pool's `bench` feature.
 
 ## Run
 

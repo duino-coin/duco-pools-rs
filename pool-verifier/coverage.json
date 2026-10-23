@@ -188,6 +188,17 @@
       ]
     },
     {
+      "behavior": "Reward curve validation and fallback",
+      "coverage": "asserted",
+      "assertion": "Malformed, incomplete, out-of-range and error-page curves and every non-positive divisor, sharetime or block probability are rejected by name on refresh, keeping the curve in use and the saved config/curve.json; a valid curve is applied and saved. Without the master's curve at startup the saved one is used, without either startup fails; a bans outage at startup or on refresh neither stops startup nor discards the refreshed curve.",
+      "cases": [
+        "curve/invalid-refresh-rejected",
+        "curve/saved-curve-fallback",
+        "curve/startup-without-curve",
+        "curve/bans-outage"
+      ]
+    },
+    {
       "behavior": "Shutdown with active work",
       "coverage": "partial",
       "assertion": "Final sync, logout and miner disconnect; a held upload finishes before the final snapshot, which conserves pending work. Remote exactly-once delivery after ambiguous acknowledgement is not guaranteed.",

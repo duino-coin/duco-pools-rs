@@ -351,13 +351,48 @@ impl Harness {
     /// Runs the production reward/ban refresh via the injected stdin command.
     /// The pool prints the marker only after the refresh has finished.
     pub async fn refresh(&mut self) -> Result<()> {
+        if let Err(error) = self.refresh_outcome().await? {
+            bail!("Refresh failed: {error}");
+        }
+        Ok(())
+    }
+
+    /// Runs a refresh the pool must reject and returns its error message.
+    pub async fn refresh_rejected(&mut self) -> Result<String> {
+        match self.refresh_outcome().await? {
+            Ok(()) => bail!("Refresh unexpectedly succeeded"),
+            Err(error) => Ok(error),
+        }
+    }
+
+    /// Sends `refresh` and waits for the outcome line of exactly this refresh;
+    /// earlier outcomes are counted, so repeated refreshes can't match an old one.
+    async fn refresh_outcome(&mut self) -> Result<std::result::Result<(), String>> {
+        let outcomes = |dir: &Path| -> Result<Vec<String>> {
+            Ok(fs::read_to_string(dir.join("pool.log"))?
+                .lines()
+                .filter(|line| line.starts_with("VERIFY_REFRESH_"))
+                .map(str::to_owned)
+                .collect())
+        };
+        let before = outcomes(&self.dir)?.len();
         self.child
             .stdin
             .as_mut()
             .context("stdin closed")?
             .write_all(b"refresh\n")
             .await?;
-        self.wait_log("VERIFY_REFRESH_OK").await
+        let deadline = Instant::now() + WAIT;
+        loop {
+            if let Some(line) = outcomes(&self.dir)?.into_iter().nth(before) {
+                return Ok(match line.strip_prefix("VERIFY_REFRESH_ERROR: ") {
+                    Some(error) => Err(error.to_owned()),
+                    None => Ok(()),
+                });
+            }
+            anyhow::ensure!(Instant::now() < deadline, "Missing refresh outcome");
+            sleep(Duration::from_millis(20)).await;
+        }
     }
 
     /// Asks the pool to shut down (same channel as Ctrl-C) without waiting.

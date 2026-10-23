@@ -90,6 +90,12 @@ Scenarios: `lifecycle/startup-master-reject`, `lifecycle/startup-master-disconne
 
 Scenarios: `lifecycle/banned-user`, `internal/bans-persistence`, `lifecycle/preexisting-ip-ban`, `lifecycle/ban-reconnect`, `lifecycle/localhost-exemption`, `lifecycle/refreshed-bans`.
 
+## Reward curve validation and fallback
+
+**asserted** - Malformed, incomplete, out-of-range and error-page curves and every non-positive divisor, sharetime or block probability are rejected by name on refresh, keeping the curve in use and the saved config/curve.json; a valid curve is applied and saved. Without the master's curve at startup the saved one is used, without either startup fails; a bans outage at startup or on refresh neither stops startup nor discards the refreshed curve.
+
+Scenarios: `curve/invalid-refresh-rejected`, `curve/saved-curve-fallback`, `curve/startup-without-curve`, `curve/bans-outage`.
+
 ## Shutdown with active work
 
 **partial** - Final sync, logout and miner disconnect; a held upload finishes before the final snapshot, which conserves pending work. Remote exactly-once delivery after ambiguous acknowledgement is not guaranteed.

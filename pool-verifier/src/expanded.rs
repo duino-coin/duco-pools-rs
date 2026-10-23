@@ -69,6 +69,10 @@ pub const CASES: &[Case] = &[
     Case::new("sync", "staging-workers-write-failure"),
     Case::new("sync", "staging-rewards-write-failure"),
     Case::new("sync", "shutdown-held-upload"),
+    Case::new("curve", "invalid-refresh-rejected"),
+    Case::new("curve", "saved-curve-fallback"),
+    Case::new("curve", "startup-without-curve"),
+    Case::new("curve", "bans-outage"),
     Case::slow("connections", "active-job-timeout"),
     Case::slow("lifecycle", "rate-window-reset"),
 ];
@@ -110,6 +114,11 @@ pub fn options(case: &Case, o: &mut Options) {
             .initial_files
             .push(("config/config.json".into(), "{".into())),
         "startup-missing-field" => o.config["host"] = Value::Null,
+        // every share is a block with the saved curve, not with the master's
+        "saved-curve-fallback" => o.initial_files.push((
+            "config/curve.json".into(),
+            crate::mock::curve(true).to_string(),
+        )),
         // `/data` blanks the mining keys; these read them from the sync upload instead
         "password-boundaries" | "legacy-key" => o.sync_secs = 1,
         // the upload is held while miners submit shares; the pool's request timeout
@@ -134,6 +143,7 @@ pub fn options(case: &Case, o: &mut Options) {
             | "transport-disconnect-retry"
             | "transport-timeout-retry"
             | "shutdown-held-upload"
+            | "invalid-refresh-rejected"
     ) {
         o.blocks = true;
     }
@@ -158,6 +168,10 @@ pub fn configure_mock(name: &str, mock: &Mock) {
         "startup-master-disconnect" => master().greeting.clear(),
         "startup-master-invalid-utf8" => master().greeting = vec![255],
         "startup-master-delay" => master().delay_ms = 200,
+        "saved-curve-fallback" | "startup-without-curve" => {
+            mock.respond("/curve.json", 503, "unavailable")
+        }
+        "bans-outage" => mock.respond("/bans.json", 503, "unavailable"),
         // The first lookup (during login) succeeds. The second, for the
         // immediate startup sync, times out while no IP has been cached yet.
         "ip-no-cache" => {
@@ -260,6 +274,10 @@ pub async fn run(case: &Case, h: &mut Harness) -> Result<()> {
         "staging-workers-write-failure" => staging_write_failure(h, "workers_verifier.json").await,
         "staging-rewards-write-failure" => staging_write_failure(h, "rewards_verifier.json").await,
         "shutdown-held-upload" => shutdown_held_upload(h).await,
+        // curve
+        "invalid-refresh-rejected" => invalid_refresh_rejected(h).await,
+        "saved-curve-fallback" => saved_curve_fallback(h).await,
+        "bans-outage" => bans_outage(h).await,
         // connections
         "active-job-timeout" => active_job_timeout(h).await,
         _ => anyhow::bail!("Unimplemented scenario {}", case.name),
@@ -313,12 +331,13 @@ fn master_login(h: &Harness) -> Result<Value> {
 
 // ---- Startup -------------------------------------------------------------------
 
-/// Invalid config, IP lookup or master login must stop startup
+/// Invalid config, IP lookup, master login or no curve at all must stop startup
 /// with a recognizable diagnostic.
 async fn startup_failure(h: &mut Harness, name: &str) -> Result<()> {
     let diagnostic = match name {
         "startup-ip-disconnect" | "startup-master-invalid-utf8" => "failed to login",
         "startup-master-reject" | "startup-master-disconnect" => "Unknown error",
+        "startup-without-curve" => "failed to load the saved curve",
         // startup-invalid-config, startup-missing-field
         _ => "panicked",
     };
@@ -1295,6 +1314,122 @@ async fn shutdown_held_upload(h: &mut Harness) -> Result<()> {
             && final_upload.parts["rewards"].json["alice"] == 4.0,
         "Final upload lost pending work: {final_upload:?}"
     );
+    Ok(())
+}
+
+// ---- curve ---------------------------------------------------------------------
+
+/// Every rejected curve leaves the one in use (every share a block) and the saved
+/// `config/curve.json` untouched, and the error names what failed. A valid curve
+/// afterwards is applied and saved. All variants are checked before failing.
+async fn invalid_refresh_rejected(h: &mut Harness) -> Result<()> {
+    let path = h.dir.join("config/curve.json");
+    let saved = std::fs::read(&path)?;
+    // applying any of these would end the blocks
+    let valid = crate::mock::curve(false);
+    let with = |key: &str, value: Value| {
+        let mut curve = valid.clone();
+        curve[key] = value;
+        curve.to_string()
+    };
+    let mut without_h_ref = valid.clone();
+    without_h_ref.as_object_mut().unwrap().remove("h_ref");
+    let positive = "expected_sharetime and block_probability must be positive";
+    let mut variants = vec![
+        (503, "<html>Service Unavailable</html>".to_owned(), "expected value".to_owned()),
+        (200, "{".to_owned(), "EOF while parsing".to_owned()),
+        (200, without_h_ref.to_string(), "missing field `h_ref`".to_owned()),
+        (200, with("expected_sharetime", json!(256)), "expected u8".to_owned()),
+        (200, with("expected_sharetime", json!(0)), positive.to_owned()),
+        (200, with("block_probability", json!(0)), positive.to_owned()),
+    ];
+    for divisor in [
+        "mcu_pc_step_h",
+        "arduino_h",
+        "cutoff_sharpness",
+        "arduino_bonus_width",
+        "pc_gpu_crossover_h",
+        "gpu_growth_start",
+        "gpu_growth_softness",
+    ] {
+        for value in [0.0, -1.0] {
+            variants.push((
+                200,
+                with(divisor, json!(value)),
+                format!("curve: {divisor} must be positive"),
+            ));
+        }
+    }
+
+    let mut m = h.miner("alice", "AVR", "curve").await?;
+    let mut errors = vec![];
+    for (status, body, expected) in variants {
+        h.mock.respond("/curve.json", status, body);
+        match h.refresh_rejected().await {
+            Ok(error) if !error.contains(&expected) => {
+                errors.push(format!("expected {expected:?}, got {error:?}"))
+            }
+            Ok(_) => {}
+            Err(err) => errors.push(format!("{expected}: {err}")),
+        }
+        let reply = m.share().await?;
+        if reply != "BLOCK" {
+            errors.push(format!("{expected}: curve applied, share got {reply}"));
+        }
+        if std::fs::read(&path)? != saved {
+            errors.push(format!("{expected}: config/curve.json overwritten"));
+        }
+    }
+    anyhow::ensure!(errors.is_empty(), "Curve validation: {}", errors.join("; "));
+
+    *h.mock.shared.curve.lock().unwrap() = valid.clone();
+    h.refresh().await?;
+    let reply = m.share().await?;
+    anyhow::ensure!(reply == "GOOD", "Valid curve not applied: {reply}");
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    anyhow::ensure!(saved == valid, "Valid curve not saved");
+    Ok(())
+}
+
+/// The master's curve is unavailable at startup, so the pool starts with the saved
+/// `config/curve.json` (every share a block) and keeps that file. The next refresh
+/// applies and saves the master's curve.
+async fn saved_curve_fallback(h: &mut Harness) -> Result<()> {
+    h.wait_log("using the saved curve").await?;
+    let path = h.dir.join("config/curve.json");
+    let mut m = h.miner("alice", "AVR", "saved").await?;
+    let reply = m.share().await?;
+    anyhow::ensure!(reply == "BLOCK", "Saved curve not in use: {reply}");
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    anyhow::ensure!(saved == crate::mock::curve(true), "Saved curve overwritten");
+
+    h.refresh().await?;
+    let reply = m.share().await?;
+    anyhow::ensure!(reply == "GOOD", "Master curve not applied: {reply}");
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    anyhow::ensure!(saved == crate::mock::curve(false), "Master curve not saved");
+    Ok(())
+}
+
+/// The bans list is unavailable at startup and on a later refresh. The pool still
+/// starts, and the refreshed curve applies (every share a block afterwards).
+async fn bans_outage(h: &mut Harness) -> Result<()> {
+    let failures = |h: &Harness| -> Result<usize> {
+        Ok(std::fs::read_to_string(h.dir.join("pool.log"))?
+            .matches("Failed to sync bans")
+            .count())
+    };
+    h.wait_log("Failed to sync bans").await?;
+    let mut m = h.miner("alice", "AVR", "bans-outage").await?;
+    let reply = m.share().await?;
+    anyhow::ensure!(reply == "GOOD", "Unexpected feedback: {reply}");
+
+    h.mock.shared.curve.lock().unwrap()["block_probability"] = json!(1);
+    h.mock.respond("/bans.json", 503, "unavailable");
+    h.refresh().await?;
+    anyhow::ensure!(failures(h)? == 2, "Refresh didn't hit the bans outage");
+    let reply = m.share().await?;
+    anyhow::ensure!(reply == "BLOCK", "Curve not applied with the bans outage: {reply}");
     Ok(())
 }
 
