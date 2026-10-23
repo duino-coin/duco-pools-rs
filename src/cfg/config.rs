@@ -2,7 +2,6 @@ use anyhow::bail;
 use config::Config;
 use rand::distr::{Alphanumeric, Distribution};
 use serde::{Deserialize, Serialize};
-use std::error::Error;
 use std::path::Path;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -123,7 +122,7 @@ impl Default for PoolConfig {
     }
 }
 
-pub fn load_config() -> Result<PoolConfig, Box<dyn Error>> {
+pub fn load_config() -> Result<PoolConfig, anyhow::Error> {
     let path = Path::new("./config/config.json");
 
     if path.exists() {

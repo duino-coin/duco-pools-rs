@@ -214,7 +214,7 @@ pub struct Bans {
 
 impl Bans {
     // runs once when BANS is first locked, so reading and creating the file may block
-    pub fn load_bans() -> Result<Self, Box<dyn Error>> {
+    pub fn load_bans() -> Result<Self, anyhow::Error> {
         if std::fs::exists(BANS_PATH)? {
             let file_content = std::fs::read_to_string(BANS_PATH)?;
             let bans: Bans =
@@ -227,7 +227,7 @@ impl Bans {
     }
 
     // called while holding the BANS lock on the runtime, so the write must not block a worker thread
-    pub async fn save_bans(&self) -> Result<(), Box<dyn Error>> {
+    pub async fn save_bans(&self) -> Result<(), anyhow::Error> {
         tokio::fs::write(BANS_PATH, serde_json::to_string(&self)?).await?;
 
         Ok(())

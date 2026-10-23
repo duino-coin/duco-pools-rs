@@ -1,6 +1,7 @@
 use crate::cfg::config::PoolConfig;
 use crate::mining::{mining, stats};
 use crate::{BANS, CONFIG, CONNECTIONS, CURVE_VALUES};
+use anyhow::bail;
 use compact_str::CompactString;
 use dashmap::DashMap;
 #[cfg(not(feature = "dummy_sync"))]
@@ -56,7 +57,7 @@ async fn write_file(path: PathBuf, content: Vec<u8>) -> std::io::Result<Vec<u8>>
 
 // a final sync that failed leaves its rewards file behind, they go out with the next sync
 #[cfg(all(not(feature = "dummy_sync"), not(debug_assertions)))]
-pub fn load_pending_rewards(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
+pub fn load_pending_rewards(config: &PoolConfig) -> Result<(), anyhow::Error> {
     // joined, so an empty base_sync_folder is the working directory and not the filesystem root
     let path =
         Path::new(&config.base_sync_folder).join(format!("rewards_{}.json", config.pool_name));
@@ -192,7 +193,7 @@ impl Default for Curve {
 impl Curve {
     // serde_json only yields finite numbers, so this checks what the reward and
     // difficulty calculations divide by, and what would panic or flood the pool
-    fn parse(content: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+    fn parse(content: &[u8]) -> Result<Self, anyhow::Error> {
         let curve: Curve = serde_json::from_slice(content)?;
         let divisors = [
             ("mcu_pc_step_h", curve.mcu_pc_step_h),
@@ -204,17 +205,17 @@ impl Curve {
             ("gpu_growth_softness", curve.gpu_growth_softness),
         ];
         if let Some((name, _)) = divisors.iter().find(|(_, value)| *value <= 0.0) {
-            return Err(format!("curve: {name} must be positive").into());
+            bail!("curve: {name} must be positive");
         }
         // block_probability is the exclusive bound of a random range
         if curve.expected_sharetime == 0 || curve.block_probability == 0 {
-            return Err("curve: expected_sharetime and block_probability must be positive".into());
+            bail!("curve: expected_sharetime and block_probability must be positive");
         }
         Ok(curve)
     }
 }
 #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
-pub async fn get_pool_ip(config: &PoolConfig) -> Result<String, Box<dyn std::error::Error>> {
+pub async fn get_pool_ip(config: &PoolConfig) -> Result<String, anyhow::Error> {
     debug!("Getting ip..");
     let client = &*HTTP_CLIENT;
     let request = client.get("https://api.ipify.org/");
@@ -238,11 +239,11 @@ struct LoginInfos<'a> {
 }
 
 #[cfg(not(debug_assertions))]
-pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn login(config: &PoolConfig) -> Result<(), anyhow::Error> {
     debug!("Gathering login data..");
     let ip = if config.use_ngrok {
         // ip = "".to_string();
-        return Err(Box::from("Ngrok not implemented"));
+        bail!("Ngrok not implemented");
     } else {
         get_pool_ip(config).await?
     };
@@ -278,7 +279,7 @@ pub async fn login(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 #[cfg(not(debug_assertions))]
-pub async fn logout(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn logout(config: &PoolConfig) -> Result<(), anyhow::Error> {
     // bounded like login, this runs after ctrl-c, so a silent master must not hang the shutdown
     let timeout = Duration::from_secs(config.timeout as u64);
     let address = format!("{}:{}", config.server_ip, config.server_port);
@@ -299,7 +300,7 @@ pub async fn logout(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error
     } else {
         error!("Unknown error, server greeted with {data} in logout");
     }
-    Err(Box::from("Unknown error"))
+    bail!("Unknown error")
 }
 
 // the master server answers each step with one unterminated message
@@ -310,7 +311,7 @@ const MASTER_REPLY_MAX_BYTES: usize = 8 * 1024;
 async fn read_master_reply(
     socket: &mut TcpStream,
     config: &PoolConfig,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, anyhow::Error> {
     // one read, at most as much as the BufReader it replaces could take in
     let mut received = vec![0u8; MASTER_REPLY_MAX_BYTES];
     let timeout = Duration::from_secs(config.timeout as u64);
@@ -328,13 +329,13 @@ async fn read_master_reply(
 }
 
 // the last curve resync_curve fetched, so the pool can start while the master is unreachable
-pub fn load_saved_curve() -> Result<(), Box<dyn std::error::Error>> {
+pub fn load_saved_curve() -> Result<(), anyhow::Error> {
     let pool_rewards = Curve::parse(&std::fs::read(CURVE_PATH)?)?;
     CURVE_VALUES.store(Arc::new(pool_rewards));
     Ok(())
 }
 
-pub async fn resync_curve(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn resync_curve(config: &PoolConfig) -> Result<(), anyhow::Error> {
     // cloudflare ignores no-cache from clients, a unique query string misses the edge cache
     let cache_bust = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let curve_content = fetch_curve(config, cache_bust).await?;
@@ -353,10 +354,7 @@ pub async fn resync_curve(config: &PoolConfig) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-async fn fetch_curve(
-    config: &PoolConfig,
-    cache_bust: u64,
-) -> Result<String, Box<dyn std::error::Error>> {
+async fn fetch_curve(config: &PoolConfig, cache_bust: u64) -> Result<String, anyhow::Error> {
     Ok(HTTP_CLIENT
         .get(format!(
             "{}/curve.json?t={cache_bust}",
@@ -371,7 +369,7 @@ async fn fetch_curve(
         .await?)
 }
 
-async fn sync_bans(config: &PoolConfig, cache_bust: u64) -> Result<(), Box<dyn std::error::Error>> {
+async fn sync_bans(config: &PoolConfig, cache_bust: u64) -> Result<(), anyhow::Error> {
     let response_data_bans = HTTP_CLIENT
         .get(format!(
             "{}/bans.json?t={cache_bust}",
@@ -393,7 +391,7 @@ async fn sync_bans(config: &PoolConfig, cache_bust: u64) -> Result<(), Box<dyn s
 }
 
 #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
-pub async fn sync(sys: &mut System, last_ip: &str) -> Result<String, Box<dyn std::error::Error>> {
+pub async fn sync(sys: &mut System, last_ip: &str) -> Result<String, anyhow::Error> {
     info!("Starting sync..");
     let config = CONFIG.get().unwrap();
     // succeeds if the folder already exists
@@ -403,7 +401,7 @@ pub async fn sync(sys: &mut System, last_ip: &str) -> Result<String, Box<dyn std
         Ok(ok) => ok,
         Err(err) => {
             if last_ip.is_empty() {
-                return Err(Box::from(format!("Failed to get pool ip {err}")));
+                bail!("Failed to get pool ip {err}");
             }
             error!("Failed to get pool ip: {err}. Falling back to last ip collected.");
             last_ip.to_string()
@@ -522,7 +520,7 @@ pub async fn sync(sys: &mut System, last_ip: &str) -> Result<String, Box<dyn std
             }
             Err(err) => {
                 error!("Error while syncing: {}", err);
-                return Err(Box::new(err));
+                return Err(err.into());
             }
         };
     }
