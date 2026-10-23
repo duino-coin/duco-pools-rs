@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize, Serializer};
 #[cfg(all(not(feature = "dummy_sync"), not(debug_assertions)))]
 use std::collections::HashMap;
 use std::collections::HashSet;
+#[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::exit;
 #[cfg(any(all(not(feature = "dummy_sync"), not(debug_assertions)), test))]
 use std::sync::atomic::AtomicU64;
@@ -38,9 +41,10 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 
 // writes the file on the blocking pool and hands the buffer back, so it doesn't have to be copied;
 // staged next to it and renamed over it, so a crash never leaves a cut-off file behind
-async fn write_file(path: String, content: Vec<u8>) -> std::io::Result<Vec<u8>> {
+async fn write_file(path: PathBuf, content: Vec<u8>) -> std::io::Result<Vec<u8>> {
     tokio::task::spawn_blocking(move || {
-        let staging = format!("{path}.tmp");
+        let mut staging = path.clone().into_os_string();
+        staging.push(".tmp");
         std::fs::write(&staging, &content)?;
         std::fs::rename(&staging, &path).map(|_| content)
     })
@@ -51,12 +55,18 @@ async fn write_file(path: String, content: Vec<u8>) -> std::io::Result<Vec<u8>> 
 // a final sync that failed leaves its rewards file behind, they go out with the next sync
 #[cfg(all(not(feature = "dummy_sync"), not(debug_assertions)))]
 pub fn load_pending_rewards(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
-    let path = format!("{}/rewards_{}.json", config.base_sync_folder, config.pool_name);
+    // joined, so an empty base_sync_folder is the working directory and not the filesystem root
+    let path =
+        Path::new(&config.base_sync_folder).join(format!("rewards_{}.json", config.pool_name));
     if !std::fs::exists(&path)? {
         return Ok(());
     }
     let rewards: HashMap<CompactString, f32> = serde_json::from_slice(&std::fs::read(&path)?)?;
-    info!("Loaded pending rewards of {} users from {path}", rewards.len());
+    info!(
+        "Loaded pending rewards of {} users from {}",
+        rewards.len(),
+        path.display()
+    );
     for (username, reward) in rewards {
         *mining::BALANCES_TO_UPDATE.entry(username).or_insert(0f32) += reward;
     }
@@ -403,10 +413,9 @@ pub async fn sync(
     let mem_usage =
         (sys.free_like_used_memory() as f32 / sys.total_memory() as f32 * 1e4).round() / 100.0; // rounding to two decimals
 
-    let worker_path = format!(
-        "{}/workers_{}.json",
-        config.base_sync_folder, config.pool_name
-    );
+    // joined, so an empty base_sync_folder is the working directory and not the filesystem root
+    let worker_path =
+        Path::new(&config.base_sync_folder).join(format!("workers_{}.json", config.pool_name));
 
     // we inject the pool_name AND the algorithm, because they're the same for every miner
     let workers_ctx = stats::StatsWithContext {
@@ -422,10 +431,8 @@ pub async fn sync(
 
     let worker_content = write_file(worker_path.clone(), worker_content).await?;
 
-    let reward_path = format!(
-        "{}/rewards_{}.json",
-        config.base_sync_folder, config.pool_name
-    );
+    let reward_path =
+        Path::new(&config.base_sync_folder).join(format!("rewards_{}.json", config.pool_name));
 
     let request_url = format!("https://{}/pool_sync/", config.server_endpoint);
     let query = SyncQuery {
