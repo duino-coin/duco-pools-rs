@@ -293,20 +293,27 @@ async fn read_master_reply(
 }
 
 pub async fn resync_curve(config: &PoolConfig) -> Result<(), Box<dyn std::error::Error>> {
-    let curve_content = update_curve(config).await?;
+    // cloudflare ignores no-cache from clients, a unique query string misses the edge cache
+    let cache_bust = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let curve_content = fetch_curve(config, cache_bust).await?;
     let pool_rewards: Curve = serde_json::from_str(&curve_content)?;
     // keeps the previous curve if the new one is unusable
     pool_rewards.validate()?;
 
     CURVE_VALUES.store(Arc::new(pool_rewards));
+    // only a validated curve replaces the one on disk
+    tokio::fs::write("./config/curve.json", &curve_content).await?;
+    info!("Successfully updated curve settings");
 
-    Ok(())
+    // the curve is in use already, a failed bans sync doesn't throw it away
+    sync_bans(config, cache_bust).await
 }
 
-async fn update_curve(config: &PoolConfig) -> Result<String, Box<dyn std::error::Error>> {
-    // cloudflare ignores no-cache from clients, a unique query string misses the edge cache
-    let cache_bust = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let response_data = HTTP_CLIENT
+async fn fetch_curve(
+    config: &PoolConfig,
+    cache_bust: u64,
+) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(HTTP_CLIENT
         .get(format!("{}/curve.json?t={cache_bust}", config.server_sync_url))
         .header("Cache-Control", "no-cache")
         // bounded like the other requests, shutdown waits for a running sync
@@ -314,11 +321,10 @@ async fn update_curve(config: &PoolConfig) -> Result<String, Box<dyn std::error:
         .send()
         .await?
         .text()
-        .await?;
-    tokio::fs::write("./config/curve.json", &response_data).await?;
-    info!("Successfully updated curve settings");
+        .await?)
+}
 
-
+async fn sync_bans(config: &PoolConfig, cache_bust: u64) -> Result<(), Box<dyn std::error::Error>> {
     let response_data_bans = HTTP_CLIENT
         .get(format!("{}/bans.json?t={cache_bust}", config.server_sync_url))
         .timeout(Duration::from_secs(config.timeout as u64))
@@ -333,7 +339,7 @@ async fn update_curve(config: &PoolConfig) -> Result<String, Box<dyn std::error:
     ban_lock.save_bans().await?;
     info!("Synced bans.");
 
-    Ok(response_data)
+    Ok(())
 }
 
 #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
