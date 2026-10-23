@@ -153,6 +153,14 @@ fn validate_config(config: &PoolConfig) -> anyhow::Result<()> {
     if config.update_miners_stats_every == 0 {
         bail!("update_miners_stats_every must be greater than 0");
     }
+    // 0 would sync back to back against the master server
+    if config.sync_time == 0 {
+        bail!("syncTime must be greater than 0");
+    }
+    // 0 would fail every request to the master server
+    if config.timeout == 0 {
+        bail!("timeout must be greater than 0");
+    }
     // the job hash chain starts from it, and the mining code keeps it as the 40 hex chars of a sha1
     if config.initial_blockhash.len() != 40
         || !config.initial_blockhash.bytes().all(|b| b.is_ascii_hexdigit())
