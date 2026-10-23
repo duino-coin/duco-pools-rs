@@ -22,7 +22,23 @@ struct HttpRes {
 struct DataRes<'a> {
     connections: usize,
     miner_stats: StatsWithoutKeys<'a>, // keys serialize as 16 hex chars
-    workers: &'a DashMap<CompactString, WorkerAllocator>,
+    workers: WorkersWithoutLen<'a>,
+}
+
+// DashMap's own Serialize passes len() as a hint, a stale Some(0) makes serde_json close the
+// object early, so a worker joining meanwhile would produce invalid JSON
+struct WorkersWithoutLen<'a>(&'a DashMap<CompactString, WorkerAllocator>);
+
+impl Serialize for WorkersWithoutLen<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        // not collect_map, the entries borrow from their guard
+        let mut map = serializer.serialize_map(None)?;
+        for entry in self.0.iter() {
+            map.serialize_entry(entry.key(), entry.value())?;
+        }
+        map.end()
+    }
 }
 
 // MINER_STATS as-is, minus the mining keys (pw), blanked on a per-entry copy while serializing
@@ -67,7 +83,7 @@ pub async fn start_webserver(addr: SocketAddr) -> JoinHandle<()> {
                             let data_res = DataRes {
                                 connections: CONNECTIONS.load(Relaxed),
                                 miner_stats: StatsWithoutKeys(&mining::mining::MINER_STATS),
-                                workers: &mining::mining::USR_WORKERS_ALLOC,
+                                workers: WorkersWithoutLen(&mining::mining::USR_WORKERS_ALLOC),
                             };
                             return Ok(warp::reply::json(&data_res));
                         }
