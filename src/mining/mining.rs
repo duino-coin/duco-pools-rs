@@ -309,11 +309,10 @@ impl Session {
             debug!("{}, Downgraded ESP32 to {}", id, stat.worker_slot.id());
         }
 
-        let reported_hashrate = reported.unwrap_or(hashrate_calc);
-        let published_hashrate = if reported_hashrate <= 0f32 {
-            hashrate_calc
-        } else {
-            reported_hashrate
+        // an invalid report (<= 0, inf, NaN) isn't published, inf and NaN would end up as null in the json
+        let published_hashrate = match reported {
+            Some(reported) if !invalid_hashrate => reported,
+            _ => hashrate_calc,
         };
         // a fast miner underreporting its hashrate solves every job far below the expected share time,
         // so it would keep its low difficulty without this floor. overreporting doesn't benefit it
