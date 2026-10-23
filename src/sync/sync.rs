@@ -337,8 +337,11 @@ pub async fn resync_curve(config: &PoolConfig) -> Result<(), Box<dyn std::error:
     tokio::fs::write("./config/curve.json", &curve_content).await?;
     info!("Successfully updated curve settings");
 
-    // the curve is in use already, a failed bans sync doesn't throw it away
-    sync_bans(config, cache_bust).await
+    // the curve is in use already, a failed bans sync only keeps the previous bans
+    if let Err(err) = sync_bans(config, cache_bust).await {
+        error!("Failed to sync bans: {err}");
+    }
+    Ok(())
 }
 
 async fn fetch_curve(

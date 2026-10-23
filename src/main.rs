@@ -107,6 +107,8 @@ async fn main() {
     }
     // TODO: impl ngrok
 
+    // loads bans.json now, a failed bans sync would leave that to the first miner
+    LazyLock::force(&BANS);
     sync::sync::resync_curve(&config)
         .await
         .expect("failed to update pool rewards");

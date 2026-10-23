@@ -166,10 +166,9 @@
     {
       "behavior": "Startup network failures",
       "coverage": "asserted",
-      "assertion": "Invalid reward curve/ban bodies fail within a deadline with matching diagnostics; master rejection/disconnect/invalid UTF-8 fail and bounded delayed greeting succeeds.",
+      "assertion": "An invalid reward curve body fails within a deadline with a matching diagnostic; master rejection/disconnect/invalid UTF-8 fail and bounded delayed greeting succeeds.",
       "cases": [
         "lifecycle/startup-invalid-rewards",
-        "lifecycle/startup-invalid-bans",
         "lifecycle/startup-master-reject",
         "lifecycle/startup-master-disconnect",
         "lifecycle/startup-master-invalid-utf8",
