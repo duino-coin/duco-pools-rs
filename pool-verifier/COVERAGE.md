@@ -28,7 +28,7 @@ Scenarios: `protocol/good-bad-recovery`, `protocol/malformed-answer`, `protocol/
 
 **asserted** - Intervals 1/2/5, rejected shares across publication boundaries, per-share reward sum, partial disconnect/shutdown and warmup. Reporting frequency must not discard earned work.
 
-Scenarios: `counters/accepted-shares`, `counters/rejected-share-accounting`, `counters/reward-warmup`, `counters/interval-two-counts`, `counters/interval-five-counts`, `counters/interval-two-rewards`, `counters/interval-five-rewards`, `counters/partial-disconnect`, `counters/partial-shutdown`, `counters/publication-rejection-boundaries`.
+Scenarios: `counters/accepted-shares`, `counters/rejected-share-accounting`, `counters/reward-warmup`, `counters/interval-two-rewards`, `counters/interval-five-rewards`, `counters/partial-disconnect`, `counters/partial-shutdown`, `counters/publication-rejection-boundaries`.
 
 ## Reward formula and blocks
 
