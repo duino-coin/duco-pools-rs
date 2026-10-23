@@ -81,6 +81,8 @@ async fn main() {
         config.port = port;
         cfg::config::save_config(&config);
     }
+    // before the login, a pool that can't take miners must not announce itself to the master
+    let server = bind_tcp(&config).await;
     let mut restarter: Option<JoinHandle<()>> = None;
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     if config.auto_restart > 0 && !config.restart_script.is_empty() {
@@ -224,7 +226,7 @@ async fn main() {
     })
     .expect("Failed to handle ctrl-c");
 
-    start_tcp(rx).await;
+    start_tcp(server, rx).await;
     // Stop background work before the final sync/logout on any shutdown request.
     if let Some(restarter) = restarter {
         restarter.abort();
@@ -248,17 +250,20 @@ async fn main() {
     }
 }
 
-async fn start_tcp(mut rx: UnboundedReceiver<()>) {
+async fn bind_tcp(config: &PoolConfig) -> TcpListener {
     // set max open file descriptors to the maximum the platform allows, so we can handle *a lot* of sockets
     rlimit::increase_nofile_limit(u64::MAX).expect("failed to increase nofile limit");
     info!("Starting tcp server...");
-
-    let config = CONFIG.get().unwrap();
 
     let server = TcpListener::bind(format!("{}:{}", config.host, config.port))
         .await
         .expect("failed to bind to address");
     info!("Listening on {}:{}", config.host, config.port);
+    server
+}
+
+async fn start_tcp(server: TcpListener, mut rx: UnboundedReceiver<()>) {
+    let config = CONFIG.get().unwrap();
 
     // start "webserver" and parse addr from config
     let addr: SocketAddr = format!("{}:{}", config.host, config.dashboard_port)
