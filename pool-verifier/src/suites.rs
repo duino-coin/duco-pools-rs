@@ -422,13 +422,17 @@ async fn framing(h: &Harness) -> Result<()> {
 }
 
 /// A job request and an answer in one TCP write are both processed.
+///
+/// The answer arrives within the timer resolution, so any accepted hashrate
+/// report would be floored at a huge measured one and push the next job out of
+/// reach; an invalid (zero) report keeps the difficulty.
 async fn coalesced_frames(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "AVR", "coalesced").await?;
-    m.send(b"JOB,alice,AVR\n0,1000,Verifier,coalesced,chip,wallet\n")
+    m.send(b"JOB,alice,AVR\n0,0,Verifier,coalesced,chip,wallet\n")
         .await?;
     m.read_job().await?;
     anyhow::ensure!(
-        m.line().await? == "BAD,Incorrect result",
+        m.line().await? == "BAD,Invalid data",
         "Coalesced second frame lost"
     );
     m.share().await?;
