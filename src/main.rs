@@ -11,6 +11,7 @@ mod web;
 
 use crate::cfg::config::PoolConfig;
 use crate::data::data::{Bans, ConnId, Connection, ConnectionClosed};
+use arc_swap::ArcSwap;
 use compact_str::CompactString;
 use env_logger::Target;
 use log::{debug, error, info, LevelFilter};
@@ -20,16 +21,15 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
-use arc_swap::ArcSwap;
 use sysinfo::System;
 use tokio::net::TcpListener;
 // tokio's Child reaps itself in the background when dropped, std's leaves a zombie
+use crate::sync::sync::Curve;
 use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use crate::sync::sync::Curve;
 
 pub static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
@@ -56,8 +56,8 @@ impl Drop for ConnectionCounterGuard {
 // and it's cleaner than cloning hundreds of arcs..
 pub static BANS: LazyLock<Mutex<Bans>> = LazyLock::new(|| Mutex::new(Bans::load_bans().unwrap()));
 
-pub static CURVE_VALUES: LazyLock<ArcSwap<Curve>> = LazyLock::new(|| ArcSwap::from_pointee(Curve::default()));
-
+pub static CURVE_VALUES: LazyLock<ArcSwap<Curve>> =
+    LazyLock::new(|| ArcSwap::from_pointee(Curve::default()));
 
 pub static CONFIG: OnceLock<PoolConfig> = OnceLock::new();
 
@@ -127,20 +127,20 @@ async fn main() {
                 match updater::updater::fetch_latest_version(Duration::from_secs(
                     config.timeout as u64,
                 ))
-                    .await
+                .await
                 {
                     Ok(Some(update)) => {
                         match updater::updater::spawn_update_restart(
                             &update,
                             &update_restart_script,
                         )
-                            .await
+                        .await
                         {
                             Ok(helper) => {
                                 info!(
-                                "Update {} is ready; shutting down before replacement",
-                                update.version
-                            );
+                                    "Update {} is ready; shutting down before replacement",
+                                    update.version
+                                );
                                 if update_shutdown.send(()).is_ok() {
                                     helper.detach();
                                 }
@@ -155,7 +155,8 @@ async fn main() {
                 };
                 tokio::time::sleep(tokio::time::Duration::from_secs(
                     config.update_check_time_seconds,
-                )).await;
+                ))
+                .await;
             }
         }));
     }

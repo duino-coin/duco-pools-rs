@@ -12,10 +12,9 @@ use log::{debug, info};
 use rand::{rng, RngExt};
 use sha1::Digest;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64};
+use std::sync::atomic::AtomicU64;
 use std::sync::LazyLock;
 use std::time::{Instant, UNIX_EPOCH};
-
 
 pub static USR_WORKERS_ALLOC: LazyLock<DashMap<CompactString, WorkerAllocator>> =
     LazyLock::new(DashMap::new);
@@ -65,7 +64,9 @@ pub async fn handle(
         } else {
             read.as_str()
         };
-        if let Err(close) = session.on_job_request(conn.id, &mut conn.miner_stat, job_request, config) {
+        if let Err(close) =
+            session.on_job_request(conn.id, &mut conn.miner_stat, job_request, config)
+        {
             return close.send(conn).await;
         }
 
@@ -79,7 +80,13 @@ pub async fn handle(
         let answer_received = UNIX_EPOCH.elapsed()?.as_secs();
         conn.miner_stat.share_time = job_sent.elapsed().as_secs_f32().max(MIN_SHARE_TIME);
 
-        let judged = match session.judge(conn.id, &mut conn.miner_stat, &read, answer_received, config) {
+        let judged = match session.judge(
+            conn.id,
+            &mut conn.miner_stat,
+            &read,
+            answer_received,
+            config,
+        ) {
             Ok(judged) => judged,
             Err(close) => return close.send(conn).await,
         };
@@ -162,9 +169,7 @@ impl Session {
                 stat.is_req_diff_esp32 = true;
             }
 
-            let mut alloc = USR_WORKERS_ALLOC
-                .entry(stat.username.clone())
-                .or_default();
+            let mut alloc = USR_WORKERS_ALLOC.entry(stat.username.clone()).or_default();
             let kolka_id = alloc.allocate(stat.is_req_diff_esp32);
 
             stat.worker_slot = kolka_id;
@@ -367,7 +372,12 @@ impl Session {
                 if chipid_mismatch {
                     stat.rejected_shares += 1;
                 } else {
-                    reward = kolka::kolka::calculate_reward(hashrate_calc.max(1f32), stat.worker_slot.id(), self.diff, &curve);
+                    reward = kolka::kolka::calculate_reward(
+                        hashrate_calc.max(1f32),
+                        stat.worker_slot.id(),
+                        self.diff,
+                        &curve,
+                    );
                 }
             }
 
@@ -419,10 +429,7 @@ impl Session {
                 }
             }
 
-            GLOBAL_SHARES_INCREASE.fetch_add(
-                1u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
+            GLOBAL_SHARES_INCREASE.fetch_add(1u64, std::sync::atomic::Ordering::Relaxed);
         }
         if stat.accepted_shares > 0
             && stat
@@ -485,7 +492,8 @@ impl Session {
         // after the reward and stats, so both use the difficulty of the job that was just solved
         // a rejected hashrate must not steer the next job (inf would make it unsolvable)
         if !judged.invalid_hashrate {
-            self.diff = kolka::kolka::calculate_difficulty(judged.hashrate as f64, &CURVE_VALUES.load());
+            self.diff =
+                kolka::kolka::calculate_difficulty(judged.hashrate as f64, &CURVE_VALUES.load());
         }
 
         self.is_first_share = false;
@@ -586,7 +594,6 @@ pub(crate) fn scan_fields<'a>(s: &'a str, dst: &mut [&'a str; 8]) -> usize {
 
     field
 }
-
 
 #[cfg(test)]
 mod tests {

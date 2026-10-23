@@ -2,7 +2,6 @@ use crate::sync::sync::Curve;
 
 // based on the values provided by the master server, this function calculates the estimated daily reward that should be given to a device of this hashrate
 pub fn calculate_daily_reward(hashrate: f64, curve: &Curve) -> f64 {
-
     let phi = curve.gpu_base
         * (1.0
             + ((curve.gpu_growth
@@ -32,15 +31,30 @@ pub fn calculate_difficulty(hashrate: f64, curve: &Curve) -> u32 {
     (diff.round() as u32).max(1)
 }
 
-pub fn calculate_reward(hashrate: f32, amount_of_workers: f32, difficulty: u32, curve: &Curve) -> f32 {
-    let drop = if hashrate as f64 > curve.h_ref { curve.drop_high } else { curve.drop_low };
+pub fn calculate_reward(
+    hashrate: f32,
+    amount_of_workers: f32,
+    difficulty: u32,
+    curve: &Curve,
+) -> f32 {
+    let drop = if hashrate as f64 > curve.h_ref {
+        curve.drop_high
+    } else {
+        curve.drop_low
+    };
 
     // the nonce is within `difficulty * 100`, so the average lies at roughly `difficulty * 50`
     // therefore, we expect a miner to solve a job at a given difficulty on average within `difficulty * 50 / hashrate`
     let average_expected_sharetime = difficulty as f32 * 50.0 / hashrate;
     // the reward per share is defined by how much of a day the sharetime makes up
-    let reward = (calculate_daily_reward(hashrate as f64, curve) as f32 * average_expected_sharetime / 86_400.0)
+    let reward = (calculate_daily_reward(hashrate as f64, curve) as f32
+        * average_expected_sharetime
+        / 86_400.0)
         * drop.powi((amount_of_workers - 1.0) as i32) as f32;
     // a NaN would stick to the balance for good, a negative one would take coins away
-    if reward.is_finite() { reward.max(0.0) } else { 0.0 }
+    if reward.is_finite() {
+        reward.max(0.0)
+    } else {
+        0.0
+    }
 }

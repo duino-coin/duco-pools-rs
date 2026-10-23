@@ -38,7 +38,7 @@ pub struct MinerStat {
     // NEVER SERIALIZED:
     pub last_share_reset: u64,
     pub reject_shares: Option<&'static str>, // the full "BAD,<reason>\n" response
-    pub is_req_diff_esp32: bool, // because "ESP32" only adds 0.5..
+    pub is_req_diff_esp32: bool,             // because "ESP32" only adds 0.5..
 }
 
 impl MinerStat {

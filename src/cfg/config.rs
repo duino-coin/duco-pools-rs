@@ -1,9 +1,9 @@
+use anyhow::bail;
 use config::Config;
 use rand::distr::{Alphanumeric, Distribution};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::path::Path;
-use anyhow::bail;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PoolConfig {
@@ -78,7 +78,9 @@ fn generate_key() -> String {
     str
 }
 
-fn default_server_endpoint() -> String { "server.duinocoin.com".into() }
+fn default_server_endpoint() -> String {
+    "server.duinocoin.com".into()
+}
 
 impl Default for PoolConfig {
     fn default() -> Self {
@@ -163,7 +165,10 @@ fn validate_config(config: &PoolConfig) -> anyhow::Result<()> {
     }
     // the job hash chain starts from it, and the mining code keeps it as the 40 hex chars of a sha1
     if config.initial_blockhash.len() != 40
-        || !config.initial_blockhash.bytes().all(|b| b.is_ascii_hexdigit())
+        || !config
+            .initial_blockhash
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit())
     {
         bail!("initial_blockhash must be 40 hex characters");
     }

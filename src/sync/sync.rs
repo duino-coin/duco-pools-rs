@@ -134,11 +134,11 @@ struct SyncQuery<'a> {
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub struct Curve {
-    pub pc_base: f64, // Base pay for PCs
-    pub mcu_base: f64, // Base pay for microcontrollers
+    pub pc_base: f64,               // Base pay for PCs
+    pub mcu_base: f64,              // Base pay for microcontrollers
     pub mcu_pc_step_h: f64, // Hashrate where pay steps from the microcontroller level to the PC level
     pub mcu_pc_step_sharpness: f64, // How abrupt that step is
-    pub slow_boost_h: f64, // Extra pay for slow devices
+    pub slow_boost_h: f64,  // Extra pay for slow devices
 
     pub arduino_h: f64, // Arduino hashrate: the centre of the bonus and the low-end cutoff point
     pub cutoff_sharpness: f64, // How fast pay falls below the Arduino hashrate
@@ -149,13 +149,13 @@ pub struct Curve {
     pub pc_gpu_crossover_h: f64, // Hashrate where the PC branch hands over to the GPU branch
     pub pc_gpu_crossover_sharpness: f64, // How abrupt that handover is
 
-    pub gpu_base: f64, // Starting pay of the GPU branch
-    pub gpu_growth: f64, // Pay added per doubling of hashrate on the GPU branch
-    pub gpu_growth_start: f64, // Where that growth begins, as a multiple of pc_gpu_crossover_h
+    pub gpu_base: f64,            // Starting pay of the GPU branch
+    pub gpu_growth: f64,          // Pay added per doubling of hashrate on the GPU branch
+    pub gpu_growth_start: f64,    // Where that growth begins, as a multiple of pc_gpu_crossover_h
     pub gpu_growth_softness: f64, // How gradually that growth starts
 
-    pub h_ref: f64, // Hashrate when the switch from drop_low to drop_high happens
-    pub drop_low: f64, // Kolka efficiency drop for devices slower than h_ref
+    pub h_ref: f64,     // Hashrate when the switch from drop_low to drop_high happens
+    pub drop_low: f64,  // Kolka efficiency drop for devices slower than h_ref
     pub drop_high: f64, // Kolka efficiency drop for devices faster than h_ref
 
     pub expected_sharetime: u8, // the sharetime in seconds want to normalize for (u8 allows up to 255)
@@ -358,7 +358,10 @@ async fn fetch_curve(
     cache_bust: u64,
 ) -> Result<String, Box<dyn std::error::Error>> {
     Ok(HTTP_CLIENT
-        .get(format!("{}/curve.json?t={cache_bust}", config.server_sync_url))
+        .get(format!(
+            "{}/curve.json?t={cache_bust}",
+            config.server_sync_url
+        ))
         .header("Cache-Control", "no-cache")
         // bounded like the other requests, shutdown waits for a running sync
         .timeout(Duration::from_secs(config.timeout as u64))
@@ -370,7 +373,10 @@ async fn fetch_curve(
 
 async fn sync_bans(config: &PoolConfig, cache_bust: u64) -> Result<(), Box<dyn std::error::Error>> {
     let response_data_bans = HTTP_CLIENT
-        .get(format!("{}/bans.json?t={cache_bust}", config.server_sync_url))
+        .get(format!(
+            "{}/bans.json?t={cache_bust}",
+            config.server_sync_url
+        ))
         .timeout(Duration::from_secs(config.timeout as u64))
         .send()
         .await?
@@ -387,10 +393,7 @@ async fn sync_bans(config: &PoolConfig, cache_bust: u64) -> Result<(), Box<dyn s
 }
 
 #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
-pub async fn sync(
-    sys: &mut System,
-    last_ip: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
+pub async fn sync(sys: &mut System, last_ip: &str) -> Result<String, Box<dyn std::error::Error>> {
     info!("Starting sync..");
     let config = CONFIG.get().unwrap();
     // succeeds if the folder already exists
@@ -459,7 +462,6 @@ pub async fn sync(
         connections,
     };
 
-
     let rewards_snapshot = RewardSnapshot::capture(&mining::BALANCES_TO_UPDATE);
     let mut rewards_content = Vec::with_capacity(rewards_snapshot.min_json_len());
     serde_json::to_writer(&mut rewards_content, &rewards_snapshot)?;
@@ -514,8 +516,7 @@ pub async fn sync(
                 } else {
                     warn!(
                         "Failed to sync {} ({status} from {final_url}): {}",
-                        sync_count,
-                        body
+                        sync_count, body
                     );
                 }
             }
@@ -535,9 +536,9 @@ pub async fn sync(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use super::*;
     use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
     fn snapshot_serializes_captured_values_even_after_live_updates() {

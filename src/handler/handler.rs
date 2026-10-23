@@ -128,6 +128,6 @@ pub fn handle_close(conn: &mut Connection) {
         );
         alloc.is_empty()
     });
-    
+
     debug!("Handling after-close");
 }

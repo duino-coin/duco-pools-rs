@@ -6,7 +6,7 @@ const BLOCK_HASH_SPINS: u32 = 64;
 
 // hex of the hash the next job builds on, as a seqlock
 pub(crate) struct BlockHash {
-    sequence: AtomicU64, // odd while a store is writing
+    sequence: AtomicU64,   // odd while a store is writing
     words: [AtomicU64; 5], // the 40 hex bytes
 }
 
