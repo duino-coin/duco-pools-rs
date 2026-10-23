@@ -33,6 +33,9 @@ use crate::sync::sync::Curve;
 
 pub static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
+// pause after a failed accept, so closing connections can free descriptors
+const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
+
 struct ConnectionCounterGuard;
 
 impl ConnectionCounterGuard {
@@ -302,6 +305,8 @@ async fn start_tcp(mut rx: UnboundedReceiver<()>) {
                 }
                 Err(err) => {
                     error!("Accepting connection failed: {}", err);
+                    // out of file descriptors the listener stays readable, retrying right away would spin
+                    tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
                 }
             }
         }
