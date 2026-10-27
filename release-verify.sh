@@ -4,6 +4,8 @@
 #   ./release-verify.sh <tag>          wait for CI, download, rebuild, compare, write manifest
 #   ./release-verify.sh <tag> --sign   also sign the manifest with the SSH release key, upload
 #                                      it and publish the release if it's still a draft
+#   ./release-verify.sh --tag [--sign] tag HEAD as v<version from Cargo.toml> and push it, so CI
+#                                      builds the draft release, then continue as above
 #
 # the tag gets checked out into its own git worktree, so local changes never end up in the
 # rebuild; hashes only match as long as both sides build the same way (committed Cargo.lock,
@@ -12,7 +14,8 @@
 #
 # needs: git, gh (logged in), cross + podman, sha256sum, tar; for --sign also ssh-keygen
 # environment:
-#   REPO          GitHub repository with the releases (default: duino-coin/duco-pools-rs)
+#   REPO          GitHub repository with the releases (default: duino-coin/duco-pools-rs); with
+#                 --tag, the tag gets pushed to the git remote pointing at it
 #   SIGNING_KEY   SSH key to sign with (default: ~/.ssh/release_sk)
 #   SSH_KEYGEN    ssh-keygen to sign with (default: the Windows system one if present)
 set -eu
@@ -35,7 +38,20 @@ cd "$(dirname "$0")"
 
 usage() {
     echo "usage: $0 <tag> [--sign]"
+    echo "       $0 --tag [--sign]"
     exit 1
+}
+
+# git remote that pushes to $REPO on GitHub
+remote_for_repo() {
+    for remote in $(git remote); do
+        case "$(git remote get-url --push "$remote")" in
+            *github.com[:/]"$REPO" | *github.com[:/]"$REPO".git)
+                echo "$remote"
+                return
+                ;;
+        esac
+    done
 }
 
 # release asset name for a target, same naming as BUILD_TARGET in build.rs
@@ -56,12 +72,65 @@ sha256() {
     sha256sum "$1" | cut -d ' ' -f 1
 }
 
-[ $# -ge 1 ] || usage
-TAG="$1"
+TAG=""
 SIGN=0
-if [ $# -ge 2 ]; then
-    [ "$2" = "--sign" ] || usage
-    SIGN=1
+CREATE_TAG=0
+for arg in "$@"; do
+    case "$arg" in
+        --sign) SIGN=1 ;;
+        --tag) CREATE_TAG=1 ;;
+        -*) usage ;;
+        *)
+            [ -z "$TAG" ] || usage
+            TAG="$arg"
+            ;;
+    esac
+done
+if [ "$CREATE_TAG" -eq 1 ]; then
+    [ -z "$TAG" ] || usage
+else
+    [ -n "$TAG" ] || usage
+fi
+
+if [ "$CREATE_TAG" -eq 1 ]; then
+    # first version line is the one under [package]
+    TAG="v$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+    REMOTE=$(remote_for_repo)
+    if [ -z "$REMOTE" ]; then
+        echo "no git remote pushes to $REPO" >&2
+        exit 1
+    fi
+    echo "== tagging $TAG"
+    # only tracked files end up in the build, so untracked ones don't matter
+    if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        echo "uncommitted changes, commit or stash them first" >&2
+        exit 1
+    fi
+    if git rev-parse --quiet --verify "refs/tags/$TAG" >/dev/null; then
+        echo "$TAG already exists locally, bump the version in Cargo.toml first" >&2
+        exit 1
+    fi
+    if git ls-remote --exit-code --tags "$REMOTE" "refs/tags/$TAG" >/dev/null; then
+        echo "$TAG already exists on $REMOTE, bump the version in Cargo.toml first" >&2
+        exit 1
+    fi
+    # the tagged commit has to be on main already, otherwise the release isn't reproducible
+    # from it
+    git fetch --quiet "$REMOTE" main
+    if [ "$(git rev-parse HEAD)" != "$(git rev-parse FETCH_HEAD)" ]; then
+        echo "HEAD is not $REMOTE/main, push or pull first" >&2
+        exit 1
+    fi
+    printf 'tag %s as %s and push it to %s? [y/N] ' "$(git rev-parse --short HEAD)" "$TAG" "$REMOTE"
+    read -r answer
+    [ "$answer" = "y" ] || exit 1
+    # annotated, so tag.gpgsign gets honoured (a plain `git tag` fails with it set)
+    git tag -m "$TAG" "$TAG"
+    if ! git push --quiet "$REMOTE" "refs/tags/$TAG"; then
+        # drop it again, so a rerun doesn't trip over the local tag
+        git tag -d "$TAG" >/dev/null
+        exit 1
+    fi
 fi
 
 COMMIT=$(git rev-parse --verify "$TAG^{commit}")
@@ -79,12 +148,20 @@ trap cleanup EXIT
 echo "== $TAG ($COMMIT)"
 
 echo "== waiting for CI"
-RUN_ID=$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --commit "$COMMIT" --event push \
-    --limit 1 --json databaseId --jq '.[0].databaseId')
-if [ -z "$RUN_ID" ]; then
-    echo "no $WORKFLOW run found for $COMMIT" >&2
-    exit 1
-fi
+# a freshly pushed tag takes a moment until its run shows up
+ATTEMPTS=1
+[ "$CREATE_TAG" -eq 0 ] || ATTEMPTS=24
+while :; do
+    RUN_ID=$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --commit "$COMMIT" --event push \
+        --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+    [ -z "$RUN_ID" ] || break
+    ATTEMPTS=$((ATTEMPTS - 1))
+    if [ "$ATTEMPTS" -le 0 ]; then
+        echo "no $WORKFLOW run found for $COMMIT" >&2
+        exit 1
+    fi
+    sleep 5
+done
 gh run watch "$RUN_ID" --repo "$REPO" --exit-status >/dev/null
 
 echo "== downloading release assets"
