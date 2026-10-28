@@ -493,7 +493,7 @@ fn add_observation_surface(stage: &Path) -> Result<()> {
         // The pool has no lifetime share total. Count accepted shares next to
         // the pending counter, so `shares_total` is never decremented by a sync.
         mining.push_str("\npub static VERIFY_SHARES_TOTAL: AtomicU64 = AtomicU64::new(0);\n");
-        let pending_increment = "            GLOBAL_SHARES_INCREASE.fetch_add(\n                1u64,\n                std::sync::atomic::Ordering::Relaxed,\n            );\n";
+        let pending_increment = "            GLOBAL_SHARES_INCREASE.fetch_add(1u64, std::sync::atomic::Ordering::Relaxed);\n";
         replace_once(
             mining,
             pending_increment,
