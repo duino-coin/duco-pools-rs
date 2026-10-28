@@ -77,11 +77,13 @@ fn server_version() -> String {
 
 fn generate_key() -> String {
     // alphanumeric only, so the key can be used in the dashboard's query string as is
-    let mut rng = rand::rng();
-    let str: String = (0..32)
-        .map(|_| char::from(Alphanumeric.sample(&mut rng)))
-        .collect();
-    str
+    // let mut rng = rand::rng();
+    // let str: String = (0..32)
+    //     .map(|_| char::from(Alphanumeric.sample(&mut rng)))
+    //     .collect();
+    // str
+    // keep the dash disabled with no key provided
+    String::new()
 }
 
 fn default_server_endpoint() -> String {
