@@ -38,6 +38,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+      # pins __DATE__ and __TIME__ in C dependencies, release-verify.sh uses the same
+      - name: Set SOURCE_DATE_EPOCH
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
       # cross for every target, same version as the local rebuild in release-verify.sh,
       # so both sides build in the same container and the hashes can match
       - name: Build binary

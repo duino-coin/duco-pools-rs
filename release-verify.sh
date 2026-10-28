@@ -171,7 +171,8 @@ for target in $TARGETS; do
 done
 
 echo "== rebuilding locally"
-git worktree add --detach "$WORKTREE" "$COMMIT" >/dev/null
+# files land in the binary as checked out (e.g. include_str!), so no CRLF conversion
+git -c core.autocrlf=false worktree add --detach "$WORKTREE" "$COMMIT" >/dev/null
 if [ "$SIGN" -eq 1 ]; then
     # never sign a build that trusts a different key than the one signing it (e.g. a swapped
     # release_key.pub that got merged); only type and key are compared, not the comment
@@ -188,6 +189,28 @@ if [ "$SIGN" -eq 1 ]; then
     fi
 fi
 podman machine start 2>/dev/null || true
+if command -v cygpath >/dev/null; then
+    # cross on Windows mounts the cargo home and the toolchain under /mnt/<drive>/... instead of
+    # /cargo and /rust like on CI; panic locations end up in the binary, so map them back;
+    # not via RUSTFLAGS, cargo hashes those into the artifact names, which changes the LTO link
+    # order; a rustc wrapper set only inside the container (the host side of cross runs cargo
+    # metadata, which can't run it) stays invisible to cargo
+    TOOLCHAIN=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "$WORKTREE/rust-toolchain.toml")
+    CARGO_MOUNT="/mnt$(cygpath -u "${CARGO_HOME:-$HOME/.cargo}")"
+    SYSROOT_MOUNT="/mnt$(cygpath -u "${RUSTUP_HOME:-$HOME/.rustup}")/toolchains/$TOOLCHAIN-x86_64-unknown-linux-gnu"
+    # the target dir is mounted at /target inside the container
+    mkdir -p "$WORKTREE/target"
+    printf '#!/bin/sh\nexec "$@" --remap-path-prefix=%s=/cargo --remap-path-prefix=%s=/rust\n' \
+        "$CARGO_MOUNT" "$SYSROOT_MOUNT" >"$WORKTREE/target/rustc-remap.sh"
+    # replaces the Cross.toml of the tag, so keep its passthrough list in here
+    printf '[build.env]\npassthrough = ["SOURCE_DATE_EPOCH", "CARGO_BUILD_RUSTC_WRAPPER=/target/rustc-remap.sh"]\n' \
+        >"$OUT/Cross.toml"
+    CROSS_CONFIG=$(cygpath -w "$OUT/Cross.toml")
+    export CROSS_CONFIG
+fi
+# C dependencies (mimalloc) embed __DATE__ and __TIME__, CI pins them to the commit time as well
+SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$COMMIT")
+export SOURCE_DATE_EPOCH
 for target in $TARGETS; do
     # host artifacts (proc-macros, build scripts) from another cross image don't load in this
     # one; CI builds every target in a fresh checkout anyway
