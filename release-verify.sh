@@ -189,6 +189,9 @@ if [ "$SIGN" -eq 1 ]; then
 fi
 podman machine start 2>/dev/null || true
 for target in $TARGETS; do
+    # host artifacts (proc-macros, build scripts) from another cross image don't load in this
+    # one; CI builds every target in a fresh checkout anyway
+    rm -rf "$WORKTREE/target/release"
     (cd "$WORKTREE" && cross build --locked --release --target "$target")
 done
 
