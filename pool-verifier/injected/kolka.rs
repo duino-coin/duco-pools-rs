@@ -30,6 +30,7 @@ mod verifier_tests {
             drop_high: 0.7456,
             expected_sharetime: 10,
             block_probability: 28110000,
+            block_reward: 28.11,
         })
     }
 

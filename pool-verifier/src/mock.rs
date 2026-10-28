@@ -157,6 +157,7 @@ const CURVE: &str = include_str!("../../config/curve.json");
 pub fn curve(blocks: bool) -> Value {
     let mut curve: Value = serde_json::from_str(CURVE).expect("config/curve.json is valid JSON");
     curve["expected_sharetime"] = json!(1);
+    curve["block_reward"] = json!(2.0);
     if blocks {
         curve["block_probability"] = json!(1);
     }

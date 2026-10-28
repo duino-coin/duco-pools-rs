@@ -38,8 +38,8 @@ pub struct PoolConfig {
     pub update_miners_stats_every: u16,
     #[serde(rename = "blockProbability")]
     pub block_probability: u64,
-    #[serde(rename = "blockReward")]
-    pub block_reward: f32,
+    // #[serde(rename = "blockReward")]
+    // pub block_reward: f32,
     // #[serde(rename  = "useNgrok")]
     pub use_ngrok: bool,
     #[serde(rename = "autoRestart")]
@@ -101,7 +101,6 @@ impl Default for PoolConfig {
             expected_sharetime: 15, // why is this a config var?
             update_miners_stats_every: 1,
             block_probability: 1000000, // why is this a config var???
-            block_reward: 28.11,        // why is this a config var???
             use_ngrok: false,
             auto_restart: 0,
             guess_port: false,

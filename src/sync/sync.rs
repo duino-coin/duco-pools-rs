@@ -161,6 +161,7 @@ pub struct Curve {
 
     pub expected_sharetime: u8, // the sharetime in seconds want to normalize for (u8 allows up to 255)
     pub block_probability: u32,
+    pub block_reward: f32,
 }
 impl Default for Curve {
     fn default() -> Self {
@@ -186,6 +187,7 @@ impl Default for Curve {
             drop_high: 0.0,
             expected_sharetime: 100,
             block_probability: 28110000,
+            block_reward: 28.11,
         }
     }
 }

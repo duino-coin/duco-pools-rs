@@ -19,5 +19,6 @@
   "drop_high": 0.7456,
   "h_ref": 200000.0,
   "expected_sharetime": 10,
-  "block_probability": 28110000
+  "block_probability": 28110000,
+  "block_reward": 28.11
 }

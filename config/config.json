@@ -25,7 +25,6 @@
   "expectedSharetime": 15,
   "updateMinersStatsEvery": 1,
   "blockProbability": 1000000,
-  "blockReward": 28.11,
   "restart_script": "",
   "firewall_cmd": "",
   "dashboard_key": "random_key",

@@ -373,7 +373,7 @@ impl Session {
 
             share_accepted = true;
             if rng().random_range(0u32..curve.block_probability) == 0 {
-                reward += config.block_reward;
+                reward += curve.block_reward;
                 block_found = true;
                 "BLOCK\n"
             } else {
