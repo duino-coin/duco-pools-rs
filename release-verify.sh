@@ -20,7 +20,8 @@
 #   SSH_KEYGEN    ssh-keygen to sign with (default: the Windows system one if present)
 set -eu
 
-REPO="${REPO:-duino-coin/duco-pools-rs}"
+#REPO="${REPO:-duino-coin/duco-pools-rs}"
+REPO="${REPO:-profpandaa/duco-pools-rs-copy}"
 SIGNING_KEY="${SIGNING_KEY:-$HOME/.ssh/release_sk}"
 if [ -z "${SSH_KEYGEN:-}" ]; then
     SSH_KEYGEN="ssh-keygen"
