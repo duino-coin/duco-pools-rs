@@ -139,6 +139,8 @@ VERSION="${TAG#v}"
 OUT="target/release-verify/$TAG"
 WORKTREE="$OUT/src"
 rm -rf "$OUT"
+# a worktree kept from a mismatching run is gone now, but still registered
+git worktree prune
 mkdir -p "$OUT/ci" "$OUT/ci-bin"
 
 cleanup() {
