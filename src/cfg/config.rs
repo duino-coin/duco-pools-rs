@@ -1,6 +1,5 @@
 use anyhow::bail;
 use config::Config;
-use rand::distr::{Alphanumeric, Distribution};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
