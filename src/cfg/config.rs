@@ -13,7 +13,7 @@ pub struct PoolConfig {
     pub pool_password: String,
     #[serde(rename = "poolID")]
     pub pool_id: String,
-    #[serde(rename = "poolVersion")]
+    #[serde(skip, default = "pool_version")]
     pub pool_version: String,
     pub host: String,
     pub port: u32,
@@ -21,23 +21,23 @@ pub struct PoolConfig {
     pub server_ip: String,
     #[serde(rename = "serverPort")]
     pub server_port: u32,
-    #[serde(rename = "serverVersion")]
+    #[serde(skip, default = "server_version")]
     pub server_version: String,
-    #[serde(rename = "preGenJobCount")]
-    pub pre_gen_job_count: u32,
-    #[serde(rename = "jobGenerationDelay")]
-    pub job_generation_delay: u32,
+    // #[serde(rename = "preGenJobCount")]
+    // pub pre_gen_job_count: u32,
+    // #[serde(rename = "jobGenerationDelay")]
+    // pub job_generation_delay: u32,
     #[serde(rename = "maxWorkers")]
     pub max_workers: u64,
     pub motd: String,
     #[serde(rename = "initialBlockHash")]
     pub initial_blockhash: String,
-    #[serde(rename = "expectedSharetime")]
-    pub expected_sharetime: u16, // don't think this should exceed 65k
+    // #[serde(rename = "expectedSharetime")]
+    // pub expected_sharetime: u16, // don't think this should exceed 65k
     #[serde(rename = "updateMinersStatsEvery")]
     pub update_miners_stats_every: u16,
-    #[serde(rename = "blockProbability")]
-    pub block_probability: u64,
+    // #[serde(rename = "blockProbability")]
+    // pub block_probability: u64,
     // #[serde(rename = "blockReward")]
     // pub block_reward: f32,
     // #[serde(rename  = "useNgrok")]
@@ -54,7 +54,7 @@ pub struct PoolConfig {
     #[serde(default = "default_server_endpoint")]
     pub server_endpoint: String,
     pub base_sync_folder: String,
-    #[serde(rename = "maxSharesPerMinute", default = "default_shares")]
+    #[serde(skip, default = "default_shares")]
     pub max_shares_per_minute: u16, // probably shouldn't exceed 65k either
     pub restart_script: String,
     pub firewall_cmd: String,
@@ -66,6 +66,13 @@ pub struct PoolConfig {
 }
 fn default_shares() -> u16 {
     80u16
+}
+
+fn pool_version() -> String {
+    "0.3".to_string()
+}
+fn server_version() -> String {
+    "3.0".to_string()
 }
 
 fn generate_key() -> String {
@@ -87,20 +94,16 @@ impl Default for PoolConfig {
             pool_name: "".to_string(),
             pool_password: "".to_string(),
             pool_id: "".to_string(),
-            pool_version: "0.3".to_string(), // why is this a config var?
+            pool_version: pool_version(),
             host: "0.0.0.0".to_string(),
             port: 6000,
             server_ip: "server.duinocoin.com".to_string(),
             server_port: 32811,
-            server_version: "3.0".to_string(),
-            pre_gen_job_count: 1000,
-            job_generation_delay: 30000,
+            server_version: server_version(),
             max_workers: 125,
             motd: "".to_string(),
             initial_blockhash: "05b7406b3909071b2d85b2d2958ad07a0d52bd12".to_string(),
-            expected_sharetime: 15, // why is this a config var?
             update_miners_stats_every: 1,
-            block_probability: 1000000, // why is this a config var???
             use_ngrok: false,
             auto_restart: 0,
             guess_port: false,

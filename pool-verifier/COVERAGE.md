@@ -116,7 +116,7 @@ Scenarios: `lifecycle/shutdown-final-sync`, `sync/shutdown-held-upload`.
 
 ## Rate window
 
-**asserted** - Configured limit rejects excess shares and first valid share after real 61-second expiry is accepted.
+**asserted** - The fixed limit of 80 shares per minute rejects excess shares and first valid share after real 61-second expiry is accepted.
 
 Scenarios: `lifecycle/share-rate-limit`, `lifecycle/rate-window-reset`.
 

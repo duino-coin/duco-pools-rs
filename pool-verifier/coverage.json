@@ -228,7 +228,7 @@
     {
       "behavior": "Rate window",
       "coverage": "asserted",
-      "assertion": "Configured limit rejects excess shares and first valid share after real 61-second expiry is accepted.",
+      "assertion": "The fixed limit of 80 shares per minute rejects excess shares and first valid share after real 61-second expiry is accepted.",
       "cases": [
         "lifecycle/share-rate-limit",
         "lifecycle/rate-window-reset"

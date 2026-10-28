@@ -6,7 +6,7 @@
 //! captured sync uploads, and the injected read-only dashboard observations.
 //! They never replace the production path being checked.
 
-use crate::harness::{is_accepted, stat, Harness, Options, WAIT};
+use crate::harness::{is_accepted, stat, Harness, Miner, Options, RATE_LIMIT, WAIT};
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::time::Duration;
@@ -112,9 +112,6 @@ pub fn options(case: &Case) -> Options {
     }
     if matches!(case.name, "worker-limit" | "weighted-worker-limit") {
         o.max_workers = 1;
-    }
-    if case.name == "share-rate-limit" {
-        o.rate = 2;
     }
     crate::expanded::options(case, &mut o);
     o
@@ -1044,20 +1041,32 @@ async fn startup_and_auth(h: &Harness) -> Result<()> {
     Ok(())
 }
 
-/// With `maxSharesPerMinute = 2`, the fourth share within a minute is rejected
-/// as `BAD,Too low difficulty`.
+/// With the fixed `maxSharesPerMinute` of 80, the 82nd answer within a minute is
+/// rejected as `BAD,Too low difficulty`, even with the correct nonce.
 async fn share_rate_limit(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "AVR", "rate").await?;
-    // The first share starts the minute window; the next two are within the limit.
-    for _ in 0..3 {
-        m.share().await?;
-    }
+    // The first share starts the minute window; the next 80 answers are within the limit.
+    // They are wrong, solved shares would take the curve's expected share time each
+    m.share().await?;
+    fill_rate_window(&mut m).await?;
     let job = m.job().await?;
     anyhow::ensure!(
         m.answer(&job, true).await? == "BAD,Too low difficulty",
         "Share-rate limit was not enforced"
     );
-    published(h, "rate", 3, 1).await?;
+    published(h, "rate", 1, RATE_LIMIT + 1).await?;
+    Ok(())
+}
+
+/// Sends the wrong answers that fill the minute window up to the limit.
+pub async fn fill_rate_window(m: &mut Miner) -> Result<()> {
+    for _ in 0..RATE_LIMIT {
+        let reply = m.wrong_share().await?;
+        anyhow::ensure!(
+            reply == "BAD,Incorrect result",
+            "Wrong answer within the limit: {reply}"
+        );
+    }
     Ok(())
 }
 

@@ -113,7 +113,6 @@ pub fn options(case: &Case, o: &mut Options) {
         "dashboard-key-boundary" => o.config["dashboard_key"] = json!("x".repeat(21)),
         "guessed-port" => o.config["guessPort"] = json!(true),
         "worker-limit-recovery" => o.max_workers = 1,
-        "rate-window-reset" => o.rate = 2,
         "preexisting-ip-ban" => o.initial_files.push((
             "config/bans.json".into(),
             json!({"bannedIPs":["127.0.0.2"],"bannedUsernames":[]}).to_string(),
@@ -1264,9 +1263,8 @@ async fn ban(h: &mut Harness, variant: Ban) -> Result<()> {
 /// The real 61-second rate window expires, and shares are accepted again (slow).
 async fn rate_window_reset(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "AVR", "window").await?;
-    for _ in 0..3 {
-        m.share().await?;
-    }
+    m.share().await?;
+    crate::suites::fill_rate_window(&mut m).await?;
     let job = m.job().await?;
     anyhow::ensure!(
         m.answer(&job, true).await? == "BAD,Too low difficulty",

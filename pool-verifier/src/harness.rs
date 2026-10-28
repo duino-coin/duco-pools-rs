@@ -32,6 +32,9 @@ use tokio::{
 /// Dashboard key written into every generated fixture configuration.
 pub const KEY: &str = "verifier-dashboard-key-local-only";
 /// Default deadline for a single observable condition (a reply, a state change).
+/// The pool's fixed `maxSharesPerMinute`; past it, shares are rejected.
+pub const RATE_LIMIT: u64 = 80;
+
 pub const WAIT: Duration = Duration::from_secs(6);
 /// How long the pool may take to become ready (dashboard up + first sync).
 const STARTUP_DEADLINE: Duration = Duration::from_secs(20);
@@ -48,8 +51,6 @@ pub struct Options {
     pub blocks: bool,
     /// `maxWorkers` per user; 0 means unlimited.
     pub max_workers: u64,
-    /// `maxSharesPerMinute`.
-    pub rate: u16,
     /// `syncTime` in seconds.
     pub sync_secs: u32,
     /// `updateMinersStatsEvery`: publish miner stats every N accepted shares.
@@ -75,7 +76,6 @@ impl Default for Options {
         Self {
             blocks: false,
             max_workers: 0,
-            rate: 60000,
             sync_secs: 3600,
             stats_every: 1,
             case: "",
@@ -523,7 +523,7 @@ fn fixture_config(options: &Options, mock: &Mock, port: u16, dashboard_port: u16
         "autoRestart": 0, "guessPort": false, "dashboard_port": dashboard_port,
         "syncTime": options.sync_secs, "timeout": 3,
         "server_sync_url": mock.http, "base_sync_folder": "sync",
-        "maxSharesPerMinute": options.rate, "restart_script": "", "firewall_cmd": "",
+        "restart_script": "", "firewall_cmd": "",
         "dashboard_key": KEY, "update_restart_script": "", "auto_update": false,
         "update_check_time_seconds": 0
     });
@@ -732,10 +732,14 @@ impl Miner {
         } else {
             "0".into()
         };
-        // the measured hashrate, an underreported one would be raised by the pool
-        let hashrate = self.hashes as f64 / self.solve_time.as_secs_f64().max(1e-6);
+        let hashrate = self.hashrate();
         self.answer_fields(nonce, &hashrate.to_string(), "chip-verifier")
             .await
+    }
+
+    /// The measured hashrate; an underreported one would be raised by the pool.
+    fn hashrate(&self) -> f64 {
+        self.hashes as f64 / self.solve_time.as_secs_f64().max(1e-6)
     }
 
     /// Sends `nonce,hashrate,Verifier,<rig>,chip,wallet-verifier` and returns
@@ -754,6 +758,21 @@ impl Miner {
         );
         self.send(answer.as_bytes()).await?;
         self.line().await
+    }
+
+    /// Requests a job and answers it with the wrong nonce `0` without solving it,
+    /// so it is much faster than a share at the curve's expected share time.
+    pub async fn wrong_share(&mut self) -> Result<String> {
+        let request = format!(
+            "JOB,{},{},test-key,temperature:21
+",
+            self.username, self.tier
+        );
+        self.send(request.as_bytes()).await?;
+        self.line().await?;
+        let hashrate = self.hashrate();
+        self.answer_fields("0".into(), &hashrate.to_string(), "chip-verifier")
+            .await
     }
 
     /// Requests a job, answers it correctly, and requires acceptance.
