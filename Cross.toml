@@ -1,4 +1,4 @@
 [build.env]
 # pins __DATE__ and __TIME__ in C dependencies (mimalloc), so release builds are reproducible;
-# release-verify.sh replaces this file on Windows, keep the list there in sync
+# release-verify.sh replaces this file, keep the list there in sync
 passthrough = ["SOURCE_DATE_EPOCH"]

@@ -191,6 +191,9 @@ if [ "$SIGN" -eq 1 ]; then
     fi
 fi
 podman machine start 2>/dev/null || true
+# replaces the Cross.toml of the tag, so keep its settings in here
+CROSS_CONFIG="$PWD/$OUT/Cross.toml"
+PASSTHROUGH='"SOURCE_DATE_EPOCH"'
 if command -v cygpath >/dev/null; then
     # cross on Windows mounts the cargo home and the toolchain under /mnt/<drive>/... instead of
     # /cargo and /rust like on CI; panic locations end up in the binary, so map them back;
@@ -204,12 +207,18 @@ if command -v cygpath >/dev/null; then
     mkdir -p "$WORKTREE/target"
     printf '#!/bin/sh\nexec "$@" --remap-path-prefix=%s=/cargo --remap-path-prefix=%s=/rust\n' \
         "$CARGO_MOUNT" "$SYSROOT_MOUNT" >"$WORKTREE/target/rustc-remap.sh"
-    # replaces the Cross.toml of the tag, so keep its passthrough list in here
-    printf '[build.env]\npassthrough = ["SOURCE_DATE_EPOCH", "CARGO_BUILD_RUSTC_WRAPPER=/target/rustc-remap.sh"]\n' \
-        >"$OUT/Cross.toml"
-    CROSS_CONFIG=$(cygpath -w "$OUT/Cross.toml")
-    export CROSS_CONFIG
+    PASSTHROUGH="$PASSTHROUGH, \"CARGO_BUILD_RUSTC_WRAPPER=/target/rustc-remap.sh\""
+    # absolute, cross runs from within the worktree
+    CROSS_CONFIG=$(cygpath -aw "$OUT/Cross.toml")
 fi
+printf '[build.env]\npassthrough = [%s]\n' "$PASSTHROUGH" >"$OUT/Cross.toml"
+# a cross built from git uses the :main images, CI uses the ones of its release
+CROSS_VERSION=$(sed -n 's/^ *cross-version: *v//p' "$WORKTREE/.github/workflows/$WORKFLOW")
+for target in $TARGETS; do
+    printf '\n[target.%s]\nimage = "ghcr.io/cross-rs/%s:%s"\n' "$target" "$target" "$CROSS_VERSION" \
+        >>"$OUT/Cross.toml"
+done
+export CROSS_CONFIG
 # C dependencies (mimalloc) embed __DATE__ and __TIME__, CI pins them to the commit time as well
 SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$COMMIT")
 export SOURCE_DATE_EPOCH
