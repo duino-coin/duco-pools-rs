@@ -269,6 +269,9 @@ pub async fn login(config: &PoolConfig) -> Result<(), anyhow::Error> {
             .write_all(format!("PoolLogin,{info_str}").as_bytes())
             .await?;
         socket.flush().await?;
+    } else {
+        error!("Server version mismatch, server returned {data} in login");
+        exit(-1);
     }
     debug!("Waiting for response..");
     let data = read_master_reply(&mut socket, config).await?;

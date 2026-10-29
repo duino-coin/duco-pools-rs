@@ -20,7 +20,7 @@ pub struct PoolConfig {
     pub server_ip: String,
     #[serde(rename = "serverPort")]
     pub server_port: u32,
-    #[serde(skip, default = "server_version")]
+    #[serde(default = "server_version")]
     pub server_version: String,
     // #[serde(rename = "preGenJobCount")]
     // pub pre_gen_job_count: u32,
@@ -71,7 +71,7 @@ fn pool_version() -> String {
     "0.3".to_string()
 }
 fn server_version() -> String {
-    "3.0".to_string()
+    "4.0".to_string()
 }
 
 fn generate_key() -> String {
@@ -99,7 +99,7 @@ impl Default for PoolConfig {
             host: "0.0.0.0".to_string(),
             port: 6000,
             server_ip: "server.duinocoin.com".to_string(),
-            server_port: 32811,
+            server_port: 2811,
             server_version: server_version(),
             max_workers: 125,
             motd: "".to_string(),

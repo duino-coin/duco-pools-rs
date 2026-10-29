@@ -20,8 +20,8 @@
 #   SSH_KEYGEN    ssh-keygen to sign with (default: the Windows system one if present)
 set -eu
 
-#REPO="${REPO:-duino-coin/duco-pools-rs}"
-REPO="${REPO:-profpandaa/duco-pools-rs-copy}"
+REPO="${REPO:-duino-coin/duco-pools-rs}"
+#REPO="${REPO:-profpandaa/duco-pools-rs-copy}"
 SIGNING_KEY="${SIGNING_KEY:-$HOME/.ssh/release_sk}"
 if [ -z "${SSH_KEYGEN:-}" ]; then
     SSH_KEYGEN="ssh-keygen"
@@ -102,8 +102,9 @@ if [ "$CREATE_TAG" -eq 1 ]; then
         exit 1
     fi
     echo "== tagging $TAG"
-    # only tracked files end up in the build, so untracked ones don't matter
-    if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    # only tracked files end up in the build, so untracked ones don't matter;
+    # this script isn't part of the build either, so local edits to it are fine
+    if [ -n "$(git status --porcelain --untracked-files=no -- ':(exclude)release-verify.sh')" ]; then
         echo "uncommitted changes, commit or stash them first" >&2
         exit 1
     fi
