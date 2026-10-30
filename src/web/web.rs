@@ -1,6 +1,7 @@
 use crate::data::data::ConnId;
 use crate::mining::id_allocator::WorkerAllocator;
 use crate::mining::stats::MinerStatSlim;
+use crate::sync::sync::LAST_SYNC_TIME;
 use crate::{mining, CONFIG, CONNECTIONS};
 use compact_str::CompactString;
 use dashmap::DashMap;
@@ -24,6 +25,7 @@ struct DataRes<'a> {
     miner_stats: StatsWithoutKeys<'a>, // keys serialize as 16 hex chars
     workers: MapWithoutLen<'a, WorkerAllocator>,
     balances: MapWithoutLen<'a, f32>, // pending rewards per user; cleared by accepted syncs
+    last_sync_time: u64,
 }
 
 // DashMap's own Serialize passes len() as a hint, a stale Some(0) makes serde_json close the
@@ -84,6 +86,7 @@ pub async fn start_webserver(addr: SocketAddr) -> JoinHandle<()> {
                                 miner_stats: StatsWithoutKeys(&mining::mining::MINER_STATS),
                                 workers: MapWithoutLen(&mining::mining::USR_WORKERS_ALLOC),
                                 balances: MapWithoutLen(&mining::mining::BALANCES_TO_UPDATE),
+                                last_sync_time: LAST_SYNC_TIME.load(Relaxed),
                             };
                             return Ok(warp::reply::json(&data_res));
                         }

@@ -16,10 +16,8 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::exit;
-#[cfg(any(all(not(feature = "dummy_sync"), not(debug_assertions)), test))]
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
@@ -27,6 +25,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 static SYNC_COUNT: AtomicUsize = AtomicUsize::new(0);
+// unix secs of the last accepted sync, published on /data; 0 until the first one
+pub static LAST_SYNC_TIME: AtomicU64 = AtomicU64::new(0);
 
 const CURVE_PATH: &str = "./config/curve.json";
 
@@ -516,6 +516,7 @@ pub async fn sync(sys: &mut System, last_ip: &str) -> Result<String, anyhow::Err
                     info!("Successfully synced {sync_count}");
                     tokio::fs::remove_file(&reward_path).await?; // so we don't accidentally sync the same thing twice
                     tokio::fs::remove_file(&worker_path).await?;
+                    LAST_SYNC_TIME.store(UNIX_EPOCH.elapsed()?.as_secs(), Relaxed);
                 } else {
                     warn!(
                         "Failed to sync {} ({status} from {final_url}): {}",
