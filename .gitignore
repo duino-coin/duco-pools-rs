@@ -2,6 +2,7 @@
 /config/config-orig.json
 /config/config-node.json
 /config/bans.json
+/config/dashboard-history.json*
 /pool.zip
 /miner/
 /dashboard
