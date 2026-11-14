@@ -34,6 +34,9 @@ pub static GLOBAL_SHARES_INCREASE: AtomicU64 = AtomicU64::new(0);
 // longest password (or legacy mining key) accepted, its base64 form fits PASSWORD_B64_BYTES
 const MAX_PASSWORD_BYTES: usize = 96;
 const PASSWORD_B64_BYTES: usize = MAX_PASSWORD_BYTES.div_ceil(3) * 4;
+// longest chip id and wallet id kept per miner, anything beyond is cut off
+const MAX_CHIPID_BYTES: usize = 64;
+const MAX_WALLET_ID_BYTES: usize = 64;
 
 // weight of the newest share in the hashrate average, ~ the last 9 shares
 const HASHRATE_EMA_WEIGHT: f32 = 0.2;
@@ -339,7 +342,8 @@ impl Session {
         if self.is_first_share {
             stat.this_miner_chipid.clear();
             if data_len >= 5 {
-                stat.this_miner_chipid.push_str(data[4]);
+                stat.this_miner_chipid
+                    .push_str(cut_to(data[4], MAX_CHIPID_BYTES));
             }
         }
 
@@ -358,7 +362,10 @@ impl Session {
                 // the difficulty directly correlates with the hashrate, so we can check the device type this way
                 let chipid_mismatch = hashrate_calc as f64 <= curve.mcu_pc_step_h
                     && (stat.this_miner_chipid.is_empty()
-                        || (data_len >= 5 && data[4] != stat.this_miner_chipid.as_str()));
+                        // cut like the stored one, so a long chip id still matches itself
+                        || (data_len >= 5
+                            && cut_to(data[4], MAX_CHIPID_BYTES)
+                                != stat.this_miner_chipid.as_str()));
                 if chipid_mismatch {
                     stat.rejected_shares += 1;
                 } else {
@@ -463,7 +470,10 @@ impl Session {
                 }
 
                 e.wallet_id.clear();
-                e.wallet_id.push_str(wallet_id.trim_end_matches("\n"));
+                e.wallet_id.push_str(cut_to(
+                    wallet_id.trim_end_matches("\n"),
+                    MAX_WALLET_ID_BYTES,
+                ));
 
                 clean_name_into(rig_part, &mut e.id);
                 if e.id.is_empty() {
@@ -505,6 +515,11 @@ fn encode_password(raw: &str, out: &mut CompactString) -> bool {
     // base64 output is always valid utf-8
     out.push_str(std::str::from_utf8(&buf[..len]).unwrap());
     true
+}
+
+// the longest prefix of `s` that fits in `max` bytes
+fn cut_to(s: &str, max: usize) -> &str {
+    &s[..s.floor_char_boundary(max)]
 }
 
 fn check_workers(max: f32, config: &PoolConfig) -> bool {
