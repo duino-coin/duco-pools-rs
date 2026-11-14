@@ -23,7 +23,15 @@ entirely local and therefore isolated.
 ## Docker
 
 Config and sync data live in the `pool-config` and `pool-data` volumes. Inside a container the image is the update
-mechanism, so keep `auto_update` off.
+mechanism, so keep `auto_update` off. The image has no shell or firewall tools either, so leave `firewall_cmd`,
+`restart_script` and `update_restart_script` empty and set `base_sync_folder` to `./dashboard/`.
+
+The first start writes a default `config.json` into `pool-config` and exits until `poolName` is set. Copy your own
+config in, the pool picks it up on its next restart:
+
+```bash
+docker compose cp config.json pool:/app/config/config.json
+```
 
 - Building it yourself: <br/>
   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; `docker compose up -d --build` builds the checked out tree.
