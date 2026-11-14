@@ -151,6 +151,10 @@ pub fn save_config(config: &PoolConfig) {
 }
 
 fn validate_config(config: &PoolConfig) -> anyhow::Result<()> {
+    // e.g. the default config written on the first start; the master wouldn't take the login anyway
+    if config.pool_name.is_empty() {
+        bail!("poolName must be set in config/config.json");
+    }
     if config.auto_update && config.update_check_time_seconds == 0 {
         bail!("update_check_time_seconds must be greater than 0");
     }
