@@ -216,18 +216,33 @@ impl Curve {
         Ok(curve)
     }
 }
+// an ip address is at most 45 bytes, anything longer is an error page
+#[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
+const MAX_IP_RESPONSE_BYTES: usize = 64;
+
 #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
 pub async fn get_pool_ip(config: &PoolConfig) -> Result<String, anyhow::Error> {
     debug!("Getting ip..");
     let client = &*HTTP_CLIENT;
     let request = client.get("https://api.ipify.org/");
-    let response = request
+    let mut response = request
         .timeout(Duration::from_secs(config.timeout as u64))
         .send()
-        .await?;
+        .await?
+        .error_for_status()?;
 
-    let text = response.text().await?;
-    Ok(text)
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if chunk.len() > MAX_IP_RESPONSE_BYTES - body.len() {
+            bail!("ip lookup reply is too long");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    // the reply is sent to the master as the pool's host, so it has to be an address
+    match std::str::from_utf8(&body).map(|text| text.trim().parse::<std::net::IpAddr>()) {
+        Ok(Ok(ip)) => Ok(ip.to_string()),
+        _ => bail!("ip lookup reply is not an ip address"),
+    }
 }
 // payload of the PoolLogin message
 #[cfg(not(debug_assertions))]
