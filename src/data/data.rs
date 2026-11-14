@@ -228,7 +228,7 @@ impl Bans {
 
     // called while holding the BANS lock on the runtime, so the write must not block a worker thread
     pub async fn save_bans(&self) -> Result<(), anyhow::Error> {
-        tokio::fs::write(BANS_PATH, serde_json::to_string(&self)?).await?;
+        crate::sync::sync::write_file(BANS_PATH.into(), serde_json::to_vec(&self)?).await?;
 
         Ok(())
     }

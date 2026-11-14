@@ -44,7 +44,7 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 
 // writes the file on the blocking pool and hands the buffer back, so it doesn't have to be copied;
 // staged next to it and renamed over it, so a crash never leaves a cut-off file behind
-async fn write_file(path: PathBuf, content: Vec<u8>) -> std::io::Result<Vec<u8>> {
+pub(crate) async fn write_file(path: PathBuf, content: Vec<u8>) -> std::io::Result<Vec<u8>> {
     tokio::task::spawn_blocking(move || {
         let mut staging = path.clone().into_os_string();
         staging.push(".tmp");
@@ -363,8 +363,11 @@ pub async fn resync_curve(config: &PoolConfig) -> Result<(), anyhow::Error> {
     let pool_rewards = Curve::parse(curve_content.as_bytes())?;
 
     CURVE_VALUES.store(Arc::new(pool_rewards));
-    // only a validated curve replaces the one on disk
-    tokio::fs::write(CURVE_PATH, &curve_content).await?;
+    // only a validated curve replaces the one on disk;
+    // the curve is in use already, a failed write only keeps the previous file
+    if let Err(err) = write_file(CURVE_PATH.into(), curve_content.into_bytes()).await {
+        error!("Failed to save curve.json: {err}");
+    }
     info!("Successfully updated curve settings");
 
     // the curve is in use already, a failed bans sync only keeps the previous bans
