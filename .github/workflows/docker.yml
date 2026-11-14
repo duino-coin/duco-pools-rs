@@ -1,0 +1,130 @@
+name: Docker
+
+# publishes a signed release as an image; the image is the release target of the Dockerfile, which
+# only takes the release assets once manifest.json.sig checks out against src/updater/release_key.pub,
+# and that key has to match RELEASE_KEY_FINGERPRINT, which lives outside of the repo; so no image
+# can be published for a release that wasn't signed by the release key
+on:
+  # release-sign.sh / release-verify.sh --sign publish the draft after the signature is attached
+  release:
+    types: [published]
+  # e.g. when a release went public before its signature was attached
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (e.g. v0.2.1)
+        required: true
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Publish image
+    runs-on: ubuntu-24.04
+    # holds RELEASE_KEY_FINGERPRINT; protection rules (e.g. required reviewers) go on the environment
+    environment: ghcr
+    permissions:
+      contents: read
+      packages: write
+      # keyless cosign signature
+      id-token: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      RELEASE_KEY_FINGERPRINT: ${{ vars.RELEASE_KEY_FINGERPRINT }}
+      # keep in sync with docker-verify.sh
+      PREDICATE_TYPE: https://github.com/duino-coin/duco-pools-rs/release-manifest/v1
+    steps:
+      - name: Check inputs
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid tag $TAG" >&2; exit 1; }
+          # without it the build would trust whatever key the tag carries
+          [[ "$RELEASE_KEY_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]] ||
+            { echo "RELEASE_KEY_FINGERPRINT is missing or invalid" >&2; exit 1; }
+      # only the newest release moves latest, republishing an old one must not roll it back
+      - name: Check latest
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
+          echo "latest=$([ "$latest" = "$TAG" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      # the tag's own Dockerfile and release key, same as a host build of that tag
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to ghcr
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: type=raw,value=${{ env.TAG }}
+          flavor: latest=${{ steps.latest.outputs.latest }}
+      # no QEMU needed, the release stage runs natively and the runtime stage only copies
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: release
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            POOL_TAG=${{ env.TAG }}
+            RELEASE_REPO=${{ github.repository }}
+            RELEASE_KEY_FINGERPRINT=${{ env.RELEASE_KEY_FINGERPRINT }}
+          secrets: |
+            github_token=${{ github.token }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+      # comes from the build cache, so these are the exact files the build checked
+      - name: Export release manifest
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: release-manifest
+          platforms: linux/amd64
+          build-args: |
+            POOL_TAG=${{ env.TAG }}
+            RELEASE_REPO=${{ github.repository }}
+            RELEASE_KEY_FINGERPRINT=${{ env.RELEASE_KEY_FINGERPRINT }}
+          secrets: |
+            github_token=${{ github.token }}
+          outputs: type=local,dest=release-manifest
+          provenance: false
+          sbom: false
+      - name: Install cosign
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      # signs the digest, not a tag, so a later push to the same tag isn't covered
+      - name: Sign image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+      # base64, the signature only holds for the exact bytes of manifest.json
+      - name: Attach release manifest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          jq -n --arg tag "$TAG" \
+            --arg manifest "$(base64 -w0 release-manifest/manifest.json)" \
+            --arg signature "$(base64 -w0 release-manifest/manifest.json.sig)" \
+            '{tag: $tag, manifest: $manifest, signature: $signature}' >predicate.json
+          cosign attest --yes --type "$PREDICATE_TYPE" --predicate predicate.json "$IMAGE@$DIGEST"
+      # same checks operators run, see README
+      - name: Verify image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          REPO: ${{ github.repository }}
+        run: sh docker-verify.sh "$IMAGE@$DIGEST"
