@@ -66,7 +66,10 @@ pub async fn handle_connection(conn: &mut Connection) -> Result<(), anyhow::Erro
                 } else if ban.banned_ips.contains(&conn.miner_stat.ip) {
                     (true, false)
                 } else if data_len >= 2 && ban.banned_usernames.contains(data_split[1]) {
-                    ban.banned_ips.insert(conn.miner_stat.ip.clone());
+                    // we don't want to ban the wss-bridge
+                    if conn.miner_stat.ip != config.server_endpoint {
+                        ban.banned_ips.insert(conn.miner_stat.ip.clone());
+                    }
                     // the ban still applies for this run if the file can't be written
                     if let Err(err) = ban.save_bans().await {
                         error!("Failed to save bans.json: {err}");

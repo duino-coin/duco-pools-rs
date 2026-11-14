@@ -15,7 +15,7 @@
   "serverIP": "server.duinocoin.com",
   "serverPort": 2810,
   "server_sync_url": "https://server.duinocoin.com/poolsyncdata",
-  "server_endpoint": "server.duinocoin.com",
+  "server_endpoint": "45.147.7.140",
   "base_sync_folder": "./dashboard/",
   "initialBlockHash": "05b7406b3909071b2d85b2d2958ad07a0d52bd12",
   "updateMinersStatsEvery": 1,
