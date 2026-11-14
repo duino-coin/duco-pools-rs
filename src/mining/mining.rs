@@ -219,7 +219,7 @@ impl Session {
     // writes "<last hash>,<new hash>,<diff>\n" into `out`
     fn write_job(&mut self, out: &mut String) {
         if self.is_first_share {
-            self.diff = 100;
+            self.diff = 5; // needs to be low, otherwise slow miners take ages to complete
         }
 
         self.random = rand::rng().random_range(0u64..self.diff as u64 * 100u64) + 1;
