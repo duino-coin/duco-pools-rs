@@ -312,7 +312,7 @@ async fn start_tcp(server: TcpListener, mut rx: UnboundedReceiver<()>) {
 
                             },
                             () = local_token.cancelled() => {
-                                info!("Cancelled task.");
+                                debug!("Cancelled task.");
                             },
                         }
                     });
