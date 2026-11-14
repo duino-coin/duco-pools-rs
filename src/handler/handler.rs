@@ -8,6 +8,8 @@ use std::time::Instant;
 use tokio::process::Command;
 
 const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
+// longest username accepted; it is a map key and part of every sync
+const MAX_USERNAME_BYTES: usize = 64;
 
 // "<server_version>\n", built once instead of on every connection
 static GREETING: OnceLock<String> = OnceLock::new();
@@ -86,6 +88,13 @@ pub async fn handle_connection(conn: &mut Connection) -> Result<(), anyhow::Erro
                 // a missing username field is "" as well
                 if data_split[1].is_empty() {
                     conn.write("BAD,No username specified\n").await?;
+                    return Ok(());
+                }
+                // control characters would end up in the log
+                if data_split[1].len() > MAX_USERNAME_BYTES
+                    || data_split[1].bytes().any(|b| b.is_ascii_control())
+                {
+                    conn.write("BAD,Invalid username\n").await?;
                     return Ok(());
                 }
 
