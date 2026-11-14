@@ -1,0 +1,32 @@
+# POOL_BUILD=source (default) builds the checked out tree;
+# POOL_BUILD=release POOL_TAG=v0.2.1 runs that signed release instead;
+# GITHUB_TOKEN is only read for release builds while the release repo is private
+services:
+  pool:
+    image: duco-pool-rs:${POOL_BUILD:-source}
+    build:
+      context: .
+      target: ${POOL_BUILD:-source}
+      args:
+        POOL_TAG: ${POOL_TAG:-}
+        # optional; e.g. SHA256:JIF3znWiNSXyMv9blziUtAdRb+on4a/4hN9q6NGEPdg
+        RELEASE_KEY_FINGERPRINT: ${RELEASE_KEY_FINGERPRINT:-}
+      secrets:
+        - github_token
+    # miners keep their real IPs for bans and limits; ports come from config.json
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - pool-config:/app/config
+      - pool-data:/app/dashboard
+    ulimits:
+      nofile: 1048576
+    stop_grace_period: 30s
+
+volumes:
+  pool-config:
+  pool-data:
+
+secrets:
+  github_token:
+    environment: GITHUB_TOKEN
