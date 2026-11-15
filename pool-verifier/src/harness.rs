@@ -515,7 +515,7 @@ fn fixture_config(options: &Options, mock: &Mock, port: u16, dashboard_port: u16
     let mut config = json!({
         "poolName": "verifier", "poolPassword": "fake-password", "poolID": "verifier-id",
         "poolVersion": "0.3", "host": "127.0.0.1", "port": port,
-        "serverIP": "127.0.0.1", "serverPort": mock.master_port, "serverVersion": "3.0",
+        "serverIP": "127.0.0.1", "serverPort": mock.master_port, "server_version": "3.0",
         "preGenJobCount": 4, "jobGenerationDelay": 1, "maxWorkers": options.max_workers,
         "motd": "verifier-motd\n", "initialBlockHash": "05b7406b3909071b2d85b2d2958ad07a0d52bd12",
         "expectedSharetime": 1, "updateMinersStatsEvery": options.stats_every,

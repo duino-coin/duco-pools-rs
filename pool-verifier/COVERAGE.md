@@ -38,7 +38,7 @@ Scenarios: `protocol/forced-block`, `internal/reward-vectors`, `counters/reward-
 
 ## Difficulty mapping and adaptation
 
-**asserted** - Curve difficulty rounding and minimum vectors (internal); initial difficulty 100, curve difficulty from the last hashrate and the exponential hashrate average.
+**asserted** - Curve difficulty rounding and minimum vectors (internal); initial difficulty 5, curve difficulty from the last hashrate and the exponential hashrate average.
 
 Scenarios: `internal/difficulty-vectors`, `lifecycle/adaptive-mining-average`.
 
@@ -62,7 +62,7 @@ Scenarios: `counters/worker-limit`, `counters/weighted-worker-limit`, `kolka/pc-
 
 ## Chip ID reward eligibility
 
-**asserted** - At or below mcu_pc_step_h, a share after the warmup earns a regular reward only with the chip ID of the first share; a changed, empty or initially empty one counts as rejected and earns only block rewards. Above the limit the chip ID is not checked.
+**asserted** - At or below mcu_pc_step_h, a share after the warmup earns a regular reward only with the chip ID of the first share; a changed or empty one counts as rejected and earns only block rewards. A miner without a chip ID on its first share is not rejected, but paid by the curve without the microcontroller pay (mcu_base = pc_base, no Arduino bonus, no slow boost). Above the limit the chip ID is not checked.
 
 Scenarios: `counters/chip-id-mismatch`.
 
@@ -86,7 +86,7 @@ Scenarios: `lifecycle/startup-ip-disconnect`, `sync/ip-fallback`, `sync/ip-no-ca
 
 ## Configuration and dashboard authentication
 
-**asserted** - Default creation, field defaults, generated key shape/uniqueness, roundtrip, malformed/missing fields, guessed port persisted and used for login, disabled dashboard and 20/21-byte authentication boundary.
+**asserted** - Default creation, default config refused for its empty pool name, field defaults, empty default dashboard key, roundtrip, malformed/missing fields, guessed port persisted and used for login, disabled dashboard and 20/21-byte authentication boundary.
 
 Scenarios: `lifecycle/startup-and-auth`, `internal/config-defaults-roundtrip`, `lifecycle/dashboard-disabled`, `lifecycle/dashboard-key-boundary`, `lifecycle/guessed-port`, `lifecycle/startup-invalid-config`, `lifecycle/startup-missing-field`.
 

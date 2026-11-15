@@ -353,7 +353,9 @@ fn master_login(h: &Harness) -> Result<Value> {
 async fn startup_failure(h: &mut Harness, name: &str) -> Result<()> {
     let diagnostic = match name {
         "startup-ip-disconnect" | "startup-master-invalid-utf8" => "failed to login",
-        "startup-master-reject" | "startup-master-disconnect" => "Unknown error",
+        "startup-master-reject" => "Unknown error",
+        // no greeting at all doesn't start with the server version either
+        "startup-master-disconnect" => "Server version mismatch",
         "startup-without-curve" => "failed to load the saved curve",
         "startup-corrupt-rewards" => "failed to load pending rewards",
         // startup-invalid-config, startup-missing-field
@@ -561,9 +563,10 @@ fn curve_reward(curve: &Value, hashrate: f64, difficulty: u64, worker: f64) -> R
 
 /// At or below `mcu_pc_step_h`, a share after the warmup earns a regular reward
 /// only with the chip ID the miner sent with its first share. A changed or empty
-/// one, or an empty one from the start, still gets its feedback, but counts as
-/// rejected and earns nothing beyond a block. Above the limit the chip ID
-/// doesn't matter.
+/// one still gets its feedback, but counts as rejected and earns nothing beyond
+/// a block. A miner that sent none with its first share is not rejected, but
+/// paid by the curve without the microcontroller pay (`mcu_base` = `pc_base`,
+/// no Arduino bonus, no slow boost). Above the limit the chip ID doesn't matter.
 async fn chip_id_mismatch(h: &mut Harness) -> Result<()> {
     // No loopback hashrate reaches this limit, so every miner counts as a microcontroller.
     h.mock.shared.curve.lock().unwrap()["mcu_pc_step_h"] = json!(1e30);
@@ -590,11 +593,24 @@ async fn chip_id_mismatch(h: &mut Harness) -> Result<()> {
     near(reward, block, "changed chip ID earned a regular reward")?;
     let (reward, block) = chip_reward(h, &mut alice, "", 13, 2).await?;
     near(reward, block, "empty chip ID earned a regular reward")?;
-    let (reward, block) = chip_reward(h, &mut bob, "", 11, 1).await?;
+    // bob never sent a chip ID: no rejection, and the curve without the microcontroller pay
+    let job = bob.job().await?;
+    let reply = bob
+        .answer_fields(job.nonce.to_string(), "1000", "")
+        .await?;
+    ensure_accepted(&reply)?;
+    let o = observation(h, "bob", 11, 0).await?;
+    let mut pc_curve = h.mock.shared.curve.lock().unwrap().clone();
+    pc_curve["mcu_base"] = pc_curve["pc_base"].clone();
+    pc_curve["arduino_bonus"] = json!(0.0);
+    pc_curve["slow_boost_h"] = json!(0.0);
+    let hashrate = o["hashrate_calc"].as_f64().context("calculated hashrate")?;
+    let worker = o["worker"].as_f64().context("worker ID")?;
+    let block = if reply == "BLOCK" { 2.0 } else { 0.0 };
     near(
-        reward,
-        block,
-        "no chip ID on the first share, but a regular reward",
+        o["reward"].as_f64().context("reward")?,
+        curve_reward(&pc_curve, hashrate, job.difficulty, worker)? + block,
+        "reward without a chip ID on the first share",
     )?;
 
     // Every measured hashrate exceeds this limit, from the very next share on.
@@ -1098,8 +1114,8 @@ async fn adaptive_mining_average(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "LOW", "adaptive").await?;
     // Independent model of the averages.
     let (mut expected_hashes, mut expected_time) = (0.0, 0.0);
-    // every first job has difficulty 100; later ones follow the last hashrate
-    let mut expected_difficulty = 100;
+    // every first job has difficulty 5; later ones follow the last hashrate
+    let mut expected_difficulty = 5;
     for i in 1..=55 {
         let job = m.job().await?;
         anyhow::ensure!(
@@ -1158,7 +1174,7 @@ async fn dashboard_key(h: &Harness, enabled: bool) -> Result<()> {
 }
 
 /// Published miner stats have the expected field types and values. Every
-/// first job has difficulty 100.
+/// first job has difficulty 5.
 async fn dashboard_schema(h: &Harness) -> Result<()> {
     let mut m = h.miner("alice", "AVR", "schema").await?;
     let job = m.job().await?;
@@ -1184,7 +1200,7 @@ async fn dashboard_schema(h: &Harness) -> Result<()> {
         v["h"] == 1000.0
             && v["a"] == 1
             && v["r"] == 0
-            && v["d"] == 100
+            && v["d"] == 5
             && v["c"] == 1.0
             && v["ip"] == "127.0.0.1",
         "schema values: {v}"

@@ -5,43 +5,48 @@
 mod verifier_tests {
     use super::*;
 
+    const CONFIG_PATH: &str = "config/config.json";
+
+    fn write_config(value: &serde_json::Value) {
+        std::fs::write(CONFIG_PATH, serde_json::to_vec(value).unwrap()).unwrap();
+    }
+
     #[test]
     fn defaults_and_roundtrip() {
-        // With no file, loading creates a complete config with generated secrets.
-        assert!(!Path::new("config/config.json").exists());
+        // With no file, loading writes the default config, but refuses to start
+        // with its empty pool name.
+        assert!(!Path::new(CONFIG_PATH).exists());
+        assert!(load_config().is_err());
+
+        // A pool name is all the written default lacks.
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(CONFIG_PATH).unwrap()).unwrap();
+        assert_eq!(value["poolName"], "");
+        value["poolName"] = serde_json::json!("fixture");
+        write_config(&value);
         let config = load_config().unwrap();
         assert_eq!(config.max_shares_per_minute, 80);
         assert_eq!(config.update_miners_stats_every, 1);
-        assert_eq!(config.dashboard_key.len(), 32);
-        assert!(config
-            .dashboard_key
-            .bytes()
-            .all(|byte| (33..=126).contains(&byte)));
-
-        // This is a collision smoke test, not a proof of key entropy.
-        let keys: std::collections::HashSet<_> = (0..32).map(|_| generate_key()).collect();
-        assert_eq!(keys.len(), 32);
+        // Key generation is disabled; an empty key keeps the dashboard off.
+        assert!(config.dashboard_key.is_empty());
 
         // Saving and loading must preserve the serialized schema exactly.
-        let mut value = serde_json::to_value(&config).unwrap();
-        value["poolName"] = serde_json::json!("fixture");
-        let changed: PoolConfig = serde_json::from_value(value.clone()).unwrap();
-        save_config(&changed);
+        assert_eq!(serde_json::to_value(&config).unwrap(), value);
+        save_config(&config);
         assert_eq!(serde_json::to_value(load_config().unwrap()).unwrap(), value);
 
         // Optional fields regain defaults when omitted; required fields and
         // malformed JSON must fail instead of silently producing partial config.
-        value.as_object_mut().unwrap().remove("maxSharesPerMinute");
         value.as_object_mut().unwrap().remove("dashboard_key");
-        std::fs::write("config/config.json", serde_json::to_vec(&value).unwrap()).unwrap();
+        write_config(&value);
         let config = load_config().unwrap();
         assert_eq!(config.max_shares_per_minute, 80);
-        assert_eq!(config.dashboard_key.len(), 32);
+        assert!(config.dashboard_key.is_empty());
 
         value.as_object_mut().unwrap().remove("host");
-        std::fs::write("config/config.json", serde_json::to_vec(&value).unwrap()).unwrap();
+        write_config(&value);
         assert!(load_config().is_err());
-        std::fs::write("config/config.json", "{").unwrap();
+        std::fs::write(CONFIG_PATH, "{").unwrap();
         assert!(load_config().is_err());
     }
 }
