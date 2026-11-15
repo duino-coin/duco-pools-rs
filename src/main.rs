@@ -110,7 +110,7 @@ async fn main() {
     // loads bans.json now, a failed bans sync would leave that to the first miner
     LazyLock::force(&BANS);
     // e.g. a restart after an update shouldn't depend on the master being reachable at that moment
-    if let Err(err) = sync::sync::resync_curve(&config).await {
+    if let Err(err) = sync::sync::resync_curve(&config, false).await {
         error!("Failed to update pool rewards: {err}; using the saved curve");
         sync::sync::load_saved_curve().expect("failed to load the saved curve");
     }
@@ -191,7 +191,7 @@ async fn main() {
             loop {
                 if count >= pool_reward_sync_factor {
                     count = 0;
-                    match sync::sync::resync_curve(config).await {
+                    match sync::sync::resync_curve(config, true).await {
                         Ok(_) => {
                             info!("Resynced pool rewards.");
                         }

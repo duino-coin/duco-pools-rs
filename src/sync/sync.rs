@@ -365,7 +365,8 @@ pub fn load_saved_curve() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-pub async fn resync_curve(config: &PoolConfig) -> Result<(), anyhow::Error> {
+// `expire_ip_bans` is false at startup, so the ips in bans.json apply until the first resync
+pub async fn resync_curve(config: &PoolConfig, expire_ip_bans: bool) -> Result<(), anyhow::Error> {
     // cloudflare ignores no-cache from clients, a unique query string misses the edge cache
     let cache_bust = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let curve_content = fetch_curve(config, cache_bust).await?;
@@ -381,7 +382,7 @@ pub async fn resync_curve(config: &PoolConfig) -> Result<(), anyhow::Error> {
     info!("Successfully updated curve settings");
 
     // the curve is in use already, a failed bans sync only keeps the previous bans
-    if let Err(err) = sync_bans(config, cache_bust).await {
+    if let Err(err) = sync_bans(config, cache_bust, expire_ip_bans).await {
         error!("Failed to sync bans: {err}");
     }
     Ok(())
@@ -402,7 +403,11 @@ async fn fetch_curve(config: &PoolConfig, cache_bust: u64) -> Result<String, any
         .await?)
 }
 
-async fn sync_bans(config: &PoolConfig, cache_bust: u64) -> Result<(), anyhow::Error> {
+async fn sync_bans(
+    config: &PoolConfig,
+    cache_bust: u64,
+    expire_ip_bans: bool,
+) -> Result<(), anyhow::Error> {
     let response_data_bans = HTTP_CLIENT
         .get(format!(
             "{}/bans.json?t={cache_bust}",
@@ -416,6 +421,11 @@ async fn sync_bans(config: &PoolConfig, cache_bust: u64) -> Result<(), anyhow::E
 
     let mut ban_lock = BANS.lock().await;
     ban_lock.banned_usernames = response_data_bans;
+    // the ips only follow from the usernames: a still banned user gets its ip banned again on
+    // the next connect, an unbanned one (or the next owner of a dynamic ip) is free again
+    if expire_ip_bans {
+        ban_lock.banned_ips.clear();
+    }
 
     ban_lock.save_bans().await?;
     info!("Synced bans.");
