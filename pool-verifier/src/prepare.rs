@@ -558,7 +558,7 @@ fn add_control_channel(stage: &Path) -> Result<()> {
         for line in std::io::stdin().lock().lines() {
             if matches!(line.as_deref(), Ok("refresh")) {
                 verify_runtime.block_on(async {
-                    match sync::sync::resync_curve(CONFIG.get().unwrap()).await {
+                    match sync::sync::resync_curve(CONFIG.get().unwrap(), true).await {
                         Ok(()) => println!("VERIFY_REFRESH_OK"),
                         Err(err) => println!("VERIFY_REFRESH_ERROR: {err}"),
                     }

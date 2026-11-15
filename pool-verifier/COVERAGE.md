@@ -98,9 +98,9 @@ Scenarios: `lifecycle/startup-master-reject`, `lifecycle/startup-master-disconne
 
 ## Bans and refresh operation
 
-**asserted** - Persist/load/corrupt-file fallback, pre-existing and newly saved IP bans, localhost exemption, direct production curve refresh updates ban enforcement.
+**asserted** - Persist/load/corrupt-file fallback, pre-existing and newly saved IP bans, IP bans dropped by a ban refresh, localhost exemption, direct production curve refresh updates ban enforcement.
 
-Scenarios: `lifecycle/banned-user`, `internal/bans-persistence`, `lifecycle/preexisting-ip-ban`, `lifecycle/ban-reconnect`, `lifecycle/localhost-exemption`, `lifecycle/refreshed-bans`.
+Scenarios: `lifecycle/banned-user`, `internal/bans-persistence`, `lifecycle/preexisting-ip-ban`, `lifecycle/ban-reconnect`, `lifecycle/ip-ban-expiry`, `lifecycle/localhost-exemption`, `lifecycle/refreshed-bans`.
 
 ## Reward curve validation and fallback
 

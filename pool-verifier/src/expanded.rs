@@ -54,6 +54,7 @@ pub const CASES: &[Case] = &[
     Case::new("lifecycle", "guessed-port"),
     Case::new("lifecycle", "preexisting-ip-ban"),
     Case::new("lifecycle", "ban-reconnect"),
+    Case::new("lifecycle", "ip-ban-expiry"),
     Case::new("lifecycle", "localhost-exemption"),
     Case::new("lifecycle", "refreshed-bans"),
     Case::new("lifecycle", "startup-invalid-config"),
@@ -278,6 +279,7 @@ pub async fn run(case: &Case, h: &mut Harness) -> Result<()> {
         "guessed-port" => guessed_port(h).await,
         "preexisting-ip-ban" => ban(h, Ban::PreexistingIp).await,
         "ban-reconnect" => ban(h, Ban::Reconnect).await,
+        "ip-ban-expiry" => ban(h, Ban::Expired).await,
         "localhost-exemption" => ban(h, Ban::LocalhostExempt).await,
         "refreshed-bans" => ban(h, Ban::Refreshed).await,
         "rate-window-reset" => rate_window_reset(h).await,
@@ -1223,6 +1225,8 @@ enum Ban {
     PreexistingIp,
     /// After a username ban, the saved IP ban also refuses a different user.
     Reconnect,
+    /// A ban refresh drops the saved IP bans, so an unbanned user's IP is free again.
+    Expired,
     /// A banned username from 127.0.0.1 is still accepted.
     LocalhostExempt,
     /// A ban added by a reward/ban refresh is persisted and enforced.
@@ -1234,7 +1238,7 @@ async fn ban(h: &mut Harness, variant: Ban) -> Result<()> {
     let user = match variant {
         Ban::Refreshed => "fresh-ban",
         Ban::PreexistingIp => "alice",
-        Ban::Reconnect | Ban::LocalhostExempt => "banned-verifier-user",
+        Ban::Reconnect | Ban::Expired | Ban::LocalhostExempt => "banned-verifier-user",
     };
     if let Ban::Refreshed = variant {
         h.miner("before", "AVR", "before").await?.share().await?;
@@ -1272,6 +1276,21 @@ async fn ban(h: &mut Harness, variant: Ban) -> Result<()> {
             "Saved IP ban not enforced"
         );
         m.expect_closed(WAIT).await?;
+    }
+    if let Ban::Expired = variant {
+        // the master lifts the username ban; the refresh drops the IP ban that followed from it
+        *h.mock.shared.bans.lock().unwrap() = json!([]);
+        h.refresh().await?;
+        let persisted: Value =
+            serde_json::from_slice(&std::fs::read(h.dir.join("config/bans.json"))?)?;
+        anyhow::ensure!(
+            persisted["bannedIPs"] == json!([]),
+            "IP ban survived the refresh: {persisted}"
+        );
+        h.miner_from("different-user", "AVR", "again", Some("127.0.0.2"))
+            .await?
+            .share()
+            .await?;
     }
     Ok(())
 }
