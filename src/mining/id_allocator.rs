@@ -121,15 +121,17 @@ impl WorkerAllocator {
 
     // Shrink the high-water mark by popping free slots off the top.
     fn compact(&mut self) {
-        while let Some(&encoded) = self.free_slots.first() {
+        let mut freed = 0;
+        for &encoded in &self.free_slots {
             let (slot, step) = decode(encoded);
-            if slot == self.next_slot {
-                self.free_slots.remove(0);
-                self.next_slot -= step;
-            } else {
+            if slot != self.next_slot {
                 break;
             }
+            self.next_slot -= step;
+            freed += 1;
         }
+        // one shift for all of them, a remove(0) each is quadratic for a user with many slots
+        self.free_slots.drain(..freed);
     }
     pub fn active_workers(&self) -> f32 {
         self.active_half_steps as f32 / 2.0
