@@ -1,6 +1,7 @@
 use anyhow::bail;
 use config::Config;
 use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -14,8 +15,8 @@ pub struct PoolConfig {
     pub pool_id: String,
     #[serde(skip, default = "pool_version")]
     pub pool_version: String,
-    pub host: String,
-    pub port: u32,
+    pub host: IpAddr, // an address, v4 or v6; the listeners are bound to it
+    pub port: u16,
     #[serde(rename = "serverIP")]
     pub server_ip: String,
     #[serde(rename = "serverPort")]
@@ -45,7 +46,7 @@ pub struct PoolConfig {
     pub auto_restart: u32,
     #[serde(rename = "guessPort")]
     pub guess_port: bool,
-    pub dashboard_port: u32,
+    pub dashboard_port: u16,
     #[serde(rename = "syncTime")]
     pub sync_time: u32,
     pub timeout: u16, // probably shouldn't exceed 65k either
@@ -96,7 +97,7 @@ impl Default for PoolConfig {
             pool_password: "".to_string(),
             pool_id: "".to_string(),
             pool_version: pool_version(),
-            host: "0.0.0.0".to_string(),
+            host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 6000,
             server_ip: "server.duinocoin.com".to_string(),
             server_port: 2811,

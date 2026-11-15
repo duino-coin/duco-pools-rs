@@ -77,7 +77,7 @@ async fn main() {
     let mut config = cfg::config::load_config().unwrap();
 
     if config.guess_port {
-        let port = get_rand(1000, 9999) as u32;
+        let port = get_rand(1000, 9999) as u16;
         config.port = port;
         cfg::config::save_config(&config);
     }
@@ -260,20 +260,20 @@ async fn bind_tcp(config: &PoolConfig) -> TcpListener {
     rlimit::increase_nofile_limit(u64::MAX).expect("failed to increase nofile limit");
     info!("Starting tcp server...");
 
-    let server = TcpListener::bind(format!("{}:{}", config.host, config.port))
+    // not formatted as "host:port", a v6 address would need brackets there
+    let addr = SocketAddr::new(config.host, config.port);
+    let server = TcpListener::bind(addr)
         .await
         .expect("failed to bind to address");
-    info!("Listening on {}:{}", config.host, config.port);
+    info!("Listening on {addr}");
     server
 }
 
 async fn start_tcp(server: TcpListener, mut rx: UnboundedReceiver<()>) {
     let config = CONFIG.get().unwrap();
 
-    // start "webserver" and parse addr from config
-    let addr: SocketAddr = format!("{}:{}", config.host, config.dashboard_port)
-        .parse()
-        .expect("failed to parse host:port");
+    // start "webserver"
+    let addr = SocketAddr::new(config.host, config.dashboard_port);
     let web_handle = web::web::start_webserver(addr).await;
 
     let token = CancellationToken::new();

@@ -123,7 +123,7 @@ fn acknowledge_uploaded_work(
 #[serde(rename_all = "camelCase")]
 struct SyncQuery<'a> {
     host: &'a str,
-    port: u32,
+    port: u16,
     version: &'a str,
     identifier: &'a str,
     name: &'a str,
@@ -259,7 +259,7 @@ pub async fn get_pool_ip(config: &PoolConfig) -> Result<String, anyhow::Error> {
 #[derive(Serialize)]
 struct LoginInfos<'a> {
     host: &'a str,
-    port: u32,
+    port: u16,
     version: &'a str,
     identifier: &'a str,
     name: &'a str,

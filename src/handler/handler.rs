@@ -61,7 +61,7 @@ pub async fn handle_connection(conn: &mut Connection) -> Result<(), anyhow::Erro
             // released, so a slow client can't stall every other connection's ban check
             let (banned, newly_banned_ip) = {
                 let mut ban = BANS.lock().await;
-                if conn.miner_stat.ip == "127.0.0.1" {
+                if conn.miner_stat.ip == "127.0.0.1" || conn.miner_stat.ip == "::1" {
                     (false, false)
                 } else if ban.banned_ips.contains(&conn.miner_stat.ip)
                     || (conn.miner_stat.ip == config.server_endpoint && ban.banned_usernames.contains(data_split[1])) { // we don't want to ban the wss-bridge

@@ -71,7 +71,9 @@ impl Connection {
             // never later than the deadline of any read on this connection
             read_timer: Box::pin(tokio::time::sleep(TIMEOUT)),
             id,
-            miner_stat: MinerStat::new(addr.ip().to_compact_string(), username),
+            // canonical: a v4 miner on a dual-stack listener is "1.2.3.4", not "::ffff:1.2.3.4",
+            // so bans.json and the loopback exemption match it
+            miner_stat: MinerStat::new(addr.ip().to_canonical().to_compact_string(), username),
         }
     }
 
