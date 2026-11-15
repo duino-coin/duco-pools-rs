@@ -3,6 +3,7 @@ use crate::data::data::{ConnId, Connection, ConnectionClosed};
 use crate::mining::block_hash::BlockHash;
 use crate::mining::id_allocator::WorkerAllocator;
 use crate::mining::stats::{MinerStat, MinerStatSlim};
+use crate::sync::sync::Curve;
 use crate::{kolka, CONFIG, CURVE_VALUES};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -360,20 +361,29 @@ impl Session {
             if stat.accepted_shares > WARMUP_SHARES {
                 // why is this a thing?
                 // the difficulty directly correlates with the hashrate, so we can check the device type this way
-                let chipid_mismatch = hashrate_calc as f64 <= curve.mcu_pc_step_h
-                    && (stat.this_miner_chipid.is_empty()
-                        // cut like the stored one, so a long chip id still matches itself
-                        || (data_len >= 5
-                            && cut_to(data[4], MAX_CHIPID_BYTES)
-                                != stat.this_miner_chipid.as_str()));
+                let below_mcu_step = hashrate_calc as f64 <= curve.mcu_pc_step_h;
+                let chipid_mismatch = below_mcu_step
+                    && !stat.this_miner_chipid.is_empty()
+                    && data_len >= 5
+                    // cut like the stored one, so a long chip id still matches itself
+                    && cut_to(data[4], MAX_CHIPID_BYTES) != stat.this_miner_chipid.as_str();
                 if chipid_mismatch {
                     stat.rejected_shares += 1;
                 } else {
+                    // a slow miner that never sent a chip id (e.g. an old pc) is paid like a pc;
+                    // only copied for those, everyone else uses the loaded curve
+                    let pc_curve;
+                    let curve: &Curve = if below_mcu_step && stat.this_miner_chipid.is_empty() {
+                        pc_curve = curve.without_mcu_pay();
+                        &pc_curve
+                    } else {
+                        &curve
+                    };
                     reward = kolka::kolka::calculate_reward(
                         hashrate_calc.max(1f32),
                         stat.worker_slot.id(),
                         self.diff,
-                        &curve,
+                        curve,
                     );
                 }
             }

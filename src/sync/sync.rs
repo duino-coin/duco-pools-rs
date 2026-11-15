@@ -215,6 +215,16 @@ impl Curve {
         }
         Ok(curve)
     }
+
+    // the curve a slow miner without a chip id is paid by: pc pay, no arduino bonus, no slow boost
+    pub fn without_mcu_pay(self) -> Self {
+        Curve {
+            mcu_base: self.pc_base,
+            arduino_bonus: 0.0,
+            slow_boost_h: 0.0,
+            ..self
+        }
+    }
 }
 // an ip address is at most 45 bytes, anything longer is an error page
 #[cfg(any(feature = "dummy_sync", not(debug_assertions)))]
