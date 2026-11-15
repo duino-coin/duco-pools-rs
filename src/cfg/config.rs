@@ -112,7 +112,7 @@ impl Default for PoolConfig {
             sync_time: 15,
             timeout: 30,
             server_sync_url: "https://server.duinocoin.com/poolsyncdata".to_string(),
-            server_endpoint: "server.duinocoin.com".to_string(),
+            server_endpoint: "45.147.7.140".to_string(),
             base_sync_folder: "".to_string(),
             max_shares_per_minute: 80,
             restart_script: "".to_string(),
