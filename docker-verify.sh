@@ -102,11 +102,19 @@ case "$IMAGE_TAG" in
 esac
 
 echo "== binaries"
+# each platform goes by its own manifest digest out of the index; creating the index digest for a
+# second platform makes the containerd image store fail with "cannot overwrite digest"
+# the client checks the index against DIGEST since it's fetched by digest, so the children are covered
+"$DOCKER" manifest inspect "$REF" >"$TMP/index.json"
 for platform in $PLATFORMS; do
     arch="${platform%%:*}"
     expected=$(jq -er --arg target "${platform#*:}" \
         '.assets[] | select(.target == $target) | .binary_sha256' "$TMP/manifest.json")
-    CONTAINER=$("$DOCKER" create --platform "linux/$arch" "$REF")
+    platform_digest=$(jq -er --arg arch "$arch" \
+        '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch)] |
+            if length == 1 then .[0].digest else error("expected one linux/\($arch) manifest") end' \
+        "$TMP/index.json")
+    CONTAINER=$("$DOCKER" create --platform "linux/$arch" "$NAME@$platform_digest")
     "$DOCKER" cp "$CONTAINER:/app/duco-pool-rs" "$TMP/duco-pool-rs-$arch" >/dev/null
     "$DOCKER" rm "$CONTAINER" >/dev/null
     CONTAINER=""
