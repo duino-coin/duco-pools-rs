@@ -122,9 +122,19 @@ jobs:
             --arg signature "$(base64 -w0 release-manifest/manifest.json.sig)" \
             '{tag: $tag, manifest: $manifest, signature: $signature}' >predicate.json
           cosign attest --yes --type "$PREDICATE_TYPE" --predicate predicate.json "$IMAGE@$DIGEST"
+      # the verifier of the workflow's own commit, so fixes to it reach republished older tags;
+      # the release key still comes from the tag
+      - name: Checkout verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: verifier
+          sparse-checkout: docker-verify.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
       # same checks operators run, see README
       - name: Verify image
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           REPO: ${{ github.repository }}
-        run: sh docker-verify.sh "$IMAGE@$DIGEST"
+          RELEASE_KEY: src/updater/release_key.pub
+        run: sh verifier/docker-verify.sh "$IMAGE@$DIGEST"
