@@ -165,7 +165,8 @@ async fn spawn_update_restart_in(
     };
     #[cfg(unix)]
     let mut command = {
-        let mut command = Command::new("bash");
+        // plain sh, since bash is not installed everywhere (e.g. alpine)
+        let mut command = Command::new("sh");
         command.arg(&script).process_group(0);
         command
     };
