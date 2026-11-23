@@ -21,7 +21,7 @@ Keep in mind, that only the production pool connects to and syncs with the maste
 entirely local and therefore isolated.
 
 ## Docker
-(currently untested)
+(currently untested) <br/>
 Config and sync data live in the `pool-config` and `pool-data` volumes. Inside a container the image is the update
 mechanism, so keep `auto_update` off. The image has no shell or firewall tools either, so leave `firewall_cmd`,
 `restart_script` and `update_restart_script` empty and set `base_sync_folder` to `./dashboard/`.
